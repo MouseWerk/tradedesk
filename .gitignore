@@ -4,7 +4,7 @@ dist/
 build/
 __pycache__/
 .tradedesk/
-# Depotdaten gehören nie in dieses öffentliche Repo (config.json und Datenbank liegen in ~/.tradedesk)
+# Depotdaten gehören nie ins Repo (config.json und Datenbank liegen in ~/.tradedesk)
 config.json
 *.sqlite
 *.sqlite-*
