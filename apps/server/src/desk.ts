@@ -4,10 +4,13 @@
 // (z. B. Trade Republic) führst du selbst in der App des Brokers aus und trägst die Ausführung hier ein.
 import { EventEmitter } from "node:events";
 import type {
-	Account, AccountDetail, AccountSummary, AgentsData, Alert, CashMove, Chart, ChartRange, Check, CurvePoint, DeskEvent, ImportResult, JournalEntry, Overview, Position, Proposal,
-	ProposalStatus, RiskData, RiskLimits, SearchHit, Side, Trade, WatchItem,
+	Account, AccountDetail, AccountSummary, AgentsData, Alert, Analysis, CashMove, Chart, ChartRange, ChatMessage, Check, Cockpit, CockpitPosition, CurvePoint, DeskEvent, ImportResult, JournalEntry,
+	NewsItem, Overview, Position, Proposal, ProposalStatus, RiskData, RiskLimits, ScanRow, SearchHit, SessionInfo, Side, Trade, WatchItem,
 } from "@desk/shared";
-import { ProposalInputSchema, RiskLimitsSchema, buildBook, checkOrder, dayKey, movePct, orderValueCents, parseTradesCsv, returnPct, roundQty, sideLabel, valueHoldings } from "@desk/shared";
+import {
+	ProposalInputSchema, RiskLimitsSchema, atr, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
+	type DayStats, type SessionState,
+} from "@desk/shared";
 import type { Config } from "./config.ts";
 import type { Database } from "./db.ts";
 import { fxSymbol, type Market, type QuoteData } from "./market.ts";
@@ -31,10 +34,13 @@ interface ProposalRow {
 	confidence: number; thesis: string; status: ProposalStatus; reason: string; quote_price: number; warnings: string; created_at: number; decided_at: number | null; decided_by: string | null;
 	approved_qty: number | null; expires_at: number; fill_price: number | null; stop_hit_at: number | null; target_hit_at: number | null;
 }
-interface QuoteRow { symbol: string; price: number; prev_close: number | null; market_time: number | null; fetched_at: number }
+interface QuoteRow {
+	symbol: string; price: number; prev_close: number | null; market_time: number | null; fetched_at: number; day_open: number | null; day_high: number | null; day_low: number | null; volume: number | null;
+	pre_start: number | null; reg_start: number | null; reg_end: number | null; post_end: number | null; timezone: string;
+}
 interface InstrumentRow { symbol: string; name: string; currency: string; exchange: string; type: string }
 
-export const DEFAULT_LIMITS: Omit<RiskLimits, "accountId"> = { maxOrderCents: 500_000, maxPositionPct: 25, dailyLossPct: 5, maxOpenProposals: 5 };
+export const DEFAULT_LIMITS: Omit<RiskLimits, "accountId"> = { maxOrderCents: 500_000, maxPositionPct: 25, dailyLossPct: 5, maxOpenProposals: 5, maxRiskPct: 1, requireStop: true };
 const SYMBOL = /^[A-Z0-9.=^-]{1,24}$/;
 const QUOTE_FRESH_MS = 60_000;
 const OPEN_LIMIT_DAYS = 30;
@@ -66,7 +72,10 @@ export class Desk extends EventEmitter {
 		this.setMaxListeners(200);
 		this.marketState = market.kind === "off" ? "off" : "live";
 		for (const a of cfg.accounts)
-			db.run("INSERT OR IGNORE INTO risk (account_id, max_order_cents, max_position_pct, daily_loss_pct, max_open_proposals) VALUES (?,?,?,?,?)", a.id, DEFAULT_LIMITS.maxOrderCents, DEFAULT_LIMITS.maxPositionPct, DEFAULT_LIMITS.dailyLossPct, DEFAULT_LIMITS.maxOpenProposals);
+			db.run(
+				"INSERT OR IGNORE INTO risk (account_id, max_order_cents, max_position_pct, daily_loss_pct, max_open_proposals, max_risk_pct, require_stop) VALUES (?,?,?,?,?,?,?)",
+				a.id, DEFAULT_LIMITS.maxOrderCents, DEFAULT_LIMITS.maxPositionPct, DEFAULT_LIMITS.dailyLossPct, DEFAULT_LIMITS.maxOpenProposals, DEFAULT_LIMITS.maxRiskPct, DEFAULT_LIMITS.requireStop,
+			);
 		const last = db.get<{ fetched_at: number }>("SELECT MAX(fetched_at) AS fetched_at FROM quote");
 		this.quotesAt = last?.fetched_at ?? null;
 	}
@@ -88,11 +97,13 @@ export class Desk extends EventEmitter {
 		return this.db.get<{ value: string }>("SELECT value FROM setting WHERE key = 'kill_switch'")?.value === "1";
 	}
 
-	event(kind: string, actor: string, text: string): DeskEvent {
+	/** Ereignis im Verlauf; mit chat zusätzlich als Nachricht des Desks im Chat (Agenten lesen dort ihre Ergebnisse). */
+	event(kind: string, actor: string, text: string, chat?: { to?: string[]; ref?: string | null }): DeskEvent {
 		const time = this.now();
 		const { lastId } = this.db.run("INSERT INTO event (time, kind, actor, text) VALUES (?,?,?,?)", time, kind, actor, text.slice(0, 500));
 		const e = { id: lastId, time, kind, actor, text: text.slice(0, 500) };
 		this.emit("event", e);
+		if (chat) this.postChat({ author: "Desk", role: "desk", text: actor === "Desk" || text.startsWith(actor) ? text : `${actor}: ${text}`, to: chat.to ?? [], ref: chat.ref ?? null });
 		return e;
 	}
 
@@ -131,7 +142,12 @@ export class Desk extends EventEmitter {
 					"INSERT INTO instrument (symbol, name, currency, exchange, type) VALUES (?,?,?,?,?) ON CONFLICT (symbol) DO UPDATE SET name = excluded.name, currency = excluded.currency, exchange = excluded.exchange, type = excluded.type",
 					q.symbol, q.name, q.currency, q.exchange, q.type,
 				);
-				this.db.run("INSERT INTO quote (symbol, price, prev_close, market_time, fetched_at) VALUES (?,?,?,?,?) ON CONFLICT (symbol) DO UPDATE SET price = excluded.price, prev_close = excluded.prev_close, market_time = excluded.market_time, fetched_at = excluded.fetched_at", q.symbol, q.price, q.prevClose, q.marketTime, at);
+				this.db.run(
+					`INSERT INTO quote (symbol, price, prev_close, market_time, fetched_at, day_open, day_high, day_low, volume, pre_start, reg_start, reg_end, post_end, timezone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+					 ON CONFLICT (symbol) DO UPDATE SET price = excluded.price, prev_close = excluded.prev_close, market_time = excluded.market_time, fetched_at = excluded.fetched_at, day_open = excluded.day_open,
+					 day_high = excluded.day_high, day_low = excluded.day_low, volume = excluded.volume, pre_start = excluded.pre_start, reg_start = excluded.reg_start, reg_end = excluded.reg_end, post_end = excluded.post_end, timezone = excluded.timezone`,
+					q.symbol, q.price, q.prevClose, q.marketTime, at, q.dayOpen, q.dayHigh, q.dayLow, q.volume, q.session?.preStart ?? null, q.session?.regStart ?? null, q.session?.regEnd ?? null, q.session?.postEnd ?? null, q.timezone,
+				);
 			}
 		});
 	}
@@ -262,9 +278,9 @@ export class Desk extends EventEmitter {
 	}
 
 	limits(accountId: string): RiskLimits {
-		const r = this.db.get<{ max_order_cents: number; max_position_pct: number; daily_loss_pct: number; max_open_proposals: number }>("SELECT * FROM risk WHERE account_id = ?", accountId);
+		const r = this.db.get<{ max_order_cents: number; max_position_pct: number; daily_loss_pct: number; max_open_proposals: number; max_risk_pct: number; require_stop: number }>("SELECT * FROM risk WHERE account_id = ?", accountId);
 		return r
-			? { accountId, maxOrderCents: r.max_order_cents, maxPositionPct: r.max_position_pct, dailyLossPct: r.daily_loss_pct, maxOpenProposals: r.max_open_proposals }
+			? { accountId, maxOrderCents: r.max_order_cents, maxPositionPct: r.max_position_pct, dailyLossPct: r.daily_loss_pct, maxOpenProposals: r.max_open_proposals, maxRiskPct: r.max_risk_pct, requireStop: !!r.require_stop }
 			: { accountId, ...DEFAULT_LIMITS };
 	}
 
@@ -394,11 +410,11 @@ export class Desk extends EventEmitter {
 		const symbol = this.normalizeSymbol(raw);
 		const key = `${symbol}|${range}`;
 		const hit = this.charts.get(key);
-		const ttl = range === "1d" ? 60_000 : 10 * 60_000;
+		const ttl = range === "1d" ? 15_000 : range === "5d" ? 60_000 : 10 * 60_000;
 		if (hit && this.now() - hit.at < ttl) return hit.chart;
 		try {
 			const { meta, candles } = await this.market.chart(symbol, range);
-			const chart: Chart = { symbol, name: meta.name, currency: meta.currency, range, candles };
+			const chart: Chart = { symbol, name: meta.name, currency: meta.currency, range, prevClose: meta.prevClose, candles };
 			if (this.charts.size > 200) this.charts.clear();
 			this.charts.set(key, { at: this.now(), chart });
 			return chart;
@@ -463,7 +479,7 @@ export class Desk extends EventEmitter {
 		return rows.map((r) => this.toProposal(r));
 	}
 
-	private check(a: Account, o: { side: Side; qty: number; orderType: "market" | "limit"; limitPrice?: number | null; stopLoss?: number | null; takeProfit?: number | null; symbol: string }, openByAuthor?: number): Check {
+	private check(a: Account, o: { side: Side; qty: number; orderType: "market" | "limit"; limitPrice?: number | null; stopLoss?: number | null; takeProfit?: number | null; symbol: string }, openByAuthor?: number, byAgent = false): Check {
 		const s = this.summary(a);
 		const p = this.priced(o.symbol);
 		const book = this.book(a.id);
@@ -481,6 +497,7 @@ export class Desk extends EventEmitter {
 			killSwitch: this.killSwitch,
 			dayLossPct: this.dayLossPct(a, s),
 			openByAuthor,
+			byAgent,
 		});
 	}
 
@@ -510,7 +527,7 @@ export class Desk extends EventEmitter {
 		if (input.orderType === "market" && input.limitPrice) extra.push("Market-Order mit Limitkurs – orderType \"limit\" verwenden oder den Limitkurs weglassen.");
 		if (!extra.length) await this.ensureFresh(symbol);
 		const openByAuthor = isUser ? undefined : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE account_id = ? AND author = ? AND status = 'pending'", a.id, author)!.n;
-		const c = this.check(a, { ...input, symbol }, openByAuthor);
+		const c = this.check(a, { ...input, symbol }, openByAuthor, !isUser);
 		const check: Check = { ...c, ok: c.ok && !extra.length, violations: [...extra, ...c.violations] };
 		if (!check.ok && !dryRun && !isUser) this.event("proposal.blocked", author, `Vorschlag ${sideLabel[input.side]} ${num(input.qty)} ${symbol} nicht angelegt: ${check.violations[0]}`);
 		if (dryRun || !check.ok) return { ok: check.ok, check, proposal: null };
@@ -522,7 +539,7 @@ export class Desk extends EventEmitter {
 				a.id, author, symbol, input.side, roundQty(input.qty), input.orderType, input.limitPrice ?? null, input.side === "buy" ? (input.stopLoss ?? null) : null, input.side === "buy" ? (input.takeProfit ?? null) : null,
 				input.confidence, input.thesis, check.price ?? 0, JSON.stringify(check.warnings), now, now + this.cfg.proposalTtlHours * 3_600_000, JSON.stringify(raw).slice(0, 4000),
 			);
-			if (!isUser) this.event("proposal.new", author, `${author} schlägt vor: ${sideLabel[input.side]} ${num(input.qty)} ${symbol} (${a.name})`);
+			if (!isUser) this.event("proposal.new", author, `${author} schlägt vor: ${sideLabel[input.side]} ${num(input.qty)} ${symbol} (${a.name}) #${lastId}`, { to: [this.cfg.user], ref: `#${lastId}` });
 			else this.execute(lastId, roundQty(input.qty), this.cfg.user);
 			return lastId;
 		});
@@ -544,33 +561,34 @@ export class Desk extends EventEmitter {
 			);
 			if (!changes) throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.proposal(id));
 		};
-		const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol}`;
+		const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id}`;
+		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
 		if (r.author !== this.cfg.user && p && movePct(r.quote_price, p.price) > this.cfg.staleMovePct) {
 			const reason = `Kurs hat sich um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt. Agent soll neu vorschlagen.`;
 			set("stale", { reason });
-			this.event("proposal.stale", by, `${label}: ${reason}`);
+			this.event("proposal.stale", by, `${label}: ${reason}`, notify);
 			return this.proposal(id);
 		}
-		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol });
+		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, undefined, r.author !== this.cfg.user);
 		if (!check.ok) {
 			const reason = `Risikoprüfung bei Freigabe: ${check.violations.join(" ")}`;
 			set("rejected", { reason });
-			this.event("proposal.rejected", by, `${label}: ${reason}`);
+			this.event("proposal.rejected", by, `${label}: ${reason}`, notify);
 			return this.proposal(id);
 		}
 		if (a.kind === "manual") {
 			set("placed", { expires_at: now + PLACED_DAYS * 86_400_000 });
-			this.event("proposal.placed", by, `${label} freigegeben – jetzt in ${a.broker} ausführen und die Ausführung eintragen.`);
+			this.event("proposal.placed", by, `${label} freigegeben – jetzt in ${a.broker} ausführen und die Ausführung eintragen.`, notify);
 			return this.proposal(id);
 		}
 		if (r.order_type === "limit" && r.limit_price && !crossed(r.side, p!.price, r.limit_price)) {
 			set("open", { expires_at: now + OPEN_LIMIT_DAYS * 86_400_000 });
-			this.event("proposal.open", by, `${label} freigegeben – Limit ${num(r.limit_price)} ${p!.currency} offen.`);
+			this.event("proposal.open", by, `${label} freigegeben – Limit ${num(r.limit_price)} ${p!.currency} offen.`, notify);
 			return this.proposal(id);
 		}
 		set("filled", { fill_price: p!.price });
 		this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p!.price, currency: p!.currency, fx: p!.fx, feeCents: a.feeCents, time: now, source: r.author === this.cfg.user ? "order" : "proposal", proposalId: id, note: "" });
-		this.event("trade.fill", by, `${label} zu ${num(p!.price)} ${p!.currency} ausgeführt (${a.name})`);
+		this.event("trade.fill", by, `${label} zu ${num(p!.price)} ${p!.currency} ausgeführt (${a.name})`, notify);
 		return this.proposal(id);
 	}
 
@@ -594,7 +612,7 @@ export class Desk extends EventEmitter {
 		const why = typeof reason === "string" ? reason.trim().slice(0, 500) : "";
 		const { changes } = this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'", why || "von dir abgelehnt", this.now(), this.cfg.user, id);
 		if (!changes) throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.toProposal(r));
-		this.event("proposal.rejected", this.cfg.user, `${sideLabel[r.side]} ${num(r.qty)} ${r.symbol} von ${r.author} abgelehnt${why ? `: ${why}` : ""}`);
+		this.event("proposal.rejected", this.cfg.user, `${sideLabel[r.side]} ${num(r.qty)} ${r.symbol} #${id} von ${r.author} abgelehnt${why ? `: ${why}` : ""}`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
 		return this.proposal(id);
 	}
 
@@ -622,7 +640,7 @@ export class Desk extends EventEmitter {
 			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", body.price, qty, id);
 			if (!changes) throw new DeskError("Schon eingetragen.", 409);
 			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: body.price as number, currency: "EUR", fx: 1, feeCents, time, source: "proposal", proposalId: id, note: "" });
-			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} zu ${num(body.price as number)} € in ${a.broker} ausgeführt`);
+			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id} zu ${num(body.price as number)} € in ${a.broker} ausgeführt`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
 		});
 		this.emit("tick", { at: this.now() });
 		return this.proposal(id);
@@ -736,7 +754,10 @@ export class Desk extends EventEmitter {
 		const parsed = RiskLimitsSchema.safeParse({ ...this.limits(a.id), ...(body && typeof body === "object" ? body : {}), accountId: a.id });
 		if (!parsed.success) throw new DeskError(`Ungültige Grenze: ${parsed.error.issues[0].path.join(".")} – ${parsed.error.issues[0].message}`);
 		const l = parsed.data;
-		this.db.run("UPDATE risk SET max_order_cents = ?, max_position_pct = ?, daily_loss_pct = ?, max_open_proposals = ? WHERE account_id = ?", l.maxOrderCents, l.maxPositionPct, l.dailyLossPct, l.maxOpenProposals, a.id);
+		this.db.run(
+			"UPDATE risk SET max_order_cents = ?, max_position_pct = ?, daily_loss_pct = ?, max_open_proposals = ?, max_risk_pct = ?, require_stop = ? WHERE account_id = ?",
+			l.maxOrderCents, l.maxPositionPct, l.dailyLossPct, l.maxOpenProposals, l.maxRiskPct, l.requireStop, a.id,
+		);
 		this.event("risk.limits", this.cfg.user, `Grenzen für ${a.name} geändert`);
 		return this.risk();
 	}
@@ -807,6 +828,253 @@ export class Desk extends EventEmitter {
 		return { agents, you, journal: this.journal({ limit: 80 }) };
 	}
 
+	/* ------------------------------------------------------------------ Daytrading */
+
+	private viewers = 0;
+	private news$ = new Map<string, { at: number; items: NewsItem[] }>();
+
+	/** Ein Browser hört zu (SSE-Stream): Kurse im schnellen Takt, bis er geht. */
+	watch(): () => void {
+		this.viewers++;
+		let done = false;
+		return () => {
+			if (!done) this.viewers = Math.max(0, this.viewers - 1);
+			done = true;
+		};
+	}
+
+	/** Watchlist und Bestände ohne Wechselkurse. */
+	scanSymbols(): string[] {
+		const watched = this.db.all<{ symbol: string }>("SELECT symbol FROM watch ORDER BY added_at").map((r) => r.symbol);
+		return [...new Set([...watched, ...this.heldSymbols()])].filter((s) => !s.endsWith("=X"));
+	}
+
+	private dailyStat(symbol: string): { avg_volume: number | null; atr: number | null } | undefined {
+		return this.db.get("SELECT avg_volume, atr FROM daily_stat WHERE symbol = ? AND day = ?", symbol, dayKey(this.now()));
+	}
+
+	/** Schnitt-Volumen (20 Tage, ohne heute) und ATR 14 aus Tageskerzen, einmal am Tag je Symbol. */
+	async refreshDaily(symbols: string[]): Promise<void> {
+		if (this.market.kind === "off") return;
+		const today = dayKey(this.now());
+		for (const symbol of symbols) {
+			try {
+				const { candles } = await this.market.chart(symbol, "3mo");
+				const past = candles.filter((c) => dayKey(c.t) < today);
+				const vols = past.slice(-20).map((c) => c.v).filter((v) => v > 0);
+				const avg = vols.length ? vols.reduce((x, y) => x + y, 0) / vols.length : null;
+				this.db.run(
+					"INSERT INTO daily_stat (symbol, day, avg_volume, atr) VALUES (?,?,?,?) ON CONFLICT (symbol) DO UPDATE SET day = excluded.day, avg_volume = excluded.avg_volume, atr = excluded.atr",
+					symbol, today, avg, last(atr(candles, 14)),
+				);
+			} catch {
+				// ohne Tageskerzen bleiben Rel. Volumen und ATR leer
+			}
+		}
+	}
+
+	private sessionOf(q: QuoteRow | undefined): SessionState {
+		if (!q || q.reg_start === null || q.reg_end === null) return "closed";
+		return sessionState({ preStart: q.pre_start, regStart: q.reg_start, regEnd: q.reg_end, postEnd: q.post_end }, this.now());
+	}
+
+	sessions(): SessionInfo[] {
+		const by = new Map<string, { q: QuoteRow; n: number }>();
+		for (const s of this.scanSymbols()) {
+			const i = this.instrument(s);
+			const q = this.quoteRow(s);
+			if (!i || !q || q.reg_start === null) continue;
+			const key = i.exchange || "?";
+			const cur = by.get(key);
+			if (!cur) by.set(key, { q, n: 1 });
+			else by.set(key, { q: (q.reg_start ?? 0) > (cur.q.reg_start ?? 0) ? q : cur.q, n: cur.n + 1 });
+		}
+		return [...by.entries()].map(([exchange, { q, n }]) => ({ exchange, timezone: q.timezone, state: this.sessionOf(q), preStart: q.pre_start, regStart: q.reg_start, regEnd: q.reg_end, postEnd: q.post_end, symbols: n }));
+	}
+
+	scan(): ScanRow[] {
+		const held = new Set(this.heldSymbols());
+		const alerts = this.db.all<{ symbol: string; n: number }>("SELECT symbol, COUNT(*) AS n FROM alert WHERE triggered_at IS NULL GROUP BY symbol");
+		return this.scanSymbols().map((symbol) => {
+			const i = this.instrument(symbol);
+			const q = this.quoteRow(symbol);
+			const d = this.dailyStat(symbol);
+			const state = this.sessionOf(q);
+			const price = q?.price ?? null;
+			// Volumen zeitanteilig: zur Mittagszeit zählt der halbe Tagesschnitt
+			let relVolume: number | null = null;
+			if (q?.volume && d?.avg_volume) {
+				const span = q.reg_start && q.reg_end ? q.reg_end - q.reg_start : 0;
+				const part = state === "open" && span > 0 ? Math.min(1, Math.max(0.05, (this.now() - q.reg_start!) / span)) : 1;
+				relVolume = q.volume / (d.avg_volume * part);
+			}
+			return {
+				symbol,
+				name: i?.name ?? symbol,
+				currency: i?.currency ?? "EUR",
+				exchange: i?.exchange ?? "",
+				state,
+				price,
+				changePct: q?.prev_close && price !== null ? ((price - q.prev_close) / q.prev_close) * 100 : null,
+				gapPct: q?.prev_close && q.day_open ? ((q.day_open - q.prev_close) / q.prev_close) * 100 : null,
+				dayOpen: q?.day_open ?? null,
+				dayHigh: q?.day_high ?? null,
+				dayLow: q?.day_low ?? null,
+				rangePos: q?.day_high && q.day_low && price !== null && q.day_high > q.day_low ? Math.min(1, Math.max(0, (price - q.day_low) / (q.day_high - q.day_low))) : null,
+				volume: q?.volume ?? null,
+				relVolume,
+				atrPct: d?.atr && price ? (d.atr / price) * 100 : null,
+				marketTime: q?.market_time ?? null,
+				held: held.has(symbol),
+				alerts: alerts.find((a) => a.symbol === symbol)?.n ?? 0,
+			};
+		});
+	}
+
+	/** Kennzahlen eines Werts aus 1-Minuten-Kerzen (EMA 9/21, VWAP, RSI 14) und Tageskerzen (ATR 14). */
+	async analysis(raw: unknown): Promise<Analysis> {
+		const symbol = this.normalizeSymbol(raw);
+		const chart = await this.chart(symbol, "1d");
+		if (!this.dailyStat(symbol)) await this.refreshDaily([symbol]);
+		const closes = chart.candles.map((c) => c.c);
+		const row = this.scan().find((r) => r.symbol === symbol);
+		const q = this.quoteRow(symbol);
+		const price = q?.price ?? closes.at(-1) ?? null;
+		return {
+			symbol,
+			name: chart.name,
+			currency: chart.currency,
+			state: this.sessionOf(q),
+			price,
+			prevClose: q?.prev_close ?? chart.prevClose,
+			dayOpen: q?.day_open ?? chart.candles[0]?.o ?? null,
+			dayHigh: q?.day_high ?? null,
+			dayLow: q?.day_low ?? null,
+			gapPct: row?.gapPct ?? null,
+			changePct: row?.changePct ?? null,
+			ema9: last(ema(closes, 9)),
+			ema21: last(ema(closes, 21)),
+			vwap: last(vwap(chart.candles, dayKey)),
+			rsi14: last(rsi(closes, 14)),
+			atr14: this.dailyStat(symbol)?.atr ?? null,
+			relVolume: row?.relVolume ?? null,
+			candles: chart.candles.length,
+			asOf: chart.candles.at(-1)?.t ?? null,
+		};
+	}
+
+	async news(raw: unknown): Promise<NewsItem[]> {
+		const symbol = this.normalizeSymbol(raw);
+		const hit = this.news$.get(symbol);
+		if (hit && this.now() - hit.at < 5 * 60_000) return hit.items;
+		try {
+			const items = await this.market.news(symbol);
+			if (this.news$.size > 200) this.news$.clear();
+			this.news$.set(symbol, { at: this.now(), items });
+			return items;
+		} catch (e) {
+			if (hit) return hit.items;
+			throw new DeskError(`News für ${symbol} nicht verfügbar: ${(e as Error).message}`, 502);
+		}
+	}
+
+	startOfDay(): number {
+		const d = new Date(this.now());
+		return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+	}
+
+	dayStatsOf(accountId: string): DayStats {
+		const rows = this.tradeRows(accountId);
+		return dayStats(rows.map((t) => ({ id: t.id, side: t.side, time: t.time, feeCents: t.fee_cents })), this.book(accountId).realizedBySell, this.startOfDay());
+	}
+
+	cockpit(): Cockpit {
+		const from = this.startOfDay();
+		const positions: CockpitPosition[] = [];
+		const days = this.cfg.accounts.map((a) => {
+			const s = this.summary(a);
+			const rows = this.tradeRows(a.id);
+			for (const p of this.positions(a, s)) {
+				const fx = this.priced(p.symbol)?.fx ?? null;
+				const avgNative = fx ? p.avgPrice / fx : null;
+				positions.push({
+					accountId: a.id, symbol: p.symbol, name: p.name, currency: p.currency, qty: p.qty, avgPrice: p.avgPrice, price: p.price, nativePrice: p.nativePrice,
+					unrealizedCents: p.unrealizedCents, unrealizedPct: p.unrealizedPct, stopLoss: p.stopLoss, takeProfit: p.takeProfit,
+					r: avgNative !== null && p.nativePrice !== null ? rMultiple(avgNative, p.stopLoss, p.nativePrice) : null,
+					openedToday: rows.some((t) => t.symbol === p.symbol && t.side === "buy" && t.time >= from),
+				});
+			}
+			return { accountId: a.id, name: a.name, owner: a.owner, kind: a.kind, equityCents: s.equityCents, cashCents: s.cashCents, dayChangeCents: s.dayChangeCents, dayLossPct: this.dayLossPct(a, s), stats: this.dayStatsOf(a.id) };
+		});
+		return {
+			user: this.cfg.user,
+			killSwitch: this.killSwitch,
+			market: this.marketState,
+			marketError: this.marketError,
+			quotesAt: this.quotesAt,
+			liveIntervalSec: this.cfg.liveIntervalSec,
+			sessions: this.sessions(),
+			scan: this.scan(),
+			days,
+			positions,
+		};
+	}
+
+	/** 15 Minuten vor Handelsschluss: einmal je Börse und Tag erinnern, welche heute eröffneten Positionen noch offen sind. */
+	private remindClose() {
+		const now = this.now();
+		for (const s of this.sessions()) {
+			if (s.state !== "open" || !s.regEnd || s.regEnd - now > 15 * 60_000) continue;
+			const key = `eod:${s.exchange}:${dayKey(now)}`;
+			if (this.db.get("SELECT 1 FROM setting WHERE key = ?", key)) continue;
+			this.db.run("INSERT INTO setting (key, value) VALUES (?, '1')", key);
+			const open = this.cockpit().positions.filter((p) => p.openedToday && this.instrument(p.symbol)?.exchange === s.exchange);
+			if (open.length)
+				this.event("close", "Desk", `${s.exchange} schließt in 15 Minuten – heute eröffnet und noch offen: ${open.map((p) => `${p.symbol} (${this.account(p.accountId).name})`).join(", ")}.`, { ref: null });
+		}
+	}
+
+	/* ------------------------------------------------------------------ Chat */
+
+	chat(opts: { since?: number; limit?: number } = {}): ChatMessage[] {
+		const rows = this.db.all<{ id: number; time: number; author: string; role: ChatMessage["role"]; text: string; recipients: string; ref: string | null }>(
+			"SELECT * FROM chat WHERE id > ? ORDER BY id DESC LIMIT ?",
+			opts.since ?? 0,
+			opts.limit ?? 200,
+		);
+		return rows.reverse().map((r) => ({ id: r.id, time: r.time, author: r.author, role: r.role, text: r.text, to: JSON.parse(r.recipients) as string[], ref: r.ref }));
+	}
+
+	private postChat(m: Omit<ChatMessage, "id" | "time">): ChatMessage {
+		const time = this.now();
+		const text = m.text.slice(0, 4000);
+		const { lastId } = this.db.run("INSERT INTO chat (time, author, role, text, recipients, ref) VALUES (?,?,?,?,?,?)", time, m.author, m.role, text, JSON.stringify(m.to), m.ref);
+		const msg: ChatMessage = { ...m, text, id: lastId, time };
+		this.emit("chat", msg);
+		return msg;
+	}
+
+	/** Nachricht von dir (Browser) oder einem Agenten (CLI). Erwähnungen @Name nur für bekannte Namen. Der Chat genehmigt nie eine Order. */
+	say(body: Record<string, unknown>, origin: Origin): ChatMessage {
+		const author = origin === "web" ? this.cfg.user : this.agentName(typeof body.author === "string" ? body.author : "");
+		if (!author) throw new DeskError(`Unbekannter Agent „${String(body.author ?? "")}“ – in config.json unter "agents" eintragen.`, 403);
+		const text = typeof body.text === "string" ? body.text.trim() : "";
+		if (!text) throw new DeskError("Leere Nachricht.");
+		if (text.length > 4000) throw new DeskError("Nachricht länger als 4000 Zeichen.");
+		const names = [this.cfg.user, ...this.cfg.agents];
+		const canon = (n: string) => names.find((x) => x.toLowerCase() === n.toLowerCase()) ?? null;
+		const to = new Set<string>();
+		for (const m of text.matchAll(/@([\p{L}\p{N}_.-]{1,40})/gu)) {
+			const n = canon(m[1]);
+			if (n) to.add(n);
+		}
+		if (Array.isArray(body.to)) for (const n of body.to) if (typeof n === "string" && canon(n)) to.add(canon(n)!);
+		to.delete(author);
+		const rawRef = typeof body.ref === "string" ? body.ref.trim().toUpperCase() : "";
+		const ref = /^(#\d{1,6}|[A-Z0-9.=^-]{1,24})$/.test(rawRef) ? rawRef : null;
+		return this.postChat({ author, role: origin === "web" ? "user" : "agent", text, to: [...to], ref });
+	}
+
 	/* ------------------------------------------------------------------ Takt */
 
 	/** Kurse holen, Limits ausführen, Abläufe, Alarme, Stop-/Ziel-Hinweise, Tagesstand. */
@@ -815,11 +1083,13 @@ export class Desk extends EventEmitter {
 		this.ticking = (async () => {
 			try {
 				await this.refresh(this.trackedSymbols());
+				await this.refreshDaily(this.scanSymbols().filter((s) => !this.dailyStat(s)).slice(0, 3)).catch(() => undefined);
 				this.db.tx(() => {
 					this.fillLimits();
 					this.expire();
 					this.checkAlerts();
 					this.checkStops();
+					this.remindClose();
 					this.snapshot();
 				});
 				this.ticks++;
@@ -847,7 +1117,7 @@ export class Desk extends EventEmitter {
 			}
 			if (!this.db.run("UPDATE proposal SET status = 'filled', fill_price = ? WHERE id = ? AND status = 'open'", p.price, r.id).changes) continue;
 			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: "Limit" });
-			this.event("trade.fill", "Desk", `${label} zu ${num(p.price)} ${p.currency} ausgeführt (Limit ${num(r.limit_price)}, ${a.name})`);
+			this.event("trade.fill", "Desk", `${label} #${r.id} zu ${num(p.price)} ${p.currency} ausgeführt (Limit ${num(r.limit_price)}, ${a.name})`, { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
 		}
 	}
 
@@ -864,7 +1134,7 @@ export class Desk extends EventEmitter {
 			const q = this.quoteRow(al.symbol);
 			if (!q || !(al.op === "above" ? q.price >= al.price : q.price <= al.price)) continue;
 			this.db.run("UPDATE alert SET triggered_at = ? WHERE id = ?", this.now(), al.id);
-			this.event("alert", "Desk", `${al.symbol} ${al.op === "above" ? "über" : "unter"} ${num(al.price)} – jetzt ${num(q.price)}`);
+			this.event("alert", "Desk", `Alarm ${al.symbol} ${al.op === "above" ? "über" : "unter"} ${num(al.price)} – jetzt ${num(q.price)}`, { ref: al.symbol });
 		}
 	}
 
@@ -878,11 +1148,11 @@ export class Desk extends EventEmitter {
 			const a = this.account(r.account_id);
 			if (r.stop_loss && !r.stop_hit_at && q.price <= r.stop_loss) {
 				this.db.run("UPDATE proposal SET stop_hit_at = ? WHERE id = ?", this.now(), r.id);
-				this.event("stop", "Desk", `${r.symbol} hat den Stop-Loss ${num(r.stop_loss)} erreicht (${a.name}) – Verkauf prüfen.`);
+				this.event("stop", "Desk", `${r.symbol} hat den Stop-Loss ${num(r.stop_loss)} erreicht (${a.name}) – Verkauf prüfen.`, { to: [this.cfg.user, ...(r.author === this.cfg.user ? [] : [r.author])], ref: r.symbol });
 			}
 			if (r.take_profit && !r.target_hit_at && q.price >= r.take_profit) {
 				this.db.run("UPDATE proposal SET target_hit_at = ? WHERE id = ?", this.now(), r.id);
-				this.event("target", "Desk", `${r.symbol} hat das Kursziel ${num(r.take_profit)} erreicht (${a.name}).`);
+				this.event("target", "Desk", `${r.symbol} hat das Kursziel ${num(r.take_profit)} erreicht (${a.name}).`, { to: [this.cfg.user, ...(r.author === this.cfg.user ? [] : [r.author])], ref: r.symbol });
 			}
 		}
 	}
@@ -898,9 +1168,16 @@ export class Desk extends EventEmitter {
 		}
 	}
 
+	/** Takt: schnell, solange ein Browser zusieht (liveIntervalSec), sonst ruhig; bei Störung der Börse dreifach langsamer. */
 	start() {
 		this.stop();
-		this.timer = setInterval(() => void this.tick().catch((e) => console.error("tick:", e)), this.cfg.quoteIntervalSec * 1000);
+		let last = 0;
+		this.timer = setInterval(() => {
+			const every = (this.viewers > 0 ? this.cfg.liveIntervalSec : this.cfg.quoteIntervalSec) * 1000 * (this.marketState === "error" ? 3 : 1);
+			if (this.now() - last < every) return;
+			last = this.now();
+			void this.tick().catch((e) => console.error("tick:", e));
+		}, 1000);
 	}
 
 	stop() {

@@ -75,3 +75,19 @@ export function parseDe(raw: string): number {
 	const normalized = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s;
 	return /^-?\d+(\.\d+)?$/.test(normalized) ? Number(normalized) : Number.NaN;
 }
+
+/** Große Zahlen kurz: 950, 12.400, 1,2 Mio., 3,4 Mrd. */
+export function compact(v: number | null | undefined): string {
+	if (v === null || v === undefined) return "–";
+	if (Math.abs(v) >= 1e9) return `${(v / 1e9).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mrd.`;
+	if (Math.abs(v) >= 1e6) return `${(v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mio.`;
+	return Math.round(v).toLocaleString("de-DE");
+}
+
+export function hhmm(ms: number | null | undefined): string {
+	return ms ? new Date(ms).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : "–";
+}
+
+export function num(v: number | null | undefined, digits = 2): string {
+	return v === null || v === undefined || !Number.isFinite(v) ? "–" : v.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}

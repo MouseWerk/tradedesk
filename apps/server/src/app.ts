@@ -179,6 +179,17 @@ export function createApp(desk: Desk) {
 		return c.json(desk.setLimits(c.req.param("account"), await body(c)));
 	});
 
+	/* Daytrading */
+	app.get("/api/cockpit", (c) => c.json(desk.cockpit()));
+	app.get("/api/market/scan", (c) => c.json(desk.scan()));
+	app.get("/api/market/analysis/:symbol", async (c) => c.json(await desk.analysis(c.req.param("symbol"))));
+	app.get("/api/market/news/:symbol", async (c) => c.json(await desk.news(c.req.param("symbol"))));
+	app.get("/api/accounts/:id/day", (c) => c.json(desk.dayStatsOf(desk.account(c.req.param("id")).id)));
+
+	/* Chat: du im Browser, Agenten über cli/desk.py – eine Nachricht genehmigt nie eine Order */
+	app.get("/api/chat", (c) => c.json(desk.chat({ since: int(c.req.query("since"), 0, 0, Number.MAX_SAFE_INTEGER), limit: int(c.req.query("limit"), 200, 1, 1000) })));
+	app.post("/api/chat", async (c) => c.json({ ok: true, message: desk.say(await body(c), c.get("origin")) }));
+
 	/* Agenten und Journal */
 	app.get("/api/agents", (c) => c.json(desk.agentsData()));
 	app.get("/api/journal", (c) => c.json(desk.journal({ author: c.req.query("author"), symbol: c.req.query("symbol"), limit: int(c.req.query("limit"), 100, 1, 500) })));
@@ -191,16 +202,22 @@ export function createApp(desk: Desk) {
 			await send("hello", { version: VERSION });
 			const onEvent = (e: unknown) => void send("event", e);
 			const onTick = (t: unknown) => void send("tick", t);
+			const onChat = (m: unknown) => void send("chat", m);
 			desk.on("event", onEvent);
 			desk.on("tick", onTick);
+			desk.on("chat", onChat);
+			const unwatch = desk.watch(); // solange jemand zusieht: schneller Kurstakt
 			stream.onAbort(() => {
 				desk.off("event", onEvent);
 				desk.off("tick", onTick);
+				desk.off("chat", onChat);
+				unwatch();
 			});
 			while (!stream.aborted && !stream.closed) {
 				await stream.sleep(15_000);
 				await send("ping", { at: Date.now() });
 			}
+			unwatch();
 		}),
 	);
 

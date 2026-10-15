@@ -84,10 +84,10 @@ async function seedFixture({ desk, db, cfg }: Fixture) {
 	}
 
 	const atlas = await desk.submit({ author: "Atlas", accountId: "agent-atlas", symbol: "MSFT", side: "buy", qty: 4, confidence: 0.72, thesis: "Cloud-Umsatz wächst zweistellig, Kurs nach Rücksetzer an der 50-Tage-Linie. Stop unter dem letzten Tief.", stopLoss: 395, takeProfit: 470 }, "cli");
-	await desk.submit({ author: "Nova", accountId: "tr", symbol: "EUNL.DE", side: "buy", qty: 10, confidence: 0.8, thesis: "Monatliche Aufstockung des Weltportfolios; Cash-Quote liegt über dem Ziel von 10 %." }, "cli");
+	await desk.submit({ author: "Nova", accountId: "tr", symbol: "EUNL.DE", side: "buy", qty: 10, stopLoss: 101, confidence: 0.8, thesis: "Monatliche Aufstockung des Weltportfolios; Cash-Quote liegt über dem Ziel von 10 %." }, "cli");
 	await desk.submit({ author: "Atlas", accountId: "papier", symbol: "ALV.DE", side: "sell", qty: 2, orderType: "limit", limitPrice: 370, confidence: 0.6, thesis: "Teilgewinn am Widerstand 370 € mitnehmen." }, "cli");
 	if (!atlas.ok) throw new Error(`Fixture: Vorschlag abgelehnt: ${atlas.check.violations.join(" ")}`);
-	const old = await desk.submit({ author: "Nova", accountId: "agent-nova", symbol: "ALV.DE", side: "buy", qty: 5, confidence: 0.55, thesis: "Dividendenrendite über 5 %, defensiver Anker." }, "cli");
+	const old = await desk.submit({ author: "Nova", accountId: "agent-nova", symbol: "ALV.DE", side: "buy", qty: 5, stopLoss: 340, confidence: 0.55, thesis: "Dividendenrendite über 5 %, defensiver Anker." }, "cli");
 	desk.reject(old.proposal!.id, "Versicherer sind schon über Mein Papierdepot drin.");
 
 	const j = (author: string, kind: string, symbol: string | null, text: string, daysAgo: number) => db.run("INSERT INTO journal (author, kind, symbol, text, time) VALUES (?,?,?,?,?)", author, kind, symbol, text, t0 - daysAgo * day);
@@ -95,6 +95,19 @@ async function seedFixture({ desk, db, cfg }: Fixture) {
 	j("Nova", "review", null, "Wochenrückblick: Krypto-Anteil auf 6 % reduziert, Ziel 5 %. Kein Handlungsbedarf beim ETF-Kern.", 3);
 	j("Atlas", "note", "SAP.DE", "Quartalszahlen am Donnerstag – vorher keine neuen Käufe.", 1);
 	db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES ('NVDA','below',120,?)", t0 - 2 * day);
+	// heute: zwei Daytrades im Papierdepot von Atlas (ein Gewinn, ein Verlust) für die Tagesstatistik
+	const minute = 60_000;
+	const intraday = (side: "buy" | "sell", qty: number, price: number, minsAgo: number) =>
+		db.run("INSERT INTO trade (account_id, symbol, side, qty, price, currency, fx, value_cents, fee_cents, time, source, note) VALUES ('agent-atlas','ALV.DE',?,?,?,'EUR',1,?,100,?,'proposal','')", side, qty, price, orderValueCents(qty, price, 1), Math.max(desk.startOfDay(), t0 - minsAgo * minute));
+	intraday("buy", 5, 350, 50);
+	intraday("sell", 5, 354, 40);
+	intraday("buy", 4, 353, 30);
+	intraday("sell", 4, 351.5, 20);
+	await desk.refreshDaily(desk.scanSymbols());
+	const say = (author: string, text: string, ref?: string) => desk.say({ author, text, ref }, author === cfg.user ? "web" : "cli");
+	say("Atlas", "Guten Morgen. Plan heute: MSFT über VWAP long, Stop unter dem Tief der ersten 15 Minuten. @Nova siehst du bei EUNL.DE etwas?");
+	say("Nova", "@Atlas EUNL.DE ruhig, Volumen unter Schnitt. Ich warte auf die US-Eröffnung.");
+	say("Maurice", "@Atlas MSFT ok, aber maximal halbe Größe bis die Zahlen durch sind.", "MSFT");
 	db.run("DELETE FROM event");
 	desk.event("start", "Desk", "Fixture geladen");
 }

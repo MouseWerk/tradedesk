@@ -1,12 +1,13 @@
 // App-Rahmen: Seitenleiste mit Modulen und deinen Depots, eingelassene Arbeitsfläche, Not-Aus-Hinweis über allem.
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { ChevronRight, Moon, OctagonX, Radio, Sun } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Bell, BellOff, ChevronRight, MessageSquare, Moon, OctagonX, Radio, Sun } from "lucide-react";
 import { MODULES, moduleForPath } from "@/modules/registry";
-import { useLive, useOverview, type LiveState } from "@/lib/api";
+import { notifyEnabled, setNotify, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
 import { ago, eur, pct, tone } from "@/lib/format";
 import { Badge, Button, Kbd, cn } from "@/ui/kit";
 import { Boundary } from "@/ui/boundary";
+import { ChatPanel } from "./ChatPanel";
 
 function useTheme(): [boolean, () => void] {
 	const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
@@ -23,32 +24,107 @@ function useTheme(): [boolean, () => void] {
 	return [dark, toggle];
 }
 
+function useStored(key: string, initial: boolean): [boolean, (v: boolean) => void] {
+	const [v, setV] = useState(() => {
+		try {
+			const s = localStorage.getItem(key);
+			return s === null ? initial : s === "1";
+		} catch {
+			return initial;
+		}
+	});
+	const set = (next: boolean) => {
+		setV(next);
+		try {
+			localStorage.setItem(key, next ? "1" : "0");
+		} catch {
+			// privater Modus
+		}
+	};
+	return [v, set];
+}
+
+function useMedia(query: string) {
+	const [match, setMatch] = useState(() => window.matchMedia(query).matches);
+	useEffect(() => {
+		const mq = window.matchMedia(query);
+		const on = () => setMatch(mq.matches);
+		mq.addEventListener("change", on);
+		return () => mq.removeEventListener("change", on);
+	}, [query]);
+	return match;
+}
+
+/** Ungelesene Chat-Nachrichten an dich oder an alle, solange der Chat zu ist. */
+function useUnread(visible: boolean, user: string) {
+	const { data } = useChat();
+	const [seen, setSeen] = useState(() => {
+		try {
+			return Number(localStorage.getItem("desk.chatSeen") ?? 0);
+		} catch {
+			return 0;
+		}
+	});
+	const markSeen = useCallback((id: number) => {
+		setSeen((s) => {
+			if (id <= s) return s;
+			try {
+				localStorage.setItem("desk.chatSeen", String(id));
+			} catch {
+				// privater Modus
+			}
+			return id;
+		});
+	}, []);
+	const unread = visible ? 0 : (data ?? []).filter((m) => m.id > seen && m.author !== user && (m.to.length === 0 || m.to.includes(user))).length;
+	return { unread, markSeen };
+}
+
 export function Shell() {
 	const live = useLive();
 	const [dark, toggleTheme] = useTheme();
 	const navigate = useNavigate();
+	const { data: ov } = useOverview();
+	const wide = useMedia("(min-width: 1280px)");
+	const [chatWide, setChatWide] = useStored("desk.chat", true);
+	const [drawer, setDrawer] = useState(false);
+	const chatOpen = wide ? chatWide : drawer;
+	const toggleChat = useCallback(() => (wide ? setChatWide(!chatWide) : setDrawer((d) => !d)), [wide, chatWide, setChatWide]);
+	const { unread, markSeen } = useUnread(chatOpen, ov?.user ?? "");
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			const t = e.target as HTMLElement;
 			if (e.ctrlKey || e.metaKey || e.altKey || t.closest("input, textarea, select, [contenteditable=true], [role=dialog]") || document.querySelector("[role=dialog]")) return;
 			const m = MODULES.find((x) => x.hotkey === e.key);
 			if (m) void navigate({ to: m.path });
+			else if (e.key === "c") toggleChat();
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [navigate]);
+	}, [navigate, toggleChat]);
 	return (
 		<div className="flex h-screen gap-2 bg-bg p-2 text-[13px] text-fg max-md:gap-1 max-md:p-1">
 			<Boundary name="Navigation" compact>
 				<Sidebar live={live} />
 			</Boundary>
 			<main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)]">
-				<TopBar dark={dark} toggleTheme={toggleTheme} />
+				<TopBar dark={dark} toggleTheme={toggleTheme} chatOpen={chatOpen} toggleChat={toggleChat} unread={unread} />
 				<KillBanner />
 				<div className="@container scroll-thin flex-1 overflow-auto" id="main">
 					<Outlet />
 				</div>
 			</main>
+			{wide && chatWide && (
+				<Boundary name="Chat" compact>
+					<ChatPanel onSeen={markSeen} />
+				</Boundary>
+			)}
+			{!wide && drawer && (
+				<>
+					<div className="fixed inset-0 z-40 bg-[var(--overlay)]" onClick={() => setDrawer(false)} aria-hidden />
+					<ChatPanel className="fixed top-2 right-2 bottom-2 z-40 w-[min(380px,calc(100vw-16px))] animate-enter shadow-2xl" onClose={() => setDrawer(false)} onSeen={markSeen} />
+				</>
+			)}
 		</div>
 	);
 }
@@ -143,10 +219,12 @@ function KillBanner() {
 	);
 }
 
-function TopBar({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => void }) {
+function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread }: { dark: boolean; toggleTheme: () => void; chatOpen: boolean; toggleChat: () => void; unread: number }) {
 	const path = useRouterState({ select: (s) => s.location.pathname });
 	const mod = moduleForPath(path);
 	const { data } = useOverview();
+	const [notify, setNotifyState] = useState(notifyEnabled);
+	const canNotify = typeof Notification !== "undefined";
 	return (
 		<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-5 max-md:px-3">
 			<span className="flex min-w-0 items-center gap-2">
@@ -155,8 +233,24 @@ function TopBar({ dark, toggleTheme }: { dark: boolean; toggleTheme: () => void 
 				<span className="truncate font-medium">{mod?.title ?? "Übersicht"}</span>
 			</span>
 			<div className="ml-auto flex items-center gap-1.5">
+				{canNotify && (
+					<Button
+						variant="ghost"
+						size="icon"
+						onClick={() => void setNotify(!notify).then(setNotifyState)}
+						aria-pressed={notify}
+						aria-label={notify ? "Benachrichtigungen aus" : "Benachrichtigungen an (Vorschläge, Alarme, Stops, wenn das Fenster im Hintergrund ist)"}
+						title={notify ? "Benachrichtigungen aus" : "Benachrichtigungen an"}
+					>
+						{notify ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+					</Button>
+				)}
 				<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={dark ? "Helles Design" : "Dunkles Design"} title={dark ? "Helles Design" : "Dunkles Design"}>
 					{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+				</Button>
+				<Button variant="ghost" size="icon" onClick={toggleChat} aria-pressed={chatOpen} aria-label={unread ? `Chat (C), ${unread} ungelesen` : "Chat (C)"} title="Chat (C)" className="relative" data-testid="chat-toggle">
+					<MessageSquare className="size-4" />
+					{unread > 0 && <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warn px-1 text-[10px] font-semibold text-primary-fg tnum">{unread > 99 ? "99+" : unread}</span>}
 				</Button>
 				<Link to="/orders" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-fg hover:opacity-90">
 					<span className="max-sm:sr-only">Vorschläge</span>

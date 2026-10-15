@@ -177,28 +177,65 @@ export interface RefLine {
 	label: string;
 }
 
-/** Kerzenchart: Körper gefüllt (steigend ok, fallend err), Docht 1 px. Hilfslinien z. B. Einstand, Limit, Stop. */
-export function CandleChart({ candles, format, timeLabel, height = 320, refs = [], label }: { candles: Candle[]; format: (v: number) => string; timeLabel: (t: number, long?: boolean) => string; height?: number; refs?: RefLine[]; label: string }) {
+export interface Overlay {
+	id: string;
+	label: string;
+	color: string;
+	values: (number | null)[]; // je Kerze
+}
+
+/**
+ * Kerzenchart: Körper gefüllt (steigend ok, fallend err), Docht 1 px. Linien (EMA, VWAP) über den Kerzen, Volumen
+ * als eigenes Feld darunter (eigene Skala, keine zweite Achse im Kursfeld). Hilfslinien z. B. Einstand, Limit, Stop.
+ */
+export function CandleChart({ candles, format, timeLabel, height = 320, refs = [], overlays = [], volume = false, label }: {
+	candles: Candle[];
+	format: (v: number) => string;
+	timeLabel: (t: number, long?: boolean) => string;
+	height?: number;
+	refs?: RefLine[];
+	overlays?: Overlay[];
+	volume?: boolean;
+	label: string;
+}) {
 	const [ref, width] = useWidth<HTMLDivElement>();
 	const { idx, setIdx, onKey } = useCursor(candles.length);
 	const pad = { l: 8, r: 72, t: 12, b: 22 };
-	const lows = candles.map((c) => c.l);
-	const highs = candles.map((c) => c.h);
-	const visibleRefs = refs.filter((r) => r.value > 0);
-	const lo0 = Math.min(...lows, ...visibleRefs.map((r) => r.value));
-	const hi0 = Math.max(...highs, ...visibleRefs.map((r) => r.value));
+	const volH = volume ? Math.round(height * 0.16) : 0;
+	const gap = volume ? 8 : 0;
+	const overlayVals = overlays.flatMap((o) => o.values.filter((v): v is number => v !== null));
+	const cLo = Math.min(...candles.map((c) => c.l), ...overlayVals);
+	const cHi = Math.max(...candles.map((c) => c.h), ...overlayVals);
+	// Hilfslinien dehnen die Skala nur, wenn sie nahe am Kursbereich liegen; weit entfernte stehen als Hinweis am Rand
+	const near = (v: number) => v >= cLo - (cHi - cLo) * 0.35 && v <= cHi + (cHi - cLo) * 0.35;
+	const visibleRefs = refs.filter((r) => r.value > 0 && near(r.value));
+	const farRefs = refs.filter((r) => r.value > 0 && !near(r.value));
+	const lo0 = Math.min(cLo, ...visibleRefs.map((r) => r.value));
+	const hi0 = Math.max(cHi, ...visibleRefs.map((r) => r.value));
 	const span = hi0 - lo0 || hi0 || 1;
 	const ticks = niceTicks(lo0 - span * 0.04, hi0 + span * 0.04, 5);
 	const lo = Math.min(ticks[0], lo0);
 	const hi = Math.max(ticks[ticks.length - 1], hi0);
 	const iw = Math.max(1, width - pad.l - pad.r);
-	const ih = height - pad.t - pad.b;
+	const ih = height - pad.t - pad.b - volH - gap;
 	const step = iw / Math.max(1, candles.length);
 	const body = Math.max(1, Math.min(14, step - 2)); // 2 px Abstand zwischen Kerzen
 	const x = (i: number) => pad.l + step * (i + 0.5);
 	const y = (v: number) => pad.t + ih - ((v - lo) / (hi - lo || 1)) * ih;
+	const maxVol = Math.max(1, ...candles.map((c) => c.v));
+	const volTop = pad.t + ih + gap;
 	const labelIdx = candles.length > 1 ? [0, Math.round((candles.length - 1) / 2), candles.length - 1] : [0];
 	const c = idx !== null ? candles[idx] : null;
+	const line = (vals: (number | null)[]) => {
+		let d = "";
+		let on = false;
+		vals.forEach((v, i) => {
+			if (v === null) return void (on = false);
+			d += `${on ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+			on = true;
+		});
+		return d;
+	};
 	return (
 		<div ref={ref} className="relative w-full select-none" style={{ height }}>
 			{width > 0 && candles.length > 0 && (
@@ -230,6 +267,17 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 							{timeLabel(candles[i].t)}
 						</text>
 					))}
+					{volume && (
+						<g aria-hidden>
+							<text x={pad.l + iw + 6} y={volTop + 9} fontSize={10.5} fill="var(--fg-3)">
+								Volumen
+							</text>
+							{candles.map((k, i) => {
+								const h = Math.max(1, (k.v / maxVol) * volH);
+								return <rect key={k.t} x={x(i) - body / 2} y={volTop + volH - h} width={body} height={h} fill={k.c >= k.o ? "var(--ok)" : "var(--err)"} opacity={idx === i ? 0.7 : 0.3} />;
+							})}
+						</g>
+					)}
 					{candles.map((k, i) => {
 						const up = k.c >= k.o;
 						const top = y(Math.max(k.o, k.c));
@@ -241,6 +289,9 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 							</g>
 						);
 					})}
+					{overlays.map((o) => (
+						<path key={o.id} d={line(o.values)} fill="none" stroke={o.color} strokeWidth={1.75} strokeLinejoin="round" />
+					))}
 					{visibleRefs.map((r) => (
 						<g key={r.label}>
 							<line x1={pad.l} x2={pad.l + iw} y1={y(r.value)} y2={y(r.value)} stroke="var(--fg-2)" strokeDasharray="4 3" />
@@ -249,7 +300,15 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 							</text>
 						</g>
 					))}
-					{idx !== null && <line x1={x(idx)} x2={x(idx)} y1={pad.t} y2={pad.t + ih} stroke="var(--fg-3)" />}
+					{farRefs.map((r, k) => {
+						const above = r.value > hi;
+						return (
+							<text key={r.label} x={pad.l + iw - 4} y={above ? pad.t + 12 + k * 14 : pad.t + ih - 6 - k * 14} fontSize={11} fill="var(--fg-2)" textAnchor="end">
+								{r.label} {format(r.value)} ({above ? "darüber" : "darunter"})
+							</text>
+						);
+					})}
+					{idx !== null && <line x1={x(idx)} x2={x(idx)} y1={pad.t} y2={volume ? volTop + volH : pad.t + ih} stroke="var(--fg-3)" />}
 				</svg>
 			)}
 			{c && idx !== null && (
@@ -264,6 +323,23 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 						<span className="text-right">{format(c.l)}</span>
 						<span className="text-fg-3">Schluss</span>
 						<span className="text-right font-semibold">{format(c.c)}</span>
+						{volume && (
+							<>
+								<span className="text-fg-3">Volumen</span>
+								<span className="text-right">{c.v.toLocaleString("de-DE")}</span>
+							</>
+						)}
+						{overlays.map((o) =>
+							o.values[idx] === null ? null : (
+								<span key={o.id} className="contents">
+									<span className="flex items-center gap-1.5 text-fg-3">
+										<span className="h-0.5 w-3 rounded-full" style={{ background: o.color }} aria-hidden />
+										{o.label}
+									</span>
+									<span className="text-right">{format(o.values[idx]!)}</span>
+								</span>
+							),
+						)}
 					</div>
 				</Tooltip>
 			)}

@@ -14,7 +14,7 @@ const out = path.join(repo, "build", "preview");
 mkdirSync(out, { recursive: true });
 const PORT = 8000 + Math.floor(Math.random() * 900) + 100;
 const BASE = `http://127.0.0.1:${PORT}`;
-const ROUTES = ["/", "/portfolio?account=tr", "/market?symbol=SAP.DE", "/orders", "/agents", "/risk"];
+const ROUTES = ["/", "/trade?symbol=NVDA", "/portfolio?account=tr", "/market?symbol=SAP.DE", "/orders", "/agents", "/risk"];
 const WIDTHS = [390, 800, 1280, 1920];
 
 function startServer() {
@@ -124,6 +124,32 @@ try {
 	await pg.getByRole("dialog").getByRole("button", { name: "Eintragen" }).click();
 	await pg.getByText("als ausgeführt eingetragen").waitFor({ timeout: 10_000 });
 	check("broker order approved, then execution recorded", true);
+
+	/* Cockpit: Rechner, Hotkey B, Kauf über den Rechner im Papierdepot */
+	await pg.goto(`${BASE}/trade?symbol=SAP.DE`);
+	await settle(pg);
+	check("cockpit shows sessions and the scanner", (await pg.getByTestId("session").count()) >= 2 && (await pg.getByTestId("scan-row").count()) === 7);
+	await pg.keyboard.press("b");
+	check("hotkey B focuses the quantity", await pg.evaluate(() => document.activeElement?.getAttribute("inputmode") === "decimal"));
+	await pg.keyboard.type("1");
+	await pg.getByRole("button", { name: "Kaufen…" }).click();
+	await pg.getByRole("dialog").getByRole("button", { name: "Kaufen", exact: true }).click();
+	await pg.getByText("Kauf 1 SAP.DE ausgeführt.").waitFor({ timeout: 10_000 });
+	check("buy from the calculator fills in the paper account", true);
+	await pg.keyboard.press("ArrowDown");
+	await pg.waitForFunction(() => !location.search.includes("SAP.DE"), null, { timeout: 5_000 });
+	check("arrow keys move through the scanner", true);
+
+	/* Chat: senden, Nachricht eines Agenten mit HTML bleibt Text */
+	await fetch(`${BASE}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ author: "Nova", text: '<img src=x onerror="window.__pwned=1"> @Maurice Gap bei NVDA' }) });
+	const chat = pg.getByTestId("chat");
+	await chat.getByText("Gap bei NVDA").waitFor({ timeout: 10_000 });
+	check("agent message arrives live", true);
+	check("chat renders HTML as text", (await chat.locator("img").count()) === 0 && !(await pg.evaluate(() => window.__pwned)));
+	await chat.getByLabel("Nachricht", { exact: true }).fill("@Atlas bitte nur halbe Größe");
+	await chat.getByLabel("Nachricht", { exact: true }).press("Enter");
+	await chat.getByText("bitte nur halbe Größe").waitFor({ timeout: 10_000 });
+	check("you can write in the chat with Enter", true);
 
 	/* Not-Aus: Bestätigung startet auf Abbrechen, Banner erscheint, Fokusring neutral */
 	await pg.goto(`${BASE}/risk`);

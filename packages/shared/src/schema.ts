@@ -98,6 +98,8 @@ export const RiskLimitsSchema = z.object({
 	maxPositionPct: z.number().min(0).max(100), // Anteil am Depotwert nach der Order; 0 = keine Grenze
 	dailyLossPct: z.number().min(0).max(100), // ab diesem Tagesverlust keine Käufe mehr; 0 = keine Grenze
 	maxOpenProposals: z.number().int().min(0), // je Autor; 0 = keine Grenze
+	maxRiskPct: z.number().min(0).max(100), // Verlust bis zum Stop je Trade in % des Depots; 0 = keine Grenze
+	requireStop: z.boolean(), // Käufe von Agenten nur mit Stop-Loss
 });
 export type RiskLimits = z.infer<typeof RiskLimitsSchema>;
 
@@ -152,10 +154,10 @@ export type SearchHit = z.infer<typeof SearchHitSchema>;
 export const CandleSchema = z.object({ t: z.number(), o: z.number(), h: z.number(), l: z.number(), c: z.number(), v: z.number() });
 export type Candle = z.infer<typeof CandleSchema>;
 
-export const ChartRangeSchema = z.enum(["1d", "1mo", "3mo", "6mo", "1y", "5y"]);
+export const ChartRangeSchema = z.enum(["1d", "5d", "1mo", "3mo", "6mo", "1y", "5y"]); // 1d: 1-Minuten-Kerzen, 5d: 5 Minuten
 export type ChartRange = z.infer<typeof ChartRangeSchema>;
 
-export const ChartSchema = z.object({ symbol: z.string(), name: z.string(), currency: z.string(), range: ChartRangeSchema, candles: z.array(CandleSchema) });
+export const ChartSchema = z.object({ symbol: z.string(), name: z.string(), currency: z.string(), range: ChartRangeSchema, prevClose: z.number().nullable(), candles: z.array(CandleSchema) });
 export type Chart = z.infer<typeof ChartSchema>;
 
 export const OrderTypeSchema = z.enum(["market", "limit"]);
@@ -261,3 +263,138 @@ export type RiskData = z.infer<typeof RiskDataSchema>;
 
 export const ImportResultSchema = z.object({ imported: z.number().int(), skipped: z.number().int(), errors: z.array(z.string()) });
 export type ImportResult = z.infer<typeof ImportResultSchema>;
+
+/* ------------------------------------------------------------------ Daytrading */
+
+export const SessionStateSchema = z.enum(["pre", "open", "post", "closed"]);
+
+export const SessionInfoSchema = z.object({
+	exchange: z.string(),
+	timezone: z.string(),
+	state: SessionStateSchema,
+	preStart: z.number().nullable(),
+	regStart: z.number().nullable(),
+	regEnd: z.number().nullable(),
+	postEnd: z.number().nullable(),
+	symbols: z.number().int(),
+});
+export type SessionInfo = z.infer<typeof SessionInfoSchema>;
+
+export const ScanRowSchema = z.object({
+	symbol: z.string(),
+	name: z.string(),
+	currency: z.string(),
+	exchange: z.string(),
+	state: SessionStateSchema,
+	price: z.number().nullable(),
+	changePct: z.number().nullable(),
+	gapPct: z.number().nullable(), // Eröffnung gegen Vortagesschluss
+	dayOpen: z.number().nullable(),
+	dayHigh: z.number().nullable(),
+	dayLow: z.number().nullable(),
+	rangePos: z.number().nullable(), // 0 = Tagestief, 1 = Tageshoch
+	volume: z.number().nullable(),
+	relVolume: z.number().nullable(), // Volumen heute / Schnitt 20 Tage
+	atrPct: z.number().nullable(), // ATR 14 Tage in % des Kurses
+	marketTime: z.number().nullable(),
+	held: z.boolean(),
+	alerts: z.number().int(),
+});
+export type ScanRow = z.infer<typeof ScanRowSchema>;
+
+export const AnalysisSchema = z.object({
+	symbol: z.string(),
+	name: z.string(),
+	currency: z.string(),
+	state: SessionStateSchema,
+	price: z.number().nullable(),
+	prevClose: z.number().nullable(),
+	dayOpen: z.number().nullable(),
+	dayHigh: z.number().nullable(),
+	dayLow: z.number().nullable(),
+	gapPct: z.number().nullable(),
+	changePct: z.number().nullable(),
+	ema9: z.number().nullable(), // auf 1-Minuten-Kerzen
+	ema21: z.number().nullable(),
+	vwap: z.number().nullable(),
+	rsi14: z.number().nullable(),
+	atr14: z.number().nullable(), // Tageskerzen
+	relVolume: z.number().nullable(),
+	candles: z.number().int(),
+	asOf: z.number().nullable(),
+});
+export type Analysis = z.infer<typeof AnalysisSchema>;
+
+export const NewsItemSchema = z.object({ title: z.string(), publisher: z.string(), time: z.number(), link: z.string() });
+export type NewsItem = z.infer<typeof NewsItemSchema>;
+
+export const DayStatsSchema = z.object({
+	trades: z.number().int(),
+	closed: z.number().int(),
+	wins: z.number().int(),
+	losses: z.number().int(),
+	realizedCents: z.number().int(),
+	winRate: z.number().nullable(),
+	avgWinCents: z.number().int().nullable(),
+	avgLossCents: z.number().int().nullable(),
+	profitFactor: z.number().nullable(),
+	largestLossCents: z.number().int().nullable(),
+	feesCents: z.number().int(),
+});
+
+export const CockpitPositionSchema = z.object({
+	accountId: z.string(),
+	symbol: z.string(),
+	name: z.string(),
+	currency: z.string(),
+	qty: z.number(),
+	avgPrice: z.number(), // EUR
+	price: z.number().nullable(), // EUR
+	nativePrice: z.number().nullable(),
+	unrealizedCents: z.number().int(),
+	unrealizedPct: z.number().nullable(),
+	stopLoss: z.number().nullable(), // Wertpapierwährung
+	takeProfit: z.number().nullable(),
+	r: z.number().nullable(),
+	openedToday: z.boolean(),
+});
+export type CockpitPosition = z.infer<typeof CockpitPositionSchema>;
+
+export const CockpitSchema = z.object({
+	user: z.string(),
+	killSwitch: z.boolean(),
+	market: z.enum(["live", "off", "error"]),
+	marketError: z.string().nullable(),
+	quotesAt: z.number().nullable(),
+	liveIntervalSec: z.number(),
+	sessions: z.array(SessionInfoSchema),
+	scan: z.array(ScanRowSchema),
+	days: z.array(
+		z.object({
+			accountId: z.string(),
+			name: z.string(),
+			owner: z.string(),
+			kind: AccountKindSchema,
+			equityCents: z.number().int(),
+			cashCents: z.number().int(),
+			dayChangeCents: z.number().int().nullable(),
+			dayLossPct: z.number().nullable(),
+			stats: DayStatsSchema,
+		}),
+	),
+	positions: z.array(CockpitPositionSchema),
+});
+export type Cockpit = z.infer<typeof CockpitSchema>;
+
+/* ------------------------------------------------------------------ Chat */
+
+export const ChatMessageSchema = z.object({
+	id: z.number().int(),
+	time: z.number(),
+	author: z.string(),
+	role: z.enum(["user", "agent", "desk"]),
+	text: z.string(),
+	to: z.array(z.string()), // erwähnte Namen (@Atlas); leer = an alle
+	ref: z.string().nullable(), // z. B. "#12" für Vorschlag 12 oder ein Symbol
+});
+export type ChatMessage = z.infer<typeof ChatMessageSchema>;

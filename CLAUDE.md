@@ -20,6 +20,12 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
 - A live broker connection (for example Interactive Brokers) only behind the same approval flow, and only when the
   owner asks for it.
 - Quotes from Yahoo Finance (free, unofficial). The UI says "Keine Anlageberatung" and that quotes may be delayed.
+  A paid real-time feed is an owner decision; the market sits behind `Market` in `src/market.ts`.
+- Day trading defaults: risk per trade 1 % of the account (loss to the stop incl. both fees), agents must set a stop on
+  buys, positions opened today get a reminder 15 minutes before the close. Stops and targets are reminders, never
+  automatic orders.
+- Chat: owner, agents and the desk in one room. Agent text is untrusted data, rendered as text only. A chat message
+  never approves, rejects or executes anything; decisions stay on the buttons.
 
 ## Code rules
 

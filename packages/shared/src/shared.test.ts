@@ -56,7 +56,7 @@ describe("valueHoldings", () => {
 describe("checkOrder", () => {
 	const base: OrderCheckInput = {
 		side: "buy", qty: 1, orderType: "market", symbol: "SAP.DE", price: 100, fx: 1, cashCents: 100_000, equityCents: 100_000, feeCents: 100, heldQty: 0, positionValueCents: 0,
-		limits: { accountId: "a", maxOrderCents: 0, maxPositionPct: 0, dailyLossPct: 0, maxOpenProposals: 0 }, killSwitch: false, dayLossPct: null,
+		limits: { accountId: "a", maxOrderCents: 0, maxPositionPct: 0, dailyLossPct: 0, maxOpenProposals: 0, maxRiskPct: 0, requireStop: true }, killSwitch: false, dayLossPct: null,
 	};
 	it("passes a plain order", () => expect(checkOrder(base)).toMatchObject({ ok: true, estimateCents: 10000 }));
 	it("blocks everything while the kill switch is on", () => expect(checkOrder({ ...base, killSwitch: true }).ok).toBe(false));
@@ -111,4 +111,21 @@ describe("parseTradesCsv", () => {
 		expect(r.errors[0]).toContain("Zeile 2");
 	});
 	it("explains a missing header column", () => expect(parseTradesCsv("a;b\n1;2").errors[0]).toContain("Kopfzeile"));
+});
+
+describe("checkOrder: risk per trade", () => {
+	const base: OrderCheckInput = {
+		side: "buy", qty: 10, orderType: "market", symbol: "X", price: 100, fx: 1, cashCents: 1_000_000, equityCents: 1_000_000, feeCents: 100, heldQty: 0, positionValueCents: 0,
+		limits: { accountId: "a", maxOrderCents: 0, maxPositionPct: 0, dailyLossPct: 0, maxOpenProposals: 0, maxRiskPct: 1, requireStop: true }, killSwitch: false, dayLossPct: null,
+	};
+	it("counts the loss to the stop plus both fees against the limit", () => {
+		expect(checkOrder({ ...base, stopLoss: 90.2 }).ok).toBe(true); // 98 € + 2 € = 1,00 %
+		expect(checkOrder({ ...base, stopLoss: 90 }).violations.join()).toContain("1,02 %"); // 100 € + 2 €
+	});
+	it("requires a stop from agents but only warns you", () => {
+		expect(checkOrder({ ...base, byAgent: true }).violations.join()).toContain("Stop-Loss");
+		const mine = checkOrder(base);
+		expect(mine.ok).toBe(true);
+		expect(mine.warnings.join()).toContain("nicht begrenzt");
+	});
 });

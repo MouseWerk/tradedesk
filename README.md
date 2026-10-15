@@ -12,12 +12,14 @@ Papierdepot mit echten Kursen, damit du siehst, wer gut entscheidet. Keine Anlag
 
 | Module | Content |
 |---|---|
+| Trading | Day-trading cockpit: sessions per exchange (pre-market, open, after-hours), today's P/L, realized, trades and hit rate, kill switch; scanner (change, gap, relative volume, ATR, position in the day range); 1-minute chart with EMA 9/21, VWAP and volume, lines for entry, stop, target, limits and alerts; order calculator (shares from risk budget and stop incl. both fees, capped by the account limits, targets at 1–3 R); positions with R multiple; open proposals; news; day statistics per account. Keys: arrow up/down switch the symbol, B/S open the calculator |
 | Übersicht | Your wealth across your own accounts, today and total P/L, equity curve, what waits for you, all accounts, timeline |
 | Depots | Per account: positions (FIFO cost, value, P/L, weight, stop/target), equity curve, trades, deposits. Manual accounts: record trades, CSV import, deposits; paper accounts: orders |
 | Markt | Watchlist with search, candlestick chart (1 day to 5 years) with limit and alert lines, alerts, agent notes per symbol |
 | Orders | Proposals with thesis, confidence, price at proposal vs. now, warnings; approve (may only shrink), reject with reason, record a broker execution, cancel; history |
 | Agenten | Return of each agent against yours, hit rate, approvals and rejections, journal, how to connect an agent |
-| Risiko | Kill switch; per account: max order value, max position weight, daily loss stop, max open proposals per agent |
+| Risiko | Kill switch; per account: max order value, max position weight, risk per trade (loss to the stop incl. fees), daily loss stop, max open proposals per agent, stop required for agent buys |
+| Chat | One room for you, the agents and the desk (side panel, key C). Agents write with `say` and read with `read`; the desk posts the outcome of every proposal to its author. A chat message never approves anything |
 
 ## How a proposal flows
 
@@ -64,7 +66,12 @@ Windows: `pwsh start.ps1` installs, builds when needed and starts.
 | `minConfidence` | 0–1; agent proposals below it are not created |
 | `staleMovePct` | Max price move between proposal and approval |
 | `proposalTtlHours` | Undecided proposals expire after this |
-| `quoteIntervalSec` | Quote refresh, default 60 |
+| `quoteIntervalSec` | Quote refresh without a browser open, default 60 |
+| `liveIntervalSec` | Quote and 1-minute chart refresh while a browser is open, default 15 (Yahoo may throttle much faster polling) |
+
+Day trading with these quotes: Yahoo is free but unofficial and not a professional real-time feed; quotes for some
+exchanges are delayed, and the dashboard shows the time of every quote. Trade Republic orders are entered by hand in
+its app, so the desk is a planning, risk and review tool for that account, not an execution engine.
 
 Symbols use Yahoo's spelling: `SAP.DE`, `EUNL.DE`, `AAPL`, `BTC-EUR`. Prices of manual accounts are entered in EUR
 (Trade Republic trades in EUR even for US shares); positions are valued at the current quote times the exchange rate.
@@ -93,6 +100,17 @@ python cli/desk.py propose --as Atlas --account agent-atlas --symbol SAP.DE --si
 python cli/desk.py proposals --as Atlas            # see decisions and rejection reasons
 python cli/desk.py journal --as Atlas --symbol SAP.DE --kind thesis "text"
 python cli/desk.py notes --symbol SAP.DE
+```
+
+Day trading and chat:
+
+```bash
+python cli/desk.py brief --as Atlas                # sessions, own account and day stats, positions, scanner, own proposals, chat to me
+python cli/desk.py scan --sort relvol
+python cli/desk.py analyze NVDA                    # EMA 9/21, VWAP, RSI 14 (1-minute), ATR 14 (daily), gap, relative volume
+python cli/desk.py news NVDA
+python cli/desk.py say --as Atlas --ref NVDA "@Nova gap and go?"
+python cli/desk.py read --as Atlas                 # new messages since the last read, * = addressed to me
 ```
 
 `TRADEDESK_URL` overrides the server address. Exit code 1 means refused (reason on stderr), 2 not reachable.

@@ -20,6 +20,7 @@ export interface Config {
 	staleMovePct: number; // so weit darf sich der Kurs zwischen Vorschlag und Freigabe bewegen
 	proposalTtlHours: number;
 	quoteIntervalSec: number;
+	liveIntervalSec: number; // solange ein Browser offen ist
 	dbFile: string;
 	webDist: string;
 	dev: boolean;
@@ -79,6 +80,7 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		staleMovePct: clampNum(raw.staleMovePct, 2, 0.1, 50),
 		proposalTtlHours: clampNum(raw.proposalTtlHours, 24, 1, 24 * 14),
 		quoteIntervalSec: Math.trunc(clampNum(raw.quoteIntervalSec, 60, 15, 3600)),
+		liveIntervalSec: Math.trunc(clampNum(raw.liveIntervalSec, 15, 5, 300)),
 	};
 }
 

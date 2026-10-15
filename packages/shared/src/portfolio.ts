@@ -175,6 +175,7 @@ export interface OrderCheckInput {
 	killSwitch: boolean;
 	dayLossPct: number | null; // heutiger Verlust in Prozent (positiv = Verlust)
 	openByAuthor?: number; // nur für neue Vorschläge
+	byAgent?: boolean; // Stop-Pflicht gilt für Agenten
 }
 
 const eur = (c: number) => `${(c / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
@@ -205,6 +206,14 @@ export function checkOrder(i: OrderCheckInput): Check {
 		if (i.limits.dailyLossPct > 0 && i.dayLossPct !== null && i.dayLossPct >= i.limits.dailyLossPct)
 			violations.push(`Tagesverlust ${i.dayLossPct.toFixed(1).replace(".", ",")} % erreicht die Grenze von ${String(i.limits.dailyLossPct).replace(".", ",")} % – heute keine Käufe mehr.`);
 		if (i.stopLoss && i.stopLoss >= p) violations.push("Stop-Loss muss unter dem Kaufkurs liegen.");
+		else if (i.stopLoss) {
+			// Risiko je Trade: Verlust bis zum Stop plus Kauf- und Verkaufsgebühr
+			const risk = orderValueCents(i.qty, p - i.stopLoss, i.fx) + 2 * i.feeCents;
+			const riskPct = i.equityCents > 0 ? (risk / i.equityCents) * 100 : 0;
+			if (i.limits.maxRiskPct > 0 && riskPct > i.limits.maxRiskPct)
+				violations.push(`Risiko bis zum Stop ${eur(risk)} = ${riskPct.toFixed(2).replace(".", ",")} % des Depots – Grenze ${String(i.limits.maxRiskPct).replace(".", ",")} % je Trade.`);
+		} else if (i.byAgent && i.limits.requireStop) violations.push("Käufe von Agenten brauchen einen Stop-Loss.");
+		else warnings.push("Ohne Stop-Loss ist das Risiko dieser Order nicht begrenzt.");
 		if (i.takeProfit && i.takeProfit <= p) violations.push("Kursziel muss über dem Kaufkurs liegen.");
 	}
 	if (i.limits.maxOrderCents > 0 && estimateCents > i.limits.maxOrderCents) violations.push(`Orderwert ${eur(estimateCents)} liegt über der Grenze von ${eur(i.limits.maxOrderCents)}.`);

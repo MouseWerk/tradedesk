@@ -13,5 +13,6 @@
   "minConfidence": 0.5,
   "staleMovePct": 2,
   "proposalTtlHours": 24,
-  "quoteIntervalSec": 60
+  "quoteIntervalSec": 60,
+  "liveIntervalSec": 15
 }

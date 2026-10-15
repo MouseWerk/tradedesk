@@ -65,6 +65,22 @@ const MIGRATIONS: string[] = [
 	CREATE TABLE snapshot (account_id TEXT NOT NULL, day TEXT NOT NULL, equity_cents INTEGER NOT NULL, deposits_cents INTEGER NOT NULL, PRIMARY KEY (account_id, day));
 	CREATE TABLE event (id INTEGER PRIMARY KEY, time INTEGER NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL);
 	`,
+	/* 2: Daytrading (Tageswerte, Handelszeiten, Risiko je Trade) und Chat */ `
+	ALTER TABLE quote ADD COLUMN day_open REAL;
+	ALTER TABLE quote ADD COLUMN day_high REAL;
+	ALTER TABLE quote ADD COLUMN day_low REAL;
+	ALTER TABLE quote ADD COLUMN volume REAL;
+	ALTER TABLE quote ADD COLUMN pre_start INTEGER;
+	ALTER TABLE quote ADD COLUMN reg_start INTEGER;
+	ALTER TABLE quote ADD COLUMN reg_end INTEGER;
+	ALTER TABLE quote ADD COLUMN post_end INTEGER;
+	ALTER TABLE quote ADD COLUMN timezone TEXT NOT NULL DEFAULT '';
+	ALTER TABLE risk ADD COLUMN max_risk_pct REAL NOT NULL DEFAULT 1;
+	ALTER TABLE risk ADD COLUMN require_stop INTEGER NOT NULL DEFAULT 1;
+	CREATE TABLE daily_stat (symbol TEXT PRIMARY KEY, day TEXT NOT NULL, avg_volume REAL, atr REAL);
+	CREATE TABLE chat (id INTEGER PRIMARY KEY, time INTEGER NOT NULL, author TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, recipients TEXT NOT NULL DEFAULT '[]', ref TEXT);
+	CREATE INDEX chat_time ON chat (time);
+	`,
 ];
 
 function param(v: unknown): SQLInputValue {

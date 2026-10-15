@@ -63,9 +63,10 @@ export default function RiskView() {
 	);
 }
 
-const FIELDS: { key: keyof Omit<RiskLimits, "accountId">; label: string; hint: string; unit: string; toUi: (v: number) => string; fromUi: (v: number) => number }[] = [
+const FIELDS: { key: keyof Omit<RiskLimits, "accountId" | "requireStop">; label: string; hint: string; unit: string; toUi: (v: number) => string; fromUi: (v: number) => number }[] = [
 	{ key: "maxOrderCents", label: "Max. Orderwert", hint: "je Order, 0 = keine Grenze", unit: "€", toUi: (v) => String(v / 100).replace(".", ","), fromUi: (v) => Math.round(v * 100) },
 	{ key: "maxPositionPct", label: "Max. Position", hint: "Anteil nach dem Kauf", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "maxRiskPct", label: "Risiko je Trade", hint: "Verlust bis Stop, 0 = keine", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
 	{ key: "dailyLossPct", label: "Tagesverlust-Stopp", hint: "danach keine Käufe", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
 	{ key: "maxOpenProposals", label: "Offene Vorschläge", hint: "je Agent, 0 = keine Grenze", unit: "", toUi: (v) => String(v), fromUi: (v) => Math.round(v) },
 ];
@@ -102,7 +103,16 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 					</Field>
 				))}
 			</div>
-			<p className="mt-3 text-[12px] text-fg-3 tnum">Heute: {dayLossPct === null ? "noch kein Vortag" : dayLossPct > 0 ? `${pct(dayLossPct, { signed: false })} Verlust` : "kein Verlust"}</p>
+			<label className="mt-3 flex items-center gap-2 text-[12.5px]">
+				<input
+					type="checkbox"
+					className="size-4 accent-[var(--fg)]"
+					checked={limits.requireStop}
+					onChange={(e) => void run(`/api/risk/${limits.accountId}`, "PUT", { requireStop: e.target.checked }, e.target.checked ? `Stop-Pflicht für Agenten in ${name} an.` : `Stop-Pflicht für Agenten in ${name} aus.`)}
+				/>
+				Agenten müssen beim Kauf einen Stop-Loss setzen
+			</label>
+			<p className="mt-2 text-[12px] text-fg-3 tnum">Heute: {dayLossPct === null ? "noch kein Vortag" : dayLossPct > 0 ? `${pct(dayLossPct, { signed: false })} Verlust` : "kein Verlust"}</p>
 		</Card>
 	);
 }
