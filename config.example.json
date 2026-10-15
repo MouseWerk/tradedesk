@@ -1,0 +1,17 @@
+{
+  "user": "Maurice",
+  "port": 8095,
+  "market": "yahoo",
+  "accounts": [
+    { "id": "tr", "name": "Trade Republic", "kind": "manual", "broker": "Trade Republic", "feeEur": 1, "startCashEur": 0 },
+    { "id": "papier", "name": "Mein Papierdepot", "kind": "paper", "feeEur": 1, "startCashEur": 10000 }
+  ],
+  "agents": [
+    { "name": "Atlas", "startCashEur": 10000 },
+    { "name": "Nova", "startCashEur": 10000 }
+  ],
+  "minConfidence": 0.5,
+  "staleMovePct": 2,
+  "proposalTtlHours": 24,
+  "quoteIntervalSec": 60
+}

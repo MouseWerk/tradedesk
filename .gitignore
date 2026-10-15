@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+build/
+__pycache__/
+.tradedesk/
+# Depotdaten gehören nie in dieses öffentliche Repo (config.json und Datenbank liegen in ~/.tradedesk)
+config.json
+*.sqlite
+*.sqlite-*
+.claude/

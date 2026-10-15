@@ -1,0 +1,100 @@
+// Konfiguration: ~/.tradedesk/config.json (überschreibbar mit TRADEDESK_HOME oder --home). Depots, Agenten und
+// Grenzwerte stehen dort, Trades und Kurse in der Datenbank daneben – nie im Repo.
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Account } from "@desk/shared";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+export interface Config {
+	home: string;
+	user: string; // du – der Einzige, der freigibt
+	port: number;
+	baseCurrency: "EUR";
+	market: "yahoo" | "off";
+	accounts: Account[]; // deine Depots + je Agent ein Papierdepot
+	agents: string[];
+	minConfidence: number; // darunter wird ein Agenten-Vorschlag gar nicht erst angelegt
+	staleMovePct: number; // so weit darf sich der Kurs zwischen Vorschlag und Freigabe bewegen
+	proposalTtlHours: number;
+	quoteIntervalSec: number;
+	dbFile: string;
+	webDist: string;
+	dev: boolean;
+}
+
+const ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u;
+
+export function homeDir(env = process.env, argv: string[] = []): string {
+	const i = argv.indexOf("--home");
+	if (i >= 0 && argv[i + 1]) return path.resolve(argv[i + 1]);
+	return env.TRADEDESK_HOME ? path.resolve(env.TRADEDESK_HOME) : path.join(homedir(), ".tradedesk");
+}
+
+export function agentAccountId(name: string): string {
+	return `agent-${name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || "x"}`;
+}
+
+const eurToCents = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v * 100) : d);
+const clampNum = (v: unknown, d: number, lo: number, hi: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+
+/** Aus der Datei, was gültig ist; fehlerhafte Einträge fallen weg, statt den Start zu verhindern. */
+export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "home" | "dbFile" | "webDist" | "dev">, env = process.env): Config {
+	const user = typeof raw.user === "string" && NAME.test(raw.user) ? raw.user : (env.USERNAME ?? env.USER ?? "Ich");
+	const accounts: Account[] = [];
+	for (const r of Array.isArray(raw.accounts) ? (raw.accounts as Record<string, unknown>[]) : []) {
+		if (!r || typeof r.id !== "string" || !ID.test(r.id) || r.id.startsWith("agent-") || accounts.some((a) => a.id === r.id)) continue;
+		const kind = r.kind === "manual" ? "manual" : "paper";
+		accounts.push({
+			id: r.id,
+			name: typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : r.id,
+			kind,
+			owner: "user",
+			broker: typeof r.broker === "string" && r.broker.trim() ? r.broker.trim().slice(0, 40) : kind === "paper" ? "Papier" : "Broker",
+			feeCents: eurToCents(r.feeEur, 100),
+			startCashCents: eurToCents(r.startCashEur, kind === "paper" ? 1_000_000 : 0),
+		});
+	}
+	if (!accounts.length) accounts.push({ id: "papier", name: "Papierdepot", kind: "paper", owner: "user", broker: "Papier", feeCents: 100, startCashCents: 1_000_000 });
+	const agents: string[] = [];
+	for (const r of Array.isArray(raw.agents) ? (raw.agents as unknown[]) : []) {
+		const a = (typeof r === "string" ? { name: r } : r) as Record<string, unknown>;
+		const name = typeof a?.name === "string" ? a.name.trim() : "";
+		if (!NAME.test(name) || name.toLowerCase() === user.toLowerCase() || agents.some((x) => x.toLowerCase() === name.toLowerCase())) continue;
+		agents.push(name);
+		accounts.push({ id: agentAccountId(name), name: `Papierdepot ${name}`, kind: "paper", owner: name, broker: "Papier", feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000) });
+	}
+	return {
+		...base,
+		user,
+		port: Math.trunc(clampNum(raw.port, 8095, 1024, 65535)),
+		baseCurrency: "EUR",
+		market: raw.market === "off" ? "off" : "yahoo",
+		accounts,
+		agents,
+		minConfidence: clampNum(raw.minConfidence, 0.5, 0, 1),
+		staleMovePct: clampNum(raw.staleMovePct, 2, 0.1, 50),
+		proposalTtlHours: clampNum(raw.proposalTtlHours, 24, 1, 24 * 14),
+		quoteIntervalSec: Math.trunc(clampNum(raw.quoteIntervalSec, 60, 15, 3600)),
+	};
+}
+
+export function loadConfig(argv: string[] = process.argv.slice(2), env = process.env): Config {
+	const arg = (k: string) => (argv.includes(`--${k}`) ? argv[argv.indexOf(`--${k}`) + 1] : undefined);
+	const home = homeDir(env, argv);
+	const file = arg("config") ? path.resolve(arg("config")!) : path.join(home, "config.json");
+	let raw: Record<string, unknown> = {};
+	try {
+		const j = JSON.parse(readFileSync(file, "utf8"));
+		if (j && typeof j === "object") raw = j;
+	} catch {
+		// fehlt oder halb geschrieben: Standard mit einem Papierdepot, die Oberfläche erklärt die Einrichtung
+	}
+	const cfg = cleanConfig(raw, { home, dbFile: env.TRADEDESK_DB ?? path.join(home, "desk.sqlite"), webDist: path.resolve(HERE, "../../web/dist"), dev: argv.includes("--dev") }, env);
+	const port = arg("port") ?? env.TRADEDESK_PORT;
+	if (port && Number.isInteger(Number(port))) cfg.port = Number(port);
+	return cfg;
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@desk/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.ts --port 8096 --dev",
+    "start": "node src/index.ts",
+    "selftest": "node src/index.ts --selftest"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "@desk/shared": "*",
+    "hono": "4.13.10"
+  }
+}

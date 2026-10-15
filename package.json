@@ -1,0 +1,23 @@
+{
+  "name": "tradedesk",
+  "private": true,
+  "description": "Local trading desk for you and your AI agents: portfolio, watchlist and charts, order proposals with approval, risk limits, agent journal",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "npm --workspace @desk/server run dev",
+    "dev:web": "npm --workspace @desk/web run dev",
+    "build": "npm --workspace @desk/web run build",
+    "start": "node apps/server/src/index.ts",
+    "selftest": "node apps/server/src/index.ts --selftest",
+    "test": "vitest run",
+    "e2e": "npm --workspace @desk/web run e2e",
+    "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/web"
+  },
+  "devDependencies": {
+    "vitest": "5.0.2",
+    "typescript": "7.0.2",
+    "@types/node": "26.6.3"
+  }
+}
