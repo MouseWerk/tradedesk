@@ -286,7 +286,7 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 					{farRefs.map((r, k) => {
 						const above = r.value > hi;
 						return (
-							<text key={`${r.label}-${r.value}-${k}`} x={pad.l + iw - 4} y={above ? pad.t + 12 + k * 14 : pad.t + ih - 6 - k * 14} fontSize={11} fill="var(--fg-2)" textAnchor="end">
+							<text key={`${r.label}-${r.value}-${k}`} x={pad.l + iw - 4} y={pad.t + 12 + k * 14} fontSize={11} fill="var(--fg-2)" textAnchor="end">
 								{r.label} {format(r.value)} ({above ? "außerhalb, höher" : "außerhalb, tiefer"})
 							</text>
 						);

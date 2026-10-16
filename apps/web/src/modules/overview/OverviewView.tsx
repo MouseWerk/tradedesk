@@ -16,7 +16,7 @@ type Span = "30" | "90" | "all";
 const SHOWN = 5;
 
 const STATS = "grid grid-cols-4 gap-3 @max-[900px]:grid-cols-2";
-const ROW = "grid grid-cols-[minmax(0,1fr)_380px] gap-4 @max-[1100px]:grid-cols-1";
+const ROW = "grid grid-cols-[minmax(0,1fr)_380px] items-start gap-4 @max-[1100px]:grid-cols-1";
 
 function kindLabel(a: AccountSummary): string {
 	if (a.owner !== "user") return `Papierdepot von Agent ${a.owner}`;

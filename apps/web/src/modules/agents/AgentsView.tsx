@@ -99,11 +99,11 @@ export default function AgentsView() {
 									</div>
 								</dl>
 								<div className="mt-4 flex gap-3 text-[12.5px]">
-									<Link to="/portfolio" search={{ account: a.accountId }} className="text-fg-2 underline-offset-2 hover:text-fg hover:underline">
+									<Link to="/portfolio" search={{ account: a.accountId }} className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
 										Depot ansehen
 									</Link>
 									{a.pending > 0 && (
-										<Link to="/orders" className="text-fg-2 underline-offset-2 hover:text-fg hover:underline">
+										<Link to="/orders" className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
 											{a.pending} offene Vorschläge
 										</Link>
 									)}

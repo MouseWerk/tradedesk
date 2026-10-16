@@ -90,7 +90,7 @@ function Login({ onDone }: { onDone: () => void }) {
 				}}
 			>
 				<h1 className="text-[15px] font-semibold">Anmelden</h1>
-				<Field label="PIN" error={err}>
+				<Field label="PIN" error={err} hint={" "}>
 					{(id) => <Input id={id} ref={ref} type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} aria-invalid={!!err} />}
 				</Field>
 				<Button type="submit" variant="primary" disabled={busy}>
@@ -125,7 +125,7 @@ function Setup({ onDone }: { onDone: () => void }) {
 				</p>
 				<Field label="Einrichtungscode">{(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" autoFocus spellCheck={false} />}</Field>
 				<Field label="Neue PIN (4–12 Ziffern)">{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} />}</Field>
-				<Field label="PIN wiederholen" error={err}>
+				<Field label="PIN wiederholen" error={err} hint={" "}>
 					{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value.replace(/\D/g, ""))} maxLength={12} aria-invalid={!!err} />}
 				</Field>
 				<Button type="submit" variant="primary" disabled={busy}>

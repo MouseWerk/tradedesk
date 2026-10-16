@@ -7,7 +7,7 @@ import { FileUp, Landmark, LineChart as LineIcon, Plus, ShoppingCart, Trash2 } f
 import type { AccountDetail, AccountSummary, Trade } from "@desk/shared";
 import { sideLabel } from "@desk/shared";
 import { useAccount, useOverview } from "@/lib/api";
-import { date, dayLabel, eur, inputNumber, numberError, parseDe, pct, price, qty, signedEur, tone } from "@/lib/format";
+import { date, dayLabel, eur, inputNumber, numberError, parseDe, pct, price, qty, signedEur, tone, qtyShort } from "@/lib/format";
 import { LineChart } from "@/ui/charts";
 import { Badge, Button, Card, Empty, Field, Input, Select, Skeleton, Stat, Table, Textarea, cn, hideBelow, td, th } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
@@ -18,8 +18,9 @@ import { BrokerPanel } from "./BrokerPanel";
 
 const SOURCE: Record<Trade["source"], string> = { manual: "erfasst", import: "Import", proposal: "Vorschlag", order: "Order" };
 /** 5 Kennzahlen ohne leere Lücke: jede Reihe füllt sich ganz (4 + 1 breit statt 3 + 2 mit Loch). */
-const STATS = "flex flex-wrap gap-3";
-const STAT = "min-w-[140px] flex-1";
+// fünf Kennzahlen ohne leere Plätze: eine Reihe, darunter 3 + 2, auf dem Handy 2 + 2 + 1 über die ganze Breite
+const STATS = "grid grid-cols-5 gap-3 @max-[900px]:grid-cols-6 @max-[480px]:grid-cols-2";
+const STAT = "min-w-0 @max-[900px]:col-span-2 @max-[900px]:[&:nth-child(n+4)]:col-span-3 @max-[480px]:col-span-1 @max-[480px]:[&:nth-child(n+4)]:col-span-1 @max-[480px]:last:col-span-2";
 
 export default function PortfolioView() {
 	const search = useSearch({ strict: false }) as { account?: string };
@@ -189,7 +190,7 @@ function Detail({ d }: { d: AccountDetail }) {
 												</span>
 											</Link>
 										</td>
-										<td className={cn(td, "text-right tnum", hideBelow.md)}>{qty(p.qty)}</td>
+										<td className={cn(td, "text-right tnum", hideBelow.md)} title={qty(p.qty)}>{qtyShort(p.qty)}</td>
 										<td className={cn(td, "text-right tnum text-fg-2", hideBelow.lg)}>{price(p.avgPrice)}</td>
 										<td className={cn(td, "text-right tnum", hideBelow.sm)}>
 											{p.price === null ? (
@@ -241,7 +242,7 @@ function Detail({ d }: { d: AccountDetail }) {
 					<Empty>Noch keine Positionen.{a.kind === "manual" ? " Trades erfassen oder per CSV importieren." : ""}</Empty>
 				)}
 			</Card>
-			<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4 @max-[1100px]:grid-cols-1">
+			<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4 @max-[1100px]:grid-cols-1">
 				<Card title="Verlauf" icon={<LineIcon className="size-4" />}>
 					{d.curve.length > 1 ? (
 						<LineChart label={`Depotwert ${a.name} je Tag`} xs={d.curve.map((p) => p.day)} xLabel={dayLabel} series={[{ id: "eq", label: "Depotwert", color: "var(--fg)", values: d.curve.map((p) => p.equityCents) }]} format={(v) => eur(v, { short: true })} area height={240} />

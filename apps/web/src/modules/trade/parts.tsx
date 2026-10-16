@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ExternalLink, Newspaper, OctagonX } from "lucide-react";
 import type { Cockpit, Proposal } from "@desk/shared";
 import { useNews, useOverview, useRisk } from "@/lib/api";
-import { ago, eur, hhmm, num, pct, price, qty, signedEur, tone } from "@/lib/format";
+import { ago, eur, hhmm, num, pct, price, qty, signedEur, tone, qtyShort } from "@/lib/format";
 import { orderResultText } from "@/lib/orders";
 import { Badge, Button, Card, Empty, Segmented, Table, cn, hideBelow, td, th } from "@/ui/kit";
 import { useConfirm } from "@/ui/overlay";
@@ -61,13 +61,13 @@ export function SessionBar({ cockpit }: { cockpit: Cockpit }) {
 	};
 	return (
 		<div className="flex flex-wrap items-stretch gap-3">
-			<div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-line bg-surface px-4 py-2.5 shadow-[var(--shadow)]" aria-label="Börsen">
+			<div className="flex min-w-0 flex-[2_1_440px] flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-line bg-surface px-4 py-2.5 shadow-[var(--shadow)] [&_*]:whitespace-nowrap" aria-label="Börsen">
 				<Sessions cockpit={cockpit} />
 				<span className="ml-auto text-[11.5px] text-fg-3 tnum" title={cockpit.marketError ?? undefined}>
 					{cockpit.market === "error" ? "Kurse gestört – letzte Werte" : `Kurse ${ago(cockpit.quotesAt)} · alle ${cockpit.liveIntervalSec} s`}
 				</span>
 			</div>
-			<div className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-xl border border-line bg-surface px-4 py-2.5 text-[12.5px] shadow-[var(--shadow)] tnum" aria-label="Dein Tag" data-testid="day-bar">
+			<div className="flex min-w-0 flex-[1_1_360px] flex-wrap items-center gap-x-5 gap-y-1 rounded-xl border border-line bg-surface px-4 py-2.5 text-[12.5px] shadow-[var(--shadow)] tnum" aria-label="Dein Tag" data-testid="day-bar">
 				<span>
 					<span className="text-fg-3">Heute </span>
 					<span className={cn("text-[15px] font-semibold", tone(day))}>{signedEur(day)}</span>
@@ -169,7 +169,7 @@ export function Positions({ cockpit, onSelect }: { cockpit: Cockpit; onSelect: (
 											</span>
 										</span>
 									</td>
-									<td className={cn(td, "text-right tnum", hideBelow.sm)}>{qty(p.qty)}</td>
+									<td className={cn(td, "text-right tnum", hideBelow.sm)} title={qty(p.qty)}>{qtyShort(p.qty)}</td>
 									<td className={cn(td, "text-right tnum text-fg-2", hideBelow.md)}>{price(p.avgPrice)}</td>
 									<td className={cn(td, "text-right tnum")}>
 										<span className="flex flex-col leading-tight">

@@ -10,13 +10,15 @@ import { Card, Empty, Segmented, Skeleton } from "@/ui/kit";
 import { RangeBar } from "./Scanner";
 import { SessionDot, STATE_LABEL, exchangeLabel } from "./parts";
 
+// kurze Beschriftung, damit alle fünf auch auf dem Handy passen; das Kerzenintervall steht in RANGE_LONG
 const RANGES: { id: ChartRange; label: string }[] = [
-	{ id: "1d", label: "1 T · 1 Min." },
-	{ id: "5d", label: "5 T · 5 Min." },
-	{ id: "1mo", label: "1 M · 1 Std." },
+	{ id: "1d", label: "1 T" },
+	{ id: "5d", label: "5 T" },
+	{ id: "1mo", label: "1 M" },
 	{ id: "6mo", label: "6 M" },
 	{ id: "1y", label: "1 J" },
 ];
+const RANGE_LONG: Partial<Record<ChartRange, string>> = { "1d": "1 Tag, 1-Minuten-Kerzen", "5d": "5 Tage, 5-Minuten-Kerzen", "1mo": "1 Monat, Stundenkerzen", "6mo": "6 Monate, Tageskerzen", "1y": "1 Jahr, Tageskerzen" };
 
 export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow; cockpit: Cockpit; proposals: Proposal[]; small?: boolean }) {
 	const [range, setRange] = useState<ChartRange>("1d");
@@ -80,6 +82,7 @@ export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow
 			</div>
 			<div className="flex flex-wrap items-center gap-3 px-4 pt-3">
 				<Segmented label="Zeitraum und Kerzen" items={RANGES} value={range} onChange={setRange} />
+				<span className="text-[11.5px] whitespace-nowrap text-fg-3">{RANGE_LONG[range]}</span>
 				<ul className="flex flex-wrap gap-x-4 gap-y-1 text-[12px]" aria-label="Legende">
 					{overlays.map((o) => (
 						<li key={o.id} className="flex items-center gap-1.5">
@@ -99,7 +102,7 @@ export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow
 					</Empty>
 				) : candles.length ? (
 					<CandleChart
-						label={`Kursverlauf ${row.symbol}, ${RANGES.find((r) => r.id === range)!.label}`}
+						label={`Kursverlauf ${row.symbol}, ${RANGE_LONG[range]}`}
 						candles={candles}
 						overlays={overlays}
 						volume

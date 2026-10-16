@@ -60,7 +60,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 			{children}
 			<Dialog.Root open={!!ask} onOpenChange={(o) => !o && close(false)}>
 				<Dialog.Portal>
-					<Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay)]" />
+					<Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay)] backdrop-blur-[3px]" />
 					<Dialog.Content
 						className="fixed top-1/2 left-1/2 z-50 max-h-[calc(100vh-32px)] w-[460px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 animate-enter overflow-y-auto rounded-xl border border-line bg-surface p-5 shadow-2xl"
 						data-testid="confirm"

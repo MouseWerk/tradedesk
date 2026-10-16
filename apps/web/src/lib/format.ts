@@ -50,6 +50,11 @@ export function qty(v: number): string {
 	return minus(v.toLocaleString("de-DE", { maximumFractionDigits: 6 }));
 }
 
+/** Für Tabellen: höchstens 4 Nachkommastellen (Bruchstücke aus Sparplänen), die genaue Zahl gehört in den Tooltip. */
+export function qtyShort(v: number): string {
+	return minus(v.toLocaleString("de-DE", { maximumFractionDigits: 4 }));
+}
+
 /** Stückzahl mit richtigem Plural: „1 Stück“ ist im Deutschen gleich, also nur die Zahl. */
 export function shares(v: number): string {
 	return `${qty(v)} Stk.`;

@@ -548,6 +548,16 @@ try {
 		await pg.context().close();
 	}
 
+	/* Börsen-Leiste im Cockpit: bei mittlerer Breite nicht zusammengequetscht (jede Börse einzeilig) */
+	for (const w of [1024, 1280]) {
+		const pg = await open(browser, { w, h: 900, chat: w >= 1280 });
+		await pg.goto(`${BASE}/trade?symbol=NVDA`);
+		await settle(pg);
+		const heights = await pg.$$eval('[data-testid="session"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+		check(`${w}px: every exchange in the session bar stays on one line`, heights.length > 0 && heights.every((h) => h <= 24), heights.join(","));
+		await pg.context().close();
+	}
+
 	/* Layout und Konsole: jedes Modul, beide Designs, vier Breiten */
 	for (const theme of ["dark", "light"]) {
 		for (const w of WIDTHS) {

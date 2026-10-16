@@ -188,7 +188,7 @@ export function Table({ children, className, label }: { children: ReactNode; cla
 		// relative: sonst hängt sich ein sr-only-Kopf (position: absolute) an die Seite und erzeugt seitliches Scrollen
 		<div className={cn("@container/table relative", more && "table-fade", className)} data-more={more || undefined}>
 			<div ref={box} className="scroll-thin overflow-x-auto">
-				<table className="table-sticky w-full border-collapse text-[12.5px]" aria-label={label}>
+				<table className="[&_tbody_tr:last-child>td]:border-b-0 table-sticky w-full border-collapse text-[12.5px]" aria-label={label}>
 					{children}
 				</table>
 			</div>
