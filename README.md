@@ -106,6 +106,7 @@ computer.
 | `user` | Your name; the only one who approves |
 | `port` | Default 8095 |
 | `market` | `yahoo` (free quotes from Yahoo Finance, unofficial, often delayed) or `off` (no network; positions valued at cost) |
+| `quotes` | Price source: `yahoo` (default) or `ibkr` (snapshots from the Client Portal Gateway of your first IBKR account, Yahoo as fallback; needs IBKR market data subscriptions, otherwise IBKR sends delayed or no data). Every quote carries its source and age |
 | `accounts` | Your accounts: `kind` `manual` (you trade at the broker and record it here), `paper`, or `broker` (Interactive Brokers: `ibAccount`, optional `gateway`, `conids`); `feeEur` per order; `startCashEur` |
 | `listen` | Extra addresses besides 127.0.0.1, Tailscale only (100.64.0.0/10), e.g. `["100.121.124.65"]` for the phone |
 | `liveTrading` | `false` by default; must be `true` before orders go to a real-money broker account |
@@ -196,6 +197,15 @@ npm run dev          # server on 8096 with the real data folder
 npm run dev:web      # Vite on 5175, proxies /api to 8096
 node apps/server/src/index.ts --fixture --port 8097   # throwaway data and a fake exchange, no network
 ```
+
+Architecture (modules, tick, SSE, money rules, auth, broker recovery, adding a broker or quote feed):
+`docs/ARCHITECTURE.md`.
+
+Read API used by the web app besides the views' own routes: `GET /api/overview` (incl. `allocation` by symbol and asset
+class and `changes` for 1W/1M/3M/YTD/1Y/all), `GET /api/analytics?account=<id|mine|all>&from=YYYY-MM-DD&to=YYYY-MM-DD`
+(closed FIFO trades with R, equity curve with drawdown, daily results, stats by weekday, hour, author and symbol; shapes
+and definitions in `packages/shared/src/schema.ts`), `GET /api/market/quote/<symbol>` (incl. `quote` with source and
+age).
 
 Checks: see `CLAUDE.md`. Data lives in `~/.tradedesk` (`config.json`, `desk.sqlite`); migrations are numbered and
 additive, and the database is copied to `desk.sqlite.v<n>.bak` before each migration.
