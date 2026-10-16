@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AnalyticsSchema, orderValueCents } from "@desk/shared";
 import { makeFixture, type Fixture } from "../src/fixture.ts";
+import { best, slowdown, withinBudget } from "./budget.ts";
 import { deskHttp } from "./owner.ts";
 
 let fx: Fixture;
@@ -132,20 +133,15 @@ describe("budget: analytics with 5 000 trades", () => {
 			}
 			for (let d = 1; d <= 365; d++) snapshot("papier", new Date(clock - d * 86_400_000).toISOString().slice(0, 10), 2_000_000 + ((d * 7919) % 50_000) - 25_000);
 		});
-		const runs: number[] = [];
-		const t0 = performance.now();
-		let a = fx.desk.analytics({ account: "papier" }); // erster Aufruf baut das Buch (danach aus dem Zwischenspeicher)
-		const first = performance.now() - t0;
-		for (let i = 0; i < 5; i++) {
-			const t = performance.now();
-			a = fx.desk.analytics({ account: "papier" });
-			runs.push(performance.now() - t);
-		}
-		const best = Math.min(...runs);
-		console.log(`budget: analytics 5 000 trades ${best.toFixed(1)} ms, first call ${first.toFixed(1)} ms (runs ${runs.map((r) => r.toFixed(1)).join(", ")})`);
+		const before = await slowdown();
+		// erster Aufruf baut das Buch, danach kommt es aus dem Zwischenspeicher; für die kalte Messung wird er geleert
+		const ledgers = (fx.desk as unknown as { ledgers: Map<string, unknown> }).ledgers;
+		const first = await best(3, () => (ledgers.clear(), fx.desk.analytics({ account: "papier" })));
+		let a = fx.desk.analytics({ account: "papier" });
+		const warm = await best(5, () => (a = fx.desk.analytics({ account: "papier" })));
+		const factor = Math.max(before, await slowdown());
 		expect(a.tradesTotal).toBe(2_500);
 		expect(a.stats.rTrades).toBe(2_500);
-		expect(best).toBeLessThan(50);
-		expect(first).toBeLessThan(250);
+		expect(withinBudget("Auswertung 5 000 Trades", factor, { analytics: [warm, 50], "first call": [first, 250] })).toEqual([]);
 	});
 });

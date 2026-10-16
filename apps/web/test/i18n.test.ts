@@ -59,3 +59,10 @@ describe("catalog keys", () => {
 		expect(deadKeys(leafPaths(de, "de"), readSources(code))).toEqual([]);
 	});
 });
+
+describe("chart ranges", () => {
+	it("are written the same way on every chart: number and unit without a space (1T, 1M, 1J), YTD, Alles, Eigener", () => {
+		const labels = [...Object.values(de.overview.range).map((r) => r.label), ...Object.values(de.analytics.ranges), ...Object.values(de.intraday.ranges), ...Object.values(de.market.range)];
+		expect(labels.filter((l) => !/^(\d+[TWMJ]|YTD|Alles|Eigener)$/.test(l))).toEqual([]);
+	});
+});

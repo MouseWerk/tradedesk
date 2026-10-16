@@ -1,8 +1,9 @@
 // Takt und Abfragen mit viel Verlauf (Q1 B14, B31) und Stop-Hinweise nur für die Position, die der Vorschlag eröffnet
-// hat (B27). Budget: Minimum mehrerer Läufe, Zahlen stehen in der Ausgabe.
+// hat (B27). Budgets: siehe budget.ts.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { orderValueCents } from "@desk/shared";
 import { makeFixture, type Fixture } from "../src/fixture.ts";
+import { best, slowdown, withinBudget } from "./budget.ts";
 
 let fx: Fixture;
 let clock: number;
@@ -41,32 +42,19 @@ function history(trades = 4_000, proposals = 1_500) {
 	});
 }
 
-async function best(runs: number, fn: () => unknown | Promise<unknown>): Promise<number> {
-	let min = Number.POSITIVE_INFINITY;
-	for (let i = 0; i < runs; i++) {
-		const t = performance.now();
-		await fn();
-		min = Math.min(min, performance.now() - t);
-	}
-	return min;
-}
-
 describe("budget with 4 000 trades and 1 500 filled stop proposals (B14, B31)", () => {
 	it("tick stays under 300 ms, reads stay fast", async () => {
 		history();
-		const first = await best(1, () => fx.desk.tick());
+		const before = await slowdown();
+		const first = await best(1, () => fx.desk.tick()); // schließt einmalig die längst verkauften Vorschläge, nicht wiederholbar
 		const tick = await best(5, () => fx.desk.tick());
 		const cockpit = await best(5, () => fx.desk.cockpit());
 		const overview = await best(5, () => fx.desk.overview());
 		const detail = await best(5, () => fx.desk.detail("agent-atlas"));
 		const agents = await best(5, () => fx.desk.agentsData());
 		const proposals = await best(5, () => fx.desk.proposals());
-		console.log(`budget: first tick ${first.toFixed(1)} ms, tick ${tick.toFixed(1)} ms, cockpit ${cockpit.toFixed(1)} ms, overview ${overview.toFixed(1)} ms, detail ${detail.toFixed(1)} ms, agents ${agents.toFixed(1)} ms, proposals ${proposals.toFixed(1)} ms`);
-		expect(first).toBeLessThan(1_000);
-		expect(tick).toBeLessThan(300);
-		expect(cockpit).toBeLessThan(150);
-		expect(overview).toBeLessThan(100);
-		expect(detail).toBeLessThan(150);
+		const factor = Math.max(before, await slowdown());
+		expect(withinBudget("4 000 Trades", factor, { "first tick": [first, 1_000], tick: [tick, 300], cockpit: [cockpit, 150], overview: [overview, 100], detail: [detail, 150], agents: [agents, 150], proposals: [proposals, 150] })).toEqual([]);
 	});
 
 	it("a proposal whose position was sold no longer takes part in the stop check", async () => {

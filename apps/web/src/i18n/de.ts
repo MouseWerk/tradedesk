@@ -809,7 +809,7 @@ export const de = {
 	},
 	intraday: {
 		/** kurze Beschriftung, damit alle fünf auch auf dem Handy passen; das Kerzenintervall steht in rangeLong */
-		ranges: { "1d": "1 T", "5d": "5 T", "1mo": "1 M", "6mo": "6 M", "1y": "1 J" },
+		ranges: { "1d": "1T", "5d": "5T", "1mo": "1M", "6mo": "6M", "1y": "1J" },
 		rangeLong: { "1d": "1 Tag, 1-Minuten-Kerzen", "5d": "5 Tage, 5-Minuten-Kerzen", "1mo": "1 Monat, Stundenkerzen", "6mo": "6 Monate, Tageskerzen", "1y": "1 Jahr, Tageskerzen" },
 		ema9: "EMA 9",
 		ema21: "EMA 21",
@@ -940,7 +940,7 @@ export const de = {
 	},
 	market: {
 		/** Zeiträume des Charts, kurz (Tag, Monat, Jahr) */
-		range: { "1d": "1 T", "1mo": "1 M", "3mo": "3 M", "6mo": "6 M", "1y": "1 J", "5y": "5 J" },
+		range: { "1d": "1T", "1mo": "1M", "3mo": "3M", "6mo": "6M", "1y": "1J", "5y": "5J" },
 		op: { above: "über", below: "unter" },
 		unknown: (symbol: string) => `„${symbol}“ ist nicht auf der Watchlist – links suchen und hinzufügen.`,
 		hide: "Ausblenden",
