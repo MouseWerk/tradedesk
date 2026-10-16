@@ -1,7 +1,7 @@
 # Working on Tradedesk
 
 Local trading desk for the owner and his AI agents (README.md). TypeScript monorepo in the style of the AI Work
-Dashboard: `apps/server` (Hono on Node >= 24, `node:sqlite`, desk service in `src/desk.ts`, market data in
+Dashboard: `apps/server` (Hono on Node >= 24, `node:sqlite`, desk service in `src/desk/` (modules, see docs/ARCHITECTURE.md), market data in
 `src/market.ts`), `apps/web` (React 19, Vite, Tailwind 4, TanStack Router/Query), `packages/shared` (zod contracts +
 pure portfolio and risk logic), `cli/desk.py` (Python CLI the agents use). Follow
 https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first, especially
@@ -57,7 +57,7 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
   approve command.
 - Broker access only through `src/broker.ts` and `localJson` (localhost only); contract tests in `test/ibkr.test.ts`
   follow IBKR's documented paths and bodies.
-- Only `src/http.ts` calls `fetch` on the server; `desk.ts` takes the clock from `now()` (both guarded by tests).
+- Only `src/http.ts` calls `fetch` on the server; the desk modules take the clock from `now()` (both guarded by tests).
 - Migrations in `src/db.ts`: append only, never edit a released one.
 - Design: tokens from `apps/web/src/styles.css`; gains and losses in text and fills (`text-ok`/`text-err`) with a
   sign, never as borders; no accent- or status-colored borders, outlines, glows or left bars; focus ring only
