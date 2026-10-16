@@ -3,8 +3,11 @@
 const eurFmt = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" });
 const eurShort = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
 
+/** Ein Minuszeichen überall: Intl liefert den Bindestrich (U+002D), die App zeigt das echte Minus (U+2212). */
+const minus = (s: string) => s.replace(/^-/, "−").replace(/(\s)-/, "$1−");
+
 export function eur(cents: number, { short = false } = {}): string {
-	return (short ? eurShort : eurFmt).format(cents / 100);
+	return minus((short ? eurShort : eurFmt).format(cents / 100));
 }
 
 /** +1.234,56 € / −12,00 € (echtes Minuszeichen) */
@@ -22,15 +25,29 @@ export function pct(v: number | null | undefined, { signed = true, digits = 1 } 
 
 const SYMBOLS: Record<string, string> = { EUR: "€", USD: "$", GBP: "£", CHF: "CHF", JPY: "¥" };
 
-/** Kurs in Wertpapierwährung, 2 bis 4 Nachkommastellen je nach Größe. */
+/** Kurs in Wertpapierwährung, 2 bis 4 Nachkommastellen je nach Größe; geschütztes Leerzeichen wie bei eur() (bricht nie um). */
 export function price(v: number | null | undefined, currency = "EUR"): string {
 	if (v === null || v === undefined) return "–";
-	const digits = v >= 1000 ? 2 : v >= 1 ? 2 : 4;
-	return `${v.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits })} ${SYMBOLS[currency] ?? currency}`;
+	return `${num(v, priceDigits(v))} ${SYMBOLS[currency] ?? currency}`;
+}
+
+/** Nachkommastellen für Kurse: 2 ab 1, darunter 4 (Pennystocks, manche Kryptowerte). */
+export function priceDigits(v: number): number {
+	return Math.abs(v) >= 1 ? 2 : 4;
+}
+
+/** Zahl für ein Eingabefeld: deutsch mit Tausenderpunkt, wird von parseDe wieder genauso gelesen. */
+export function inputNumber(v: number | null | undefined, digits = 2): string {
+	if (v === null || v === undefined || !Number.isFinite(v)) return "";
+	return minus(v.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits }));
+}
+
+export function currencySymbol(currency: string): string {
+	return SYMBOLS[currency] ?? currency;
 }
 
 export function qty(v: number): string {
-	return v.toLocaleString("de-DE", { maximumFractionDigits: 6 });
+	return minus(v.toLocaleString("de-DE", { maximumFractionDigits: 6 }));
 }
 
 /** Stückzahl mit richtigem Plural: „1 Stück“ ist im Deutschen gleich, also nur die Zahl. */
@@ -68,20 +85,42 @@ export function ago(ms: number | null, now = Date.now()): string {
 	return d === 1 ? "vor 1 Tag" : `vor ${d} Tagen`;
 }
 
-/** Deutsche Eingabe „1.234,5“ oder „1234.5“ → Zahl, sonst NaN. */
+/**
+ * Deutsche Eingabe → Zahl, sonst NaN. Komma ist das Dezimalzeichen, der Punkt trennt Tausender: „1.000“ = 1000,
+ * „1.234,56“ = 1234,56. Ein einzelner Punkt ohne Dreiergruppe gilt als Dezimalpunkt („1234.5“, „104.50“, „0.001“).
+ * Englische Schreibweise mit beidem („1,234.5“) ist mehrdeutig und wird abgelehnt (siehe numberError).
+ */
 export function parseDe(raw: string): number {
-	const s = raw.trim().replace(/\s|€/g, "");
+	let s = raw.trim().replace(/[\s\u00a0\u202f\u20ac$\u00a3%]/g, "");
+	let sign = 1;
+	if (/^[-−]/.test(s)) {
+		sign = -1;
+		s = s.slice(1);
+	} else if (s.startsWith("+")) s = s.slice(1);
 	if (!s) return Number.NaN;
-	const normalized = s.includes(",") ? s.replace(/\./g, "").replace(",", ".") : s;
-	return /^-?\d+(\.\d+)?$/.test(normalized) ? Number(normalized) : Number.NaN;
+	let normalized: string | null = null;
+	if (s.includes(",")) {
+		// deutsch: Tausenderpunkte nur in Dreiergruppen vor dem einen Komma
+		if (/^(\d{1,3}(\.\d{3})+|\d*),\d*$/.test(s) && /\d/.test(s)) normalized = s.replace(/\./g, "").replace(",", ".");
+	} else if (/^[1-9]\d{0,2}(\.\d{3})+$/.test(s)) normalized = s.replace(/\./g, "");
+	else if (/^\d*\.?\d+$|^\d+\.$/.test(s)) normalized = s;
+	if (normalized === null || normalized === "." || normalized === "") return Number.NaN;
+	const v = Number(normalized.endsWith(".") ? normalized.slice(0, -1) : normalized);
+	return Number.isFinite(v) ? sign * v : Number.NaN;
+}
+
+/** Warum eine Eingabe keine Zahl ist – für die Fehlermeldung am Feld; null, wenn sie lesbar oder leer ist. */
+export function numberError(raw: string): string | null {
+	if (!raw.trim() || Number.isFinite(parseDe(raw))) return null;
+	return /\d,\d{3}\./.test(raw) || /\d\.\d+,\d+\./.test(raw) ? "Bitte deutsches Format: 1.234,50" : "Keine Zahl – z. B. 1.234,50";
 }
 
 /** Große Zahlen kurz: 950, 12.400, 1,2 Mio., 3,4 Mrd. */
 export function compact(v: number | null | undefined): string {
 	if (v === null || v === undefined) return "–";
-	if (Math.abs(v) >= 1e9) return `${(v / 1e9).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mrd.`;
-	if (Math.abs(v) >= 1e6) return `${(v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mio.`;
-	return Math.round(v).toLocaleString("de-DE");
+	if (Math.abs(v) >= 1e9) return minus(`${(v / 1e9).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mrd.`);
+	if (Math.abs(v) >= 1e6) return minus(`${(v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mio.`);
+	return minus(Math.round(v).toLocaleString("de-DE"));
 }
 
 export function hhmm(ms: number | null | undefined): string {
@@ -89,5 +128,5 @@ export function hhmm(ms: number | null | undefined): string {
 }
 
 export function num(v: number | null | undefined, digits = 2): string {
-	return v === null || v === undefined || !Number.isFinite(v) ? "–" : v.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+	return v === null || v === undefined || !Number.isFinite(v) ? "–" : minus(v.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits }));
 }
