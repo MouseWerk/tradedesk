@@ -93,14 +93,16 @@ async function seedFixture({ desk, db, cfg }: Fixture) {
 	trade("agent-nova", "BTC-EUR", "buy", 0.05, 64000, 25, "EUR", 1, "proposal");
 	trade("agent-nova", "BTC-EUR", "sell", 0.02, 59000, 8, "EUR", 1, "proposal");
 
-	// Tagesstände: deterministischer Pfad, der beim heutigen Wert endet
+	// Tagesstände: deterministischer Pfad, der beim heutigen Wert endet. Ein Depot ohne Trades hat nur Cash – sein Stand
+	// bleibt flach (sonst zeigt es einen erfundenen Tagesgewinn und eine steigende Kurve ohne Positionen, Q1 D10).
 	for (const a of cfg.accounts) {
 		const s = desk.summary(a);
+		const traded = !!db.get("SELECT 1 FROM trade WHERE account_id = ?", a.id);
 		let seed = [...a.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 		const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32);
 		let eq = s.equityCents;
 		for (let d = 1; d <= 90; d++) {
-			eq = Math.round(eq / (1 + (rnd() - 0.47) * 0.018));
+			if (traded) eq = Math.round(eq / (1 + (rnd() - 0.47) * 0.018));
 			db.run("INSERT OR REPLACE INTO snapshot (account_id, day, equity_cents, deposits_cents) VALUES (?,?,?,?)", a.id, dayKey(t0 - d * day), eq, s.depositsCents);
 		}
 	}

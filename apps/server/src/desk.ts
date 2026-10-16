@@ -562,17 +562,28 @@ export class Desk extends EventEmitter {
 
 	/* ------------------------------------------------------------------ Vorschläge und Orders */
 
-	private toProposal(r: ProposalRow): Proposal {
+	/** Risiko eines Kaufs bis zum Stop (inkl. beider Gebühren), Anteil am Depot und Kursziel in R. */
+	private riskOf(r: ProposalRow, fx: number | null, equityCents: number) {
+		const entry = r.fill_price ?? r.limit_price ?? this.priced(r.symbol)?.price ?? r.quote_price;
+		const stop = r.side === "buy" ? r.stop_loss : null;
+		if (!stop || !(entry > stop) || fx === null) return { riskCents: null, riskPct: null, targetR: null };
+		const riskCents = orderValueCents(r.approved_qty ?? r.qty, entry - stop, fx) + 2 * this.account(r.account_id).feeCents;
+		return { riskCents, riskPct: equityCents > 0 ? (riskCents / equityCents) * 100 : null, targetR: r.take_profit && r.take_profit > entry ? (r.take_profit - entry) / (entry - stop) : null };
+	}
+
+	private toProposal(r: ProposalRow, equityCents?: number): Proposal {
 		const i = this.instrument(r.symbol);
 		const p = this.priced(r.symbol);
 		const qty = r.approved_qty ?? r.qty;
 		const unit = r.limit_price ?? p?.price ?? r.quote_price;
+		const fx = p?.fx ?? this.fx(i?.currency ?? "EUR");
 		return {
 			id: r.id, accountId: r.account_id, author: r.author, symbol: r.symbol, name: i?.name ?? r.symbol, currency: i?.currency ?? "EUR", side: r.side, qty: r.qty, orderType: r.order_type,
 			limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, confidence: r.confidence, thesis: r.thesis, status: r.status, reason: r.reason, quotePrice: r.quote_price,
 			price: p?.price ?? null, estimateCents: orderValueCents(qty, unit, p?.fx ?? this.fx(i?.currency ?? "EUR") ?? 1), warnings: JSON.parse(r.warnings) as string[], createdAt: r.created_at,
 			decidedAt: r.decided_at, decidedBy: r.decided_by, approvedQty: r.approved_qty, expiresAt: r.expires_at, fillPrice: r.fill_price,
 			brokerOrderId: r.broker_order_id, brokerMessage: r.broker_message, filledQty: r.filled_qty,
+			...this.riskOf(r, fx, equityCents ?? this.summary(this.account(r.account_id)).equityCents),
 		};
 	}
 
@@ -599,7 +610,8 @@ export class Desk extends EventEmitter {
 			params.push(opts.author);
 		}
 		const rows = this.db.all<ProposalRow>(`SELECT * FROM proposal ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ?`, ...params, opts.limit ?? 300);
-		return rows.map((r) => this.toProposal(r));
+		const equity = new Map(this.cfg.accounts.map((a) => [a.id, this.summary(a).equityCents]));
+		return rows.map((r) => this.toProposal(r, equity.get(r.account_id)));
 	}
 
 	/**
@@ -1594,8 +1606,11 @@ export class Desk extends EventEmitter {
 		const days = this.cfg.accounts.map((a) => {
 			const s = this.summary(a);
 			const rows = this.tradeRows(a.id);
+			let openRisk = this.reserved(a.id).riskCents;
 			for (const p of this.positions(a, s)) {
 				const fx = this.priced(p.symbol)?.fx ?? null;
+				// offene Position mit Stop: was bis zum Stop noch verloren gehen kann, plus die Verkaufsgebühr
+				if (p.stopLoss && p.nativePrice !== null && fx !== null) openRisk += orderValueCents(p.qty, Math.max(0, p.nativePrice - p.stopLoss), fx) + a.feeCents;
 				const avgNative = fx ? p.avgPrice / fx : null;
 				positions.push({
 					accountId: a.id, symbol: p.symbol, name: p.name, currency: p.currency, qty: p.qty, avgPrice: p.avgPrice, price: p.price, nativePrice: p.nativePrice,
@@ -1604,7 +1619,15 @@ export class Desk extends EventEmitter {
 					openedToday: rows.some((t) => t.symbol === p.symbol && t.side === "buy" && t.time >= from),
 				});
 			}
-			return { accountId: a.id, name: a.name, owner: a.owner, kind: a.kind, equityCents: s.equityCents, cashCents: s.cashCents, dayChangeCents: s.dayChangeCents, dayLossPct: this.dayLossPct(a, s), stats: this.dayStatsOf(a.id) };
+			// Tagesverlust-Stopp in EUR auf den Stand von gestern, wie in der Risikoprüfung
+			const prev = this.prevSnapshot(a.id);
+			const pctLimit = this.limits(a.id).dailyLossPct;
+			const limit = pctLimit > 0 && prev && prev.equity_cents > 0 ? cents((prev.equity_cents / 100) * (pctLimit / 100)) : null;
+			const loss = Math.max(0, -(s.dayChangeCents ?? 0));
+			return {
+				accountId: a.id, name: a.name, owner: a.owner, kind: a.kind, equityCents: s.equityCents, cashCents: s.cashCents, dayChangeCents: s.dayChangeCents, dayLossPct: this.dayLossPct(a, s),
+				openRiskCents: openRisk, dayLossLimitCents: limit, dayLossHeadroomCents: limit === null ? null : Math.max(0, limit - loss), stats: this.dayStatsOf(a.id),
+			};
 		});
 		return {
 			user: this.cfg.user,

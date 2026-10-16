@@ -206,6 +206,9 @@ export const ProposalSchema = z.object({
 	brokerOrderId: z.string().nullable(),
 	brokerMessage: z.string().nullable(), // Rückfrage des Brokers im Originaltext
 	filledQty: z.number().nullable(), // beim Broker schon ausgeführte Stück (Teilausführung: weniger als approvedQty)
+	riskCents: z.number().int().nullable(), // Verlust bis zum Stop inkl. Kauf- und Verkaufsgebühr; null ohne Stop
+	riskPct: z.number().nullable(), // riskCents in % des Depotwerts
+	targetR: z.number().nullable(), // Kursziel als Vielfaches des Risikos (R); null ohne Stop oder Ziel
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
 
@@ -397,6 +400,9 @@ export const CockpitSchema = z.object({
 			cashCents: z.number().int(),
 			dayChangeCents: z.number().int().nullable(),
 			dayLossPct: z.number().nullable(),
+			openRiskCents: z.number().int(), // Risiko bis zum Stop: offene Positionen mit Stop (ab Kurs, mit Verkaufsgebühr) und freigegebene offene Käufe
+			dayLossLimitCents: z.number().int().nullable(), // Tagesverlust-Stopp in EUR (Grenze × Stand von gestern); null ohne Grenze oder Stand
+			dayLossHeadroomCents: z.number().int().nullable(), // Verlust, der heute noch bleibt, bis der Stopp greift (mindestens 0)
 			stats: DayStatsSchema,
 		}),
 	),
