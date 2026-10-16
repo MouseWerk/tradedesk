@@ -176,13 +176,17 @@ describe("config", () => {
 describe("guards", () => {
 	it("only http.ts calls fetch on the server", () => {
 		const dir = path.resolve(import.meta.dirname, "../src");
-		const offenders = readdirSync(dir).filter((f) => f.endsWith(".ts") && f !== "http.ts" && /\bfetch\(/.test(readFileSync(path.join(dir, f), "utf8")));
+		const files = readdirSync(dir, { recursive: true }).map(String).filter((f) => f.endsWith(".ts"));
+		expect(files).toContain(path.join("desk", "proposals.ts")); // auch die Module unter src/desk/
+		const offenders = files.filter((f) => f !== "http.ts" && /\bfetch\(/.test(readFileSync(path.join(dir, f), "utf8")));
 		expect(offenders).toEqual([]);
 	});
 
-	it("the clock is injectable: nothing in desk.ts reads Date.now directly", () => {
-		const src = readFileSync(path.resolve(import.meta.dirname, "../src/desk.ts"), "utf8");
-		expect(src.match(/Date\.now\(\)/g) ?? []).toEqual([]);
+	it("the clock is injectable: nothing in desk.ts or src/desk/ reads Date.now directly", () => {
+		const dir = path.resolve(import.meta.dirname, "../src/desk");
+		const files = [path.resolve(dir, "../desk.ts"), ...readdirSync(dir).filter((f) => f.endsWith(".ts")).map((f) => path.join(dir, f))];
+		expect(files.length).toBeGreaterThan(5);
+		for (const f of files) expect([f, readFileSync(f, "utf8").match(/Date\.now\(\)|new Date\(\)/g) ?? []]).toEqual([f, []]);
 	});
 });
 
