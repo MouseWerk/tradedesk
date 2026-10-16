@@ -179,6 +179,8 @@ export const de = {
 			`${plural(n, "Zusammen mit einem wartenden Kaufvorschlag reicht das Cash nicht für beide", `Zusammen mit ${count(n)} wartenden Kaufvorschlägen reicht das Cash nicht für alle`)} – bei der Freigabe wird neu geprüft.`,
 		blocked: (order: string, why: string) => `Vorschlag ${order} nicht angelegt: ${why}`,
 		proposed: (author: string, order: string, depot: string, id: number) => `${author} schlägt vor: ${order} (${depot}) #${id}`,
+		autoTraded: (author: string, order: string, depot: string, id: number) => `${author} handelt automatisch: ${order} (${depot}) #${id}`,
+		autoBy: "Automatik (Papier)",
 		moved: (pct: string, from: string, to: string, currency: string) => `Kurs hat sich um ${pct} bewegt (${from} → ${to} ${currency}) – nichts ausgeführt. Agent soll neu vorschlagen.`,
 		movedAtOpen: (pct: string, from: string, to: string, currency: string) => `Kurs hat sich bis zur Eröffnung um ${pct} bewegt (${from} → ${to} ${currency}) – nichts ausgeführt.`,
 		riskBeforeSend: (violations: string) => `Risikoprüfung vor dem Senden: ${violations}`,

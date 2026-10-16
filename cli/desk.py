@@ -17,6 +17,7 @@ Daytrading:
   python cli/desk.py brief --as Atlas [--json]      everything at once: sessions, your account and day stats, positions,
                                                     scanner, your open and recently decided proposals, chat to you
   python cli/desk.py scan [--sort change|gap|relvol|atr] [--json]
+  python cli/desk.py movers [--sort move|up|down|gap|volume] [--limit 30] [--json]   biggest moves in the whole universe
   python cli/desk.py analyze SAP.DE [--json]        EMA 9/21, VWAP, RSI 14 on 1-minute candles, ATR 14 daily, gap, rel. volume
   python cli/desk.py news SAP.DE [--json]
 
@@ -235,6 +236,17 @@ def cmd_scan(args):
     out(args, rows, "\n".join(lines))
 
 
+def cmd_movers(args):
+    m = call("GET", "/api/market/movers?" + urllib.parse.urlencode({"sort": args.sort, "limit": str(args.limit)}))
+    age = "-" if not m["at"] else f"{max(0, int(time.time() - m['at'] / 1000)) // 60} min ago"
+    lines = [f"movers in the universe ({m['count']} with a quote, universe fetched {age}; watchlist and holdings are live)",
+             f"{'symbol':<10} {'state':<6} {'price':>12} {'chg':>8} {'gap':>8} {'range':>6}  name"]
+    for r in m["rows"]:
+        rp = "-" if r["rangePos"] is None else f"{r['rangePos'] * 100:.0f}%"
+        lines.append(f"{r['symbol']:<10} {r['state']:<6} {num(r['price']):>12} {pct(r['changePct']):>8} {pct(r['gapPct']):>8} {rp:>6}  {r['name'][:28]}{'  held' if r['held'] else ''}")
+    out(args, m, "\n".join(lines))
+
+
 def cmd_analyze(args):
     a = call("GET", "/api/market/analysis/" + urllib.parse.quote(args.symbol.upper(), safe=""))
     def r(v, d=2):
@@ -404,6 +416,10 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("scan")
     s.add_argument("--sort", choices=["change", "gap", "relvol", "atr"], default="change")
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("movers")
+    s.add_argument("--sort", choices=["move", "up", "down", "gap", "volume"], default="move")
+    s.add_argument("--limit", type=int, default=30)
+    s.add_argument("--json", action="store_true")
     s = sub.add_parser("analyze")
     s.add_argument("symbol")
     s.add_argument("--json", action="store_true")
@@ -438,7 +454,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"status": cmd_status, "quote": cmd_quote, "watchlist": cmd_watchlist, "portfolio": cmd_portfolio, "propose": cmd_propose,
-            "proposals": cmd_proposals, "journal": cmd_journal, "notes": cmd_notes, "scan": cmd_scan, "analyze": cmd_analyze, "news": cmd_news,
+            "proposals": cmd_proposals, "journal": cmd_journal, "notes": cmd_notes, "scan": cmd_scan, "movers": cmd_movers, "analyze": cmd_analyze, "news": cmd_news,
             "brief": cmd_brief, "say": cmd_say, "read": cmd_read, "wait": cmd_wait}
 
 

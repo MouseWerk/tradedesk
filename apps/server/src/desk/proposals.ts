@@ -266,7 +266,12 @@ export abstract class DeskProposals extends DeskMarket {
 				a.id, author, symbol, input.side, roundQty(input.qty), input.orderType, input.limitPrice ?? null, input.side === "buy" ? (input.stopLoss ?? null) : null, input.side === "buy" ? (input.takeProfit ?? null) : null,
 				input.confidence, input.thesis, check.price ?? 0, JSON.stringify(check.warnings), now, now + this.cfg.proposalTtlHours * 3_600_000, JSON.stringify(raw).slice(0, 4000),
 			);
-			if (!isUser) this.event("proposal.new", author, de.proposals.proposed(author, `${sideLabel[input.side]} ${num(input.qty)} ${symbol}`, a.name, lastId), { to: [this.cfg.user], ref: `#${lastId}` });
+			// autoPaper: im eigenen Papierdepot des Agenten ohne deine Freigabe – nie in deinen Depots, nie echtes Geld
+			const auto = !isUser && this.cfg.autoPaper && a.kind === "paper" && a.owner === author;
+			if (auto) {
+				this.event("proposal.auto", author, de.proposals.autoTraded(author, `${sideLabel[input.side]} ${num(input.qty)} ${symbol}`, a.name, lastId), { ref: `#${lastId}` });
+				this.execute(lastId, roundQty(input.qty), de.proposals.autoBy);
+			} else if (!isUser) this.event("proposal.new", author, de.proposals.proposed(author, `${sideLabel[input.side]} ${num(input.qty)} ${symbol}`, a.name, lastId), { to: [this.cfg.user], ref: `#${lastId}` });
 			else this.execute(lastId, roundQty(input.qty), this.cfg.user);
 			return lastId;
 		});

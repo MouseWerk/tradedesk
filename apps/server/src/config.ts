@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Account } from "@desk/shared";
 import { de } from "./i18n/de.ts";
+import { DEFAULT_UNIVERSE } from "./universe.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,6 +25,9 @@ export interface Config {
 	quoteIntervalSec: number;
 	liveIntervalSec: number; // solange ein Browser offen ist
 	maxQuoteAgeSec: number; // während der Handelszeit entscheidet kein älterer Kurs (Vorschlag, Freigabe, Bestätigung, Limit)
+	universe: string[]; // Scanner-Universum neben der Watchlist ("universe" in config.json, sonst src/universe.ts)
+	universeIntervalSec: number; // so oft wird das Universum abgefragt – langsam, sonst sperrt Yahoo
+	autoPaper: boolean; // Agenten handeln ihr eigenes Papierdepot ohne Freigabe (nur Papier, nie echtes Geld)
 	agentBudgetCents: number | null; // "agentBudgetEur": so viel dürfen Agenten-Käufe mit echtem Geld zusammen binden; null: ohne Grenze
 	liveTrading: boolean; // Hauptschalter: Orders mit echtem Geld nur, wenn true (IBKR-Papierkonten gehen immer)
 	listen: string[]; // zusätzliche Adressen neben 127.0.0.1 – nur Tailscale (100.64.0.0/10), z. B. fürs Handy
@@ -114,6 +118,9 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		quoteIntervalSec: Math.trunc(clampNum(raw.quoteIntervalSec, 60, 15, 3600)),
 		liveIntervalSec: Math.trunc(clampNum(raw.liveIntervalSec, 15, 5, 300)),
 		maxQuoteAgeSec: Math.trunc(clampNum(raw.maxQuoteAgeSec, 120, 30, 3600)),
+		universe: Array.isArray(raw.universe) ? [...new Set(raw.universe.filter((s): s is string => typeof s === "string" && /^[A-Za-z0-9.=^-]{1,24}$/.test(s.trim())).map((s) => s.trim().toUpperCase()))].slice(0, 500) : [...DEFAULT_UNIVERSE],
+		universeIntervalSec: Math.trunc(clampNum(raw.universeIntervalSec, 300, 120, 3600)),
+		autoPaper: raw.autoPaper === true,
 		agentBudgetCents: typeof raw.agentBudgetEur === "number" && Number.isFinite(raw.agentBudgetEur) && raw.agentBudgetEur > 0 ? Math.round(Math.min(raw.agentBudgetEur, 10_000_000) * 100) : null,
 		liveTrading: raw.liveTrading === true,
 		listen: cleanListen(raw.listen),

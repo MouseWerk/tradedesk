@@ -398,6 +398,10 @@ export const ScanRowSchema = z.object({
 });
 export type ScanRow = z.infer<typeof ScanRowSchema>;
 
+/** Größte Bewegungen im Universum (GET /api/market/movers) */
+export const MoversSchema = z.object({ at: z.number().nullable(), count: z.number().int(), rows: z.array(ScanRowSchema) });
+export type Movers = z.infer<typeof MoversSchema>;
+
 export const AnalysisSchema = z.object({
 	symbol: z.string(),
 	name: z.string(),

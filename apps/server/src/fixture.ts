@@ -45,6 +45,7 @@ export const FIXTURE_CONFIG = {
 		{ id: "ibkr", name: "IBKR Papier", kind: "broker", ibAccount: "DU0000001", feeEur: 2, startCashEur: 25000 },
 	],
 	agents: [{ name: "Atlas", startCashEur: 10000 }, { name: "Nova", startCashEur: 10000 }],
+	universe: [] as string[], // Tests setzen ihr Universum selbst
 };
 
 export async function makeFixture({ seed = true, now, feed }: { seed?: boolean; now?: () => number; feed?: (market: FakeMarket) => QuoteFeed } = {}): Promise<Fixture> {

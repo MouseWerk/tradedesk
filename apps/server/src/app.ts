@@ -290,6 +290,7 @@ export function createApp(desk: Desk) {
 	/* Daytrading */
 	app.get("/api/cockpit", (c) => c.json(desk.cockpit()));
 	app.get("/api/market/scan", (c) => c.json(desk.scan()));
+	app.get("/api/market/movers", (c) => c.json(desk.movers({ sort: c.req.query("sort"), limit: c.req.query("limit") })));
 	app.get("/api/market/analysis/:symbol", async (c) => c.json(await desk.analysis(c.req.param("symbol"))));
 	app.get("/api/market/news/:symbol", async (c) => c.json(await desk.news(c.req.param("symbol"))));
 	app.get("/api/accounts/:id/day", (c) => c.json(desk.dayStatsOf(desk.account(c.req.param("id")).id)));

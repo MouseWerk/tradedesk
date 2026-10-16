@@ -1,5 +1,5 @@
 // Markt: Kurse holen und speichern, Kursalter, Watchlist, Suche, Charts, Alarme, Handelszeiten, Scanner, Analyse, News.
-import type { Alert, Analysis, Chart, ChartRange, NewsItem, QuoteInfo, ScanRow, SearchHit, SessionInfo, WatchItem, SessionState } from "@desk/shared";
+import type { Alert, Analysis, Chart, ChartRange, Movers, NewsItem, QuoteInfo, ScanRow, SearchHit, SessionInfo, WatchItem, SessionState } from "@desk/shared";
 import { atr, dayKey, ema, last, rsi, sessionState, vwap } from "@desk/shared";
 import { fxSymbol, type QuoteData } from "../market.ts";
 import { DeskError, parsePrice, num, type QuoteRow } from "./core.ts";
@@ -109,8 +109,9 @@ export abstract class DeskMarket extends DeskRisk {
 		return [...new Set([...watch, ...this.heldSymbols(), ...active])];
 	}
 
+	/** Erlaubt für Vorschläge: Watchlist oder Universum (Bestand prüft der Aufrufer). */
 	protected isWatched(symbol: string) {
-		return !!this.db.get("SELECT 1 FROM watch WHERE symbol = ?", symbol);
+		return this.cfg.universe.includes(symbol) || !!this.db.get("SELECT 1 FROM watch WHERE symbol = ?", symbol);
 	}
 
 	watchlist(): WatchItem[] {
@@ -266,10 +267,10 @@ export abstract class DeskMarket extends DeskRisk {
 		return [...by.entries()].map(([exchange, { q, n }]) => ({ exchange, timezone: q.timezone, state: this.sessionOf(q), preStart: q.pre_start, regStart: q.reg_start, regEnd: q.reg_end, postEnd: q.post_end, symbols: n }));
 	}
 
-	scan(): ScanRow[] {
+	scan(symbols = this.scanSymbols()): ScanRow[] {
 		const held = new Set(this.heldSymbols());
 		const alerts = this.db.all<{ symbol: string; n: number }>("SELECT symbol, COUNT(*) AS n FROM alert WHERE triggered_at IS NULL GROUP BY symbol");
-		return this.scanSymbols().map((symbol) => {
+		return symbols.map((symbol) => {
 			const i = this.instrument(symbol);
 			const q = this.quoteRow(symbol);
 			const d = this.dailyStat(symbol);
@@ -305,6 +306,50 @@ export abstract class DeskMarket extends DeskRisk {
 				quote: this.quoteInfo(symbol, q),
 			};
 		});
+	}
+
+	/** Universum ohne Watchlist und Bestand (die laufen im schnellen Takt mit). */
+	universeSymbols(): string[] {
+		const fast = new Set(this.scanSymbols());
+		return this.cfg.universe.filter((s) => !fast.has(s));
+	}
+
+	/** Wann das Universum zuletzt abgefragt wurde (0: noch nie). */
+	universeAt = 0;
+	private universeBusy = false;
+
+	/**
+	 * Universum abfragen (langsamer Takt, universeIntervalSec): Kurse und Wechselkurse speichern wie sonst, aber ohne den
+	 * Marktstatus anzufassen – ein fehlendes Symbol hier ist keine Störung der Börse.
+	 */
+	async refreshUniverse(): Promise<number> {
+		if (this.market.kind === "off" || this.universeBusy) return 0;
+		const symbols = this.universeSymbols();
+		if (!symbols.length) return 0;
+		this.universeBusy = true;
+		try {
+			const { quotes } = await this.feed.snapshot(symbols);
+			this.storeQuotes(quotes);
+			const fx = [...new Set(quotes.map((q) => this.instrument(q.symbol)?.currency).filter((c): c is string => !!c && c !== "EUR"))].map(fxSymbol);
+			const missing = fx.filter((s) => !this.quoteRow(s) || this.now() - this.quoteRow(s)!.fetched_at > 10 * 60_000);
+			if (missing.length) this.storeQuotes((await this.feed.snapshot(missing)).quotes);
+			this.universeAt = this.now();
+			return quotes.length;
+		} finally {
+			this.universeBusy = false;
+		}
+	}
+
+	/**
+	 * Größte Bewegungen im ganzen Universum samt Watchlist und Bestand: nach |Veränderung| (oder Gap, Rel. Volumen),
+	 * nur Werte mit Kurs. Für Agenten: erst hier suchen, dann mit analyze nachsehen.
+	 */
+	movers(q: { sort?: unknown; limit?: unknown } = {}): Movers {
+		const sort = q.sort === "gap" ? "gap" : q.sort === "volume" ? "volume" : q.sort === "up" ? "up" : q.sort === "down" ? "down" : "move";
+		const limit = Math.min(200, Math.max(1, Math.trunc(Number(q.limit) || 30)));
+		const all = this.scan([...new Set([...this.scanSymbols(), ...this.cfg.universe])]).filter((r) => r.price !== null && r.changePct !== null);
+		const key = (r: ScanRow) => (sort === "gap" ? Math.abs(r.gapPct ?? 0) : sort === "volume" ? (r.relVolume ?? 0) : sort === "up" ? r.changePct! : sort === "down" ? -r.changePct! : Math.abs(r.changePct!));
+		return { at: this.universeAt || null, count: all.length, rows: all.sort((x, y) => key(y) - key(x)).slice(0, limit) };
 	}
 
 	/** Kennzahlen eines Werts aus 1-Minuten-Kerzen (EMA 9/21, VWAP, RSI 14) und Tageskerzen (ATR 14). */

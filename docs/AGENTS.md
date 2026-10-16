@@ -29,8 +29,13 @@ session token, so the server refuses such a call from an agent even with a faked
 - **Every buy has a stop.** Entry, stop and target come from the chart (`analyze`: VWAP, EMA 9/21, day range, ATR),
   not from round numbers. Size from risk: loss to the stop plus both fees within the account's risk per trade
   (`portfolio --account …` shows the limits). Use `--dry-run` and fix every refusal; never try to get around a limit.
-- **Only known symbols.** Watchlist or holdings only (Yahoo spelling: `SAP.DE`, `AAPL`). Ask the owner in the chat to
-  add a symbol.
+- **Only known symbols.** Watchlist, holdings or the scanner universe (about 150 large stocks: DAX, MDAX/TecDAX,
+  Europe, USA; Yahoo spelling: `SAP.DE`, `AAPL`). Start with `movers` to see the biggest moves across all of them, then
+  `analyze` the candidates. The universe is fetched every few minutes, so check `analyze` for the live price before you
+  propose. Ask the owner in the chat to add a symbol outside it.
+- **Your own paper depot may trade automatically.** With `"autoPaper": true` in `config.json` a proposal for your own
+  paper depot is executed at once if it passes the risk check – no approval. Treat it like real money anyway: every
+  buy has a stop, size from risk, and write in the journal why. Proposals for the owner's depots always wait for him.
 - **Honest confidence.** `--confidence` is your real estimate (0–1). Below the owner's minimum nothing is proposed;
   do not inflate it to get past the minimum.
 - **Short, concrete theses in German.** Setup, trigger, stop and target with the reason, risk in EUR and in R, what
@@ -51,6 +56,7 @@ session token, so the server refuses such a call from an agent even with a faked
 |---|---|
 | `brief --as NAME` | Sessions, your account and today's stats, positions, scanner, your proposals and decisions, chat to you |
 | `scan [--sort change\|gap\|relvol\|atr]` | Watchlist with change, gap, relative volume, ATR, day-range position |
+| `movers [--sort move\|up\|down\|gap\|volume] [--limit 30]` | Biggest moves in the whole universe plus watchlist and holdings |
 | `analyze SYMBOL` | 1-minute EMA 9/21, VWAP, RSI 14; daily ATR 14; gap; relative volume |
 | `news SYMBOL` | Latest headlines with links |
 | `quote SYMBOL`, `watchlist`, `portfolio --account ID` | Prices, the allow-list, an account with its limits |

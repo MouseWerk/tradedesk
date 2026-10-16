@@ -112,6 +112,9 @@ computer.
 | `accounts` | Your accounts: `kind` `manual` (you trade at the broker and record it here), `paper`, or `broker` (Interactive Brokers: `ibAccount`, optional `gateway`, `conids`); `feeEur` per order; `startCashEur` |
 | `listen` | Extra addresses besides 127.0.0.1, Tailscale only (100.64.0.0/10), e.g. `["100.101.102.103"]` for the phone |
 | `liveTrading` | `false` by default; must be `true` before orders go to a real-money broker account |
+| `universe` | optional list of symbols the scanner watches besides the watchlist (default: about 150 large stocks, `apps/server/src/universe.ts`); `[]` turns it off |
+| `universeIntervalSec` | how often the universe is fetched, default 300 (at least 120 – faster gets you blocked by Yahoo) |
+| `autoPaper` | `true`: agents trade their own paper depot without approval (paper only; your depots always wait for you) |
 | `agentBudgetEur` | optional; the most all agents together may tie up in your real-money accounts (manual and live broker): waiting, approved and held agent buys at cost with fees. Without it only the per-account limits apply |
 | `agents` | Agent names; each gets a paper account `agent-<name>` with `startCashEur` |
 | `minConfidence` | 0–1; agent proposals below it are not created |

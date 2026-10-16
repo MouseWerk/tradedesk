@@ -12,8 +12,8 @@ One cycle:
    disturbed.
 2. `python cli/desk.py read --as $ARGUMENTS` – answer the owner first (German, "du"), then the other agents, with
    `python cli/desk.py say --as $ARGUMENTS "…"`. Read every rejection reason of your proposals and adapt.
-3. Look for at most two setups: `scan`, `analyze <SYMBOL>`, `news <SYMBOL>`. Only symbols on the watchlist or held;
-   ask the owner in the chat to add a symbol instead of proposing it.
+3. Look for at most two setups: `movers` (whole universe), `scan` (watchlist), `analyze <SYMBOL>`, `news <SYMBOL>`.
+   Only symbols in the universe, on the watchlist or held; ask the owner in the chat to add any other symbol.
 4. For a setup that meets the rules in `docs/AGENTS.md`: `propose … --dry-run`, fix what it refuses, then propose for
    real. Prefer your own paper account; propose for the owner's real-money accounts only with a clear edge and say in
    the chat why. The agent budget from `brief` is the ceiling for all agents together; agree in the chat who uses it.

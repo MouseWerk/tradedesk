@@ -114,6 +114,11 @@ export class Desk extends DeskAnalytics {
 				lastKeepAlive = this.now();
 				for (const [id, b] of this.brokers) void b.keepAlive().catch((e) => console.error(`broker ${id} keepAlive:`, (e as Error).message));
 			}
+			// Universum im eigenen, langsamen Takt (nicht im schnellen: über hundert Abrufe je Minute sperrt Yahoo)
+			if (this.now() - this.universeAt >= this.cfg.universeIntervalSec * 1000) {
+				this.universeAt = this.now();
+				void this.refreshUniverse().catch((e) => console.error("universe:", (e as Error).message));
+			}
 			const every = (this.viewers > 0 ? this.cfg.liveIntervalSec : this.cfg.quoteIntervalSec) * 1000 * (this.marketState === "error" ? 3 : 1);
 			if (this.now() - last < every) return;
 			last = this.now();
