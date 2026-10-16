@@ -7,6 +7,7 @@
 // oder betrag_eur (Kurswert in EUR ohne Gebühr) – nie zum heutigen Wechselkurs.
 import { MAX_PRICE, MAX_QTY, type Side } from "./schema.ts";
 import { QTY_DECIMALS, cents, decimals } from "./portfolio.ts";
+import { sharedDe } from "./i18n/de.ts";
 
 export interface CsvTrade {
 	line: number;
@@ -89,7 +90,7 @@ function sideOf(raw: string): Side | null {
 export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string[] } {
 	const lines = text.replace(/^﻿/, "").split(/\r?\n/);
 	const head = lines.findIndex((l) => l.trim());
-	if (head < 0) return { rows: [], errors: ["Datei ist leer."] };
+	if (head < 0) return { rows: [], errors: [sharedDe.csv.empty] };
 	const first = lines[head];
 	const sep = first.includes(";") ? ";" : first.includes("\t") ? "\t" : ",";
 	const decimalComma = sep === ";";
@@ -97,7 +98,7 @@ export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string
 	const idx: Record<string, number> = {};
 	for (const [k, names] of Object.entries(COLS)) idx[k] = header.findIndex((h) => names.includes(h));
 	const missing = ["date", "symbol", "side", "qty", "price"].filter((k) => idx[k] < 0);
-	if (missing.length) return { rows: [], errors: [`Kopfzeile ohne Spalte ${missing.map((k) => COLS[k][0]).join(", ")} – erwartet z. B. „datum;symbol;seite;stueck;kurs;gebuehr;waehrung“.`] };
+	if (missing.length) return { rows: [], errors: [sharedDe.csv.missingColumns(missing.length, missing.map((k) => COLS[k][0]).join(", "))] };
 	const rows: CsvTrade[] = [];
 	const errors: string[] = [];
 	const seen = new Map<string, number>(); // gleiche Zeilen derselben Datei sind zwei Ausführungen, nicht eine
@@ -117,21 +118,21 @@ export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string
 		const eurRaw = get("eur") ? parseNumber(get("eur"), decimalComma) : null;
 		const fx = currency === "EUR" ? null : fxRaw !== null ? fxRaw : eurRaw !== null && qty > 0 && price > 0 ? eurRaw / (qty * price) : null;
 		const problems = [
-			Number.isNaN(time) && "Datum",
-			!/^[A-Z0-9.=^-]{1,24}$/.test(symbol) && "Symbol",
-			!side && "Seite (kauf/verkauf)",
-			!(qty > 0 && qty <= MAX_QTY && decimals(qty) <= QTY_DECIMALS) && "Stück",
-			!(price > 0 && price <= MAX_PRICE) && "Kurs",
-			!(fee >= 0 && fee <= 10_000 && decimals(fee) <= 2) && "Gebühr",
-			!/^[A-Z]{3}$/.test(currency) && "Währung",
-			fx !== null && !(fx > 0 && fx < 1_000_000) && "Wechselkurs",
+			Number.isNaN(time) && sharedDe.csv.field.date,
+			!/^[A-Z0-9.=^-]{1,24}$/.test(symbol) && sharedDe.csv.field.symbol,
+			!side && sharedDe.csv.field.side,
+			!(qty > 0 && qty <= MAX_QTY && decimals(qty) <= QTY_DECIMALS) && sharedDe.csv.field.qty,
+			!(price > 0 && price <= MAX_PRICE) && sharedDe.csv.field.price,
+			!(fee >= 0 && fee <= 10_000 && decimals(fee) <= 2) && sharedDe.csv.field.fee,
+			!/^[A-Z]{3}$/.test(currency) && sharedDe.csv.field.currency,
+			fx !== null && !(fx > 0 && fx < 1_000_000) && sharedDe.csv.field.fx,
 		].filter(Boolean);
 		if (problems.length) {
-			errors.push(`Zeile ${n + 1}: ${problems.join(", ")} ungültig.`);
+			errors.push(sharedDe.csv.invalid(n + 1, problems.join(", ")));
 			continue;
 		}
 		if (currency !== "EUR" && fx === null) {
-			errors.push(`Zeile ${n + 1}: ${currency} ohne Wechselkurs – Spalte fx (EUR je ${currency} am Handelstag) oder betrag_eur angeben.`);
+			errors.push(sharedDe.csv.noFx(n + 1, currency));
 			continue;
 		}
 		const base = `${time}|${symbol}|${side}|${qty}|${price}|${cents(fee)}`;

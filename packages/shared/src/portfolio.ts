@@ -1,6 +1,7 @@
 // Reine Depotlogik für Server, Web und Tests: Positionen nach FIFO, Bewertung, Risikoprüfung, Kursbewegung.
 // Geldbeträge in Cent (EUR), kaufmännisch gerundet an genau einer Stelle: cents().
 import type { Check, ProposalStatus, RiskLimits, Side } from "./schema.ts";
+import { sharedDe } from "./i18n/de.ts";
 
 /**
  * EUR → Cent, kaufmännisch (halbe Cent vom Nullpunkt weg). Ein nicht endlicher oder nicht mehr exakt darstellbarer
@@ -8,7 +9,7 @@ import type { Check, ProposalStatus, RiskLimits, Side } from "./schema.ts";
  */
 export function cents(eur: number): number {
 	const abs = Math.abs(eur) * 100 * (1 + Number.EPSILON);
-	if (!Number.isFinite(abs) || abs > Number.MAX_SAFE_INTEGER) throw new RangeError(`Betrag ${eur} € ist nicht darstellbar.`);
+	if (!Number.isFinite(abs) || abs > Number.MAX_SAFE_INTEGER) throw new RangeError(sharedDe.money.notRepresentable(String(eur)));
 	const sign = eur < 0 ? -1 : 1;
 	return sign * Math.round(abs) || 0;
 }
@@ -275,72 +276,61 @@ const eur = (c: number) => `${(c / 100).toLocaleString("de-DE", { minimumFractio
 export function checkOrder(i: OrderCheckInput): Check {
 	const violations: string[] = [];
 	const warnings: string[] = [];
-	if (i.killSwitch) violations.push("Not-Aus ist aktiv – keine Orders, bis du ihn ausschaltest.");
-	if (!(i.qty > 0) || !Number.isFinite(i.qty)) violations.push("Stückzahl muss größer als 0 sein.");
-	else if (decimals(i.qty) > QTY_DECIMALS) violations.push(`Stückzahl mit höchstens ${QTY_DECIMALS} Nachkommastellen.`);
-	if (i.orderType === "limit" && !(i.limitPrice && i.limitPrice > 0)) violations.push("Limit-Order ohne Limitkurs.");
+	if (i.killSwitch) violations.push(sharedDe.check.killSwitch);
+	if (!(i.qty > 0) || !Number.isFinite(i.qty)) violations.push(sharedDe.check.qtyPositive);
+	else if (decimals(i.qty) > QTY_DECIMALS) violations.push(sharedDe.check.qtyDecimals(QTY_DECIMALS));
+	if (i.orderType === "limit" && !(i.limitPrice && i.limitPrice > 0)) violations.push(sharedDe.check.limitWithoutPrice);
 	const bad = (v: number | null | undefined) => v !== null && v !== undefined && !(Number.isFinite(v) && v > 0);
-	if (bad(i.stopLoss)) violations.push("Stop-Loss ist keine gültige Zahl.");
-	if (bad(i.takeProfit)) violations.push("Kursziel ist keine gültige Zahl.");
+	if (bad(i.stopLoss)) violations.push(sharedDe.check.stopInvalid);
+	if (bad(i.takeProfit)) violations.push(sharedDe.check.targetInvalid);
 	if (i.price === null || i.fx === null || bad(i.price) || bad(i.fx)) {
-		violations.push(`Kein aktueller Kurs für ${i.symbol} – ohne Kurs keine Order.`);
+		violations.push(sharedDe.check.noQuote(i.symbol));
 		return { ok: false, violations, warnings, estimateCents: 0, feeCents: i.feeCents, price: i.price };
 	}
 	const p = i.orderType === "limit" && i.limitPrice ? i.limitPrice : i.price;
 	// ein nicht darstellbarer Orderwert (z. B. Limit 1e308) ist ein Verstoß, nie 0 €
 	const estimate = Number.isFinite(i.qty) ? centsOrNull(i.qty * p * i.fx) : null;
 	if (estimate === null) {
-		violations.push("Orderwert ist nicht darstellbar – Stückzahl und Kurs prüfen.");
+		violations.push(sharedDe.check.valueNotRepresentable);
 		return { ok: false, violations, warnings, estimateCents: 0, feeCents: i.feeCents, price: i.price };
 	}
 	const estimateCents = estimate;
-	if (estimateCents <= 0) violations.push("Orderwert unter einem Cent – keine Order.");
+	if (estimateCents <= 0) violations.push(sharedDe.check.valueBelowCent);
 	if (i.side === "sell") {
-		if (i.heldQty + 1e-9 < i.qty) violations.push(`Im Depot sind nur ${i.heldQty.toLocaleString("de-DE")} Stück ${i.symbol} – Leerverkäufe gibt es hier nicht.`);
-		if (i.stopLoss || i.takeProfit) warnings.push("Stop-Loss und Kursziel gelten nur für Käufe und werden ignoriert.");
+		if (i.heldQty + 1e-9 < i.qty) violations.push(sharedDe.check.noShortSelling(i.heldQty.toLocaleString("de-DE"), i.symbol));
+		if (i.stopLoss || i.takeProfit) warnings.push(sharedDe.check.stopTargetIgnoredOnSell);
 	} else {
-		if (estimateCents + i.feeCents > i.cashCents) violations.push(`Nicht genug Cash: benötigt ${eur(estimateCents + i.feeCents)}, verfügbar ${eur(i.cashCents)}.`);
+		if (estimateCents + i.feeCents > i.cashCents) violations.push(sharedDe.check.notEnoughCash(eur(estimateCents + i.feeCents), eur(i.cashCents)));
 		if (i.limits.maxPositionPct > 0 && i.equityCents > 0) {
 			const after = ((i.positionValueCents + estimateCents) / i.equityCents) * 100;
-			if (after > i.limits.maxPositionPct) violations.push(`${i.symbol} hätte danach ${after.toFixed(1).replace(".", ",")} % des Depots – Grenze ${String(i.limits.maxPositionPct).replace(".", ",")} %.`);
+			if (after > i.limits.maxPositionPct) violations.push(sharedDe.check.positionLimit(i.symbol, after.toFixed(1).replace(".", ","), String(i.limits.maxPositionPct).replace(".", ",")));
 		}
 		if (i.limits.dailyLossPct > 0 && i.dayLossPct !== null && i.dayLossPct >= i.limits.dailyLossPct)
-			violations.push(`Tagesverlust ${i.dayLossPct.toFixed(1).replace(".", ",")} % erreicht die Grenze von ${String(i.limits.dailyLossPct).replace(".", ",")} % – heute keine Käufe mehr.`);
-		if (i.stopLoss && i.stopLoss >= p) violations.push("Stop-Loss muss unter dem Kaufkurs liegen.");
+			violations.push(sharedDe.check.dailyLoss(i.dayLossPct.toFixed(1).replace(".", ","), String(i.limits.dailyLossPct).replace(".", ",")));
+		if (i.stopLoss && i.stopLoss >= p) violations.push(sharedDe.check.stopAboveEntry);
 		else if (i.stopLoss) {
 			// Risiko je Trade: Verlust bis zum Stop plus Kauf- und Verkaufsgebühr
 			const risk = (centsOrNull(i.qty * (p - i.stopLoss) * i.fx) ?? Number.POSITIVE_INFINITY) + 2 * i.feeCents;
 			const riskPct = i.equityCents > 0 ? (risk / i.equityCents) * 100 : 0;
-			if (!Number.isFinite(risk)) violations.push("Risiko bis zum Stop ist nicht darstellbar.");
+			if (!Number.isFinite(risk)) violations.push(sharedDe.check.riskNotRepresentable);
 			else if (i.limits.maxRiskPct > 0 && riskPct > i.limits.maxRiskPct)
-				violations.push(`Risiko bis zum Stop ${eur(risk)} = ${riskPct.toFixed(2).replace(".", ",")} % des Depots – Grenze ${String(i.limits.maxRiskPct).replace(".", ",")} % je Trade.`);
-		} else if (i.byAgent && i.limits.requireStop) violations.push("Käufe von Agenten brauchen einen Stop-Loss.");
-		else warnings.push("Ohne Stop-Loss ist das Risiko dieser Order nicht begrenzt.");
-		if (i.takeProfit && i.takeProfit <= p) violations.push("Kursziel muss über dem Kaufkurs liegen.");
+				violations.push(sharedDe.check.riskLimit(eur(risk), riskPct.toFixed(2).replace(".", ","), String(i.limits.maxRiskPct).replace(".", ",")));
+		} else if (i.byAgent && i.limits.requireStop) violations.push(sharedDe.check.agentNeedsStop);
+		else warnings.push(sharedDe.check.noStop);
+		if (i.takeProfit && i.takeProfit <= p) violations.push(sharedDe.check.targetBelowEntry);
 	}
-	if (i.limits.maxOrderCents > 0 && estimateCents > i.limits.maxOrderCents) violations.push(`Orderwert ${eur(estimateCents)} liegt über der Grenze von ${eur(i.limits.maxOrderCents)}.`);
+	if (i.limits.maxOrderCents > 0 && estimateCents > i.limits.maxOrderCents) violations.push(sharedDe.check.orderLimit(eur(estimateCents), eur(i.limits.maxOrderCents)));
 	if (i.openByAuthor !== undefined && i.limits.maxOpenProposals > 0 && i.openByAuthor >= i.limits.maxOpenProposals)
-		violations.push(`Schon ${i.openByAuthor} offene Vorschläge – Grenze ${i.limits.maxOpenProposals}. Erst entscheiden lassen.`);
+		violations.push(sharedDe.check.openProposals(i.openByAuthor, i.limits.maxOpenProposals));
 	// ein Limit weit weg vom Kurs ist fast immer ein Tippfehler – ab 50 % keine Order, ab 10 % ein Hinweis
-	if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > MAX_LIMIT_MOVE_PCT) violations.push(`Limit liegt mehr als ${MAX_LIMIT_MOVE_PCT} % vom aktuellen Kurs entfernt – Tippfehler?`);
-	else if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > 10) warnings.push("Limit liegt mehr als 10 % vom aktuellen Kurs entfernt.");
-	if (estimateCents > 0 && i.feeCents / estimateCents > 0.02) warnings.push(`Gebühr ist ${((i.feeCents / estimateCents) * 100).toFixed(1).replace(".", ",")} % des Orderwerts.`);
+	if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > MAX_LIMIT_MOVE_PCT) violations.push(sharedDe.check.limitTooFar(MAX_LIMIT_MOVE_PCT));
+	else if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > 10) warnings.push(sharedDe.check.limitFar(10));
+	if (estimateCents > 0 && i.feeCents / estimateCents > 0.02) warnings.push(sharedDe.check.feeHigh(((i.feeCents / estimateCents) * 100).toFixed(1).replace(".", ",")));
 	return { ok: violations.length === 0, violations, warnings, estimateCents, feeCents: i.feeCents, price: i.price };
 }
 
-export const statusLabel: Record<ProposalStatus, string> = {
-	pending: "wartet auf dich",
-	open: "Limit offen",
-	placed: "beim Broker",
-	sending: "wird gesendet",
-	confirm: "Broker fragt nach",
-	filled: "ausgeführt",
-	rejected: "abgelehnt",
-	stale: "Kurs bewegt",
-	expired: "abgelaufen",
-	cancelled: "storniert",
-};
+export const statusLabel: Record<ProposalStatus, string> = sharedDe.status;
 
-export const sideLabel: Record<Side, string> = { buy: "Kauf", sell: "Verkauf" };
+export const sideLabel: Record<Side, string> = sharedDe.side;
 
 export const ACTIVE_STATUSES: ProposalStatus[] = ["pending", "open", "placed", "sending", "confirm"];
