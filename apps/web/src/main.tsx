@@ -26,7 +26,8 @@ const moduleRoutes = MODULES.map((m) =>
 		getParentRoute: () => rootRoute,
 		path: m.path,
 		component: lazyRouteComponent(m.load),
-		validateSearch: (s: Record<string, unknown>) => ({ account: str(s.account), symbol: str(s.symbol) }),
+		// range, from, to: Zeitraum der Auswertung (teilbare Adresse); die anderen Module lesen sie nicht
+		validateSearch: (s: Record<string, unknown>) => ({ account: str(s.account), symbol: str(s.symbol), range: str(s.range), from: str(s.from), to: str(s.to) }),
 	}),
 );
 

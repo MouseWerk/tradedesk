@@ -3,7 +3,7 @@ import { QueryClient, useQuery, useQueryClient, type Query } from "@tanstack/rea
 import { useEffect, useState } from "react";
 import type { z } from "zod";
 import type { ChartRange, ChatMessage, DeskEvent } from "@desk/shared";
-import { AccountDetailSchema, AgentsDataSchema, AnalysisSchema, BrokerStatusSchema, ChartSchema, ChatMessageSchema, CockpitSchema, EventSchema, NewsItemSchema, OverviewSchema, ProposalSchema, RiskDataSchema, SearchHitSchema, WatchItemSchema } from "@desk/shared";
+import { AccountDetailSchema, AgentsDataSchema, AnalysisSchema, AnalyticsSchema, BrokerStatusSchema, ChartSchema, ChatMessageSchema, CockpitSchema, EventSchema, NewsItemSchema, OverviewSchema, ProposalSchema, RiskDataSchema, SearchHitSchema, WatchItemSchema } from "@desk/shared";
 
 // Kein globales placeholderData: ein Schlüssel für ein anderes Symbol oder Depot zeigte sonst die Daten des vorigen
 // unter der neuen Überschrift (Kennzahlen von SAP unter NVDA). Wo es passt, setzt die Abfrage es selbst.
@@ -101,6 +101,7 @@ export const keys = {
 	news: (symbol: string) => ["news", symbol] as const,
 	chat: ["chat"] as const,
 	brokers: ["brokers"] as const,
+	analytics: (account: string, from: string | null, to: string | null) => ["analytics", account, from ?? "", to ?? ""] as const,
 };
 
 /** Was ein Tick des Desks neu lädt: alles Angezeigte außer Kerzen (eigener Takt), Suche, News und Chat (kommt als Nachricht). */
@@ -131,6 +132,16 @@ export const useAnalysis = (symbol: string | undefined) =>
 export const useNews = (symbol: string | undefined) =>
 	useQuery({ queryKey: keys.news(symbol ?? ""), queryFn: () => getChecked(`/api/market/news/${encodeURIComponent(symbol!)}`, NewsItemSchema.array()), enabled: !!symbol, staleTime: 300_000 });
 export const useBrokers = () => useQuery({ queryKey: keys.brokers, queryFn: () => getChecked("/api/brokers", BrokerStatusSchema.array()), refetchInterval: 30_000 });
+/**
+ * Auswertung: Auswahl (mine, all oder Depot-ID) und Zeitraum. Beim Wechsel bleiben die vorigen Zahlen gedimmt
+ * stehen, bis die neuen da sind (kein Skelett-Blitz) – die Filterzeile zeigt dabei schon die neue Auswahl.
+ */
+export const useAnalytics = (account: string, from: string | null, to: string | null) =>
+	useQuery({
+		queryKey: keys.analytics(account, from, to),
+		queryFn: () => getChecked(`/api/analytics?${new URLSearchParams({ account, ...(from ? { from } : {}), ...(to ? { to } : {}) })}`, AnalyticsSchema),
+		placeholderData: (prev) => prev,
+	});
 export const useChat = () => useQuery({ queryKey: keys.chat, queryFn: () => getChecked("/api/chat?limit=300", ChatMessageSchema.array()), staleTime: Number.POSITIVE_INFINITY });
 
 /* ------------------------------------------------------------ Browser-Benachrichtigungen (nur nach deiner Zustimmung) */

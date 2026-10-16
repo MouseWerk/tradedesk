@@ -16,6 +16,13 @@ export function signedEur(cents: number): string {
 	return `${cents > 0 ? "+" : "−"}${eur(Math.abs(cents))}`;
 }
 
+/** +1.235 € / −12 € ohne Cent (Achsen, Monatssummen, Legenden) */
+export function signedEurShort(cents: number): string {
+	const r = Math.round(cents / 100) * 100;
+	if (r === 0) return eur(0, { short: true });
+	return `${r > 0 ? "+" : "−"}${eur(Math.abs(r), { short: true })}`;
+}
+
 export function pct(v: number | null | undefined, { signed = true, digits = 1 } = {}): string {
 	if (v === null || v === undefined || !Number.isFinite(v)) return "–";
 	const s = Math.abs(v).toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -134,4 +141,16 @@ export function hhmm(ms: number | null | undefined): string {
 
 export function num(v: number | null | undefined, digits = 2): string {
 	return v === null || v === undefined || !Number.isFinite(v) ? "–" : minus(v.toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits }));
+}
+
+/** Dauer kurz (Haltedauer): „unter 1 Min.“, „45 Min.“, „3,2 Std.“, „1 Tag“, „12 Tage“. */
+export function duration(ms: number | null | undefined): string {
+	if (ms === null || ms === undefined || !Number.isFinite(ms)) return "–";
+	const min = ms / 60_000;
+	if (min < 1) return "unter 1 Min.";
+	if (min < 60) return `${Math.round(min)} Min.`;
+	const h = min / 60;
+	if (h < 48) return `${h.toLocaleString("de-DE", { maximumFractionDigits: h < 10 ? 1 : 0 })} Std.`;
+	const d = Math.round(h / 24);
+	return d === 1 ? "1 Tag" : `${d} Tage`;
 }
