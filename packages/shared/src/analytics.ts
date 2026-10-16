@@ -1,7 +1,7 @@
 // Auswertung (Seite „Auswertung“): Kurve mit Drawdown, Ergebnis je Tag, geschlossene Trades mit R, Kennzahlen und
 // Gruppen. Rein und linear in der Zahl der Trades und Tage – der Server reicht Buch, Vorschläge und Tagesstände herein.
 // Tage, Wochentage und Stunden in Ortszeit wie dayKey() (der Desk läuft in Europe/Berlin).
-import type { AnalyticsPoint, ClosedTrade, CurvePoint, DayResult, TradeStats } from "./schema.ts";
+import type { AnalyticsPoint, AssetClass, ClosedTrade, CurvePoint, DayResult, EquityChange, EquityRange, TradeStats } from "./schema.ts";
 import { cents, dayKey, type ClosedLot } from "./portfolio.ts";
 
 /** Grenzen der R-Verteilung: (−∞, −2], (−2, −1], (−1, 0], (0, 1], (1, 2], (2, 3], (3, ∞). */
@@ -198,4 +198,53 @@ export function groupStats<K>(trades: ClosedTrade[], keyOf: (t: ClosedTrade) => 
 		else groups.set(k, [t]);
 	}
 	return new Map([...groups].map(([k, g]) => [k, tradeStats(g)]));
+}
+
+/* ------------------------------------------------------------------ Übersicht */
+
+export function assetClassOf(instrumentType: string | null | undefined): Exclude<AssetClass, "cash"> {
+	const t = (instrumentType ?? "").toUpperCase();
+	return t === "EQUITY" ? "equity" : t === "ETF" ? "etf" : t === "CRYPTOCURRENCY" ? "crypto" : "other";
+}
+
+/** Starttag eines Zeitraums vor today ("YYYY-MM-DD"); Monatsende wird gekappt (31.03. − 1M = 28.02.). */
+export function rangeStart(today: string, range: Exclude<EquityRange, "all">): string {
+	const [y, m, d] = today.split("-").map(Number);
+	const key = (yy: number, mm: number, dd: number) => {
+		const last = new Date(yy, mm, 0).getDate(); // mm 1-basiert: Tag 0 des Folgemonats
+		return `${yy}-${String(mm).padStart(2, "0")}-${String(Math.min(dd, last)).padStart(2, "0")}`;
+	};
+	const back = (months: number) => {
+		const total = y * 12 + (m - 1) - months;
+		return key(Math.floor(total / 12), (total % 12) + 1, d);
+	};
+	if (range === "1W") return dayKey(new Date(y, m - 1, d - 7, 12).getTime());
+	if (range === "1M") return back(1);
+	if (range === "3M") return back(3);
+	if (range === "1Y") return back(12);
+	return `${y - 1}-12-31`;
+}
+
+export const EQUITY_RANGES: EquityRange[] = ["1W", "1M", "3M", "YTD", "1Y", "all"];
+
+/** Veränderung je Zeitraum (siehe EquityChangeSchema). curve nach Tag sortiert, letzter Punkt = heute. */
+export function equityChanges(curve: CurvePoint[]): EquityChange[] {
+	const now = curve.at(-1);
+	return EQUITY_RANGES.map((range) => {
+		let base: CurvePoint | undefined;
+		if (now && range === "all") base = curve.length > 1 ? curve[0] : undefined;
+		else if (now) {
+			const start = rangeStart(now.day, range as Exclude<EquityRange, "all">);
+			for (let i = curve.length - 2; i >= 0; i--)
+				if (curve[i].day <= start) {
+					base = curve[i];
+					break;
+				}
+		}
+		if (!now || !base) return { range, fromDay: null, changeCents: null, changePct: null, resultCents: null, resultPct: null };
+		const change = now.equityCents - base.equityCents;
+		const result = change - (now.depositsCents - base.depositsCents);
+		const pct = (c: number) => (base!.equityCents > 0 ? (c / base!.equityCents) * 100 : null);
+		return { range, fromDay: base.day, changeCents: change, changePct: pct(change), resultCents: result, resultPct: pct(result) };
+	});
 }

@@ -128,6 +128,40 @@ export type AccountDetail = z.infer<typeof AccountDetailSchema>;
 export const EventSchema = z.object({ id: z.number().int(), time: z.number(), kind: z.string(), actor: z.string(), text: z.string() });
 export type DeskEvent = z.infer<typeof EventSchema>;
 
+/** Anlageklasse aus dem Instrumenttyp (Yahoo): EQUITY → equity, ETF → etf, CRYPTOCURRENCY → crypto, Cash, sonst other. */
+export const AssetClassSchema = z.enum(["equity", "etf", "crypto", "cash", "other"]);
+export type AssetClass = z.infer<typeof AssetClassSchema>;
+
+/**
+ * Aufteilung deiner Depots (owner "user") zum aktuellen Wert wie in den Depots (ohne Kurs: Einstand). pct bezieht sich
+ * immer auf totalCents (Depotwert inkl. Cash) – bySymbol summiert sich darum mit dem Cash auf 100 %; null bei totalCents ≤ 0.
+ */
+export const AllocationSchema = z.object({
+	totalCents: z.number().int(),
+	byClass: z.array(z.object({ assetClass: AssetClassSchema, valueCents: z.number().int(), pct: z.number().nullable() })), // alle Klassen in fester Reihenfolge, auch 0
+	bySymbol: z.array(z.object({ symbol: z.string(), name: z.string(), assetClass: AssetClassSchema, valueCents: z.number().int(), pct: z.number().nullable() })), // nach Wert absteigend
+});
+export type Allocation = z.infer<typeof AllocationSchema>;
+
+export const EquityRangeSchema = z.enum(["1W", "1M", "3M", "YTD", "1Y", "all"]);
+export type EquityRange = z.infer<typeof EquityRangeSchema>;
+
+/**
+ * Veränderung deiner Depots seit dem Tagesstand am Beginn des Zeitraums (letzter Stand am oder vor dem Starttag; YTD:
+ * am oder vor dem 31.12. des Vorjahrs; all: der erste Stand) bis heute (Live-Wert). changeCents: Differenz des
+ * Depotwerts; resultCents: dieselbe ohne Ein- und Auszahlungen dazwischen. Prozent auf den Depotwert am Beginn. Alles
+ * null, wenn es keinen Stand so weit zurück gibt (oder der Depotwert damals ≤ 0 war: nur die Prozente).
+ */
+export const EquityChangeSchema = z.object({
+	range: EquityRangeSchema,
+	fromDay: z.string().nullable(),
+	changeCents: z.number().int().nullable(),
+	changePct: z.number().nullable(),
+	resultCents: z.number().int().nullable(),
+	resultPct: z.number().nullable(),
+});
+export type EquityChange = z.infer<typeof EquityChangeSchema>;
+
 export const OverviewSchema = z.object({
 	user: z.string(),
 	baseCurrency: z.string(),
@@ -140,6 +174,8 @@ export const OverviewSchema = z.object({
 	pending: z.number().int(),
 	events: z.array(EventSchema),
 	failedQuotes: z.array(z.string()), // Symbole, deren letzter Kursabruf fehlschlug, während andere ankamen
+	allocation: AllocationSchema, // deine Depots nach Symbol und Anlageklasse
+	changes: z.array(EquityChangeSchema), // 1W, 1M, 3M, YTD, 1Y, all – immer alle sechs
 });
 export type Overview = z.infer<typeof OverviewSchema>;
 

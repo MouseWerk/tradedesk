@@ -1,6 +1,6 @@
 // Depots: FIFO-Buch je Depot (zwischengespeichert), Kennzahlen, Positionen, Trades, Kurve, Tagesstände, Übersicht.
-import type { Account, AccountDetail, AccountSummary, CashMove, CurvePoint, Overview, Position, RiskLimits, Side, Trade, DayStats } from "@desk/shared";
-import { oversold, buildBook, dayKey, dayStats, orderValueCents, returnPct, roundQty, valueHoldings } from "@desk/shared";
+import type { Account, AccountDetail, AccountSummary, Allocation, AssetClass, CashMove, CurvePoint, Overview, Position, RiskLimits, Side, Trade, DayStats } from "@desk/shared";
+import { assetClassOf, combineCurves, equityChanges, oversold, buildBook, dayKey, dayStats, orderValueCents, returnPct, roundQty, valueHoldings } from "@desk/shared";
 import { DeskCore, DeskError, MIN_TRADE_TIME, type TradeRow } from "./core.ts";
 
 export abstract class DeskBook extends DeskCore {
@@ -172,20 +172,7 @@ export abstract class DeskBook extends DeskCore {
 	overview(): Overview {
 		const summaries = this.cfg.accounts.map((a) => this.summary(a));
 		const mine = this.cfg.accounts.filter((a) => a.owner === "user");
-		const curves = mine.map((a) => this.curve(a, summaries.find((s) => s.id === a.id)));
-		const days = [...new Set(curves.flat().map((p) => p.day))].sort();
-		const curve = days.map((day) => {
-			let equityCents = 0;
-			let depositsCents = 0;
-			for (const c of curves) {
-				const p = c.filter((x) => x.day <= day).at(-1);
-				if (p) {
-					equityCents += p.equityCents;
-					depositsCents += p.depositsCents;
-				}
-			}
-			return { day, equityCents, depositsCents };
-		});
+		const curve = combineCurves(mine.map((a) => this.curve(a, summaries.find((s) => s.id === a.id))));
 		return {
 			user: this.cfg.user,
 			baseCurrency: this.cfg.baseCurrency,
@@ -198,6 +185,33 @@ export abstract class DeskBook extends DeskCore {
 			pending: this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE status = 'pending'")!.n,
 			events: this.events(30),
 			failedQuotes: [...this.quoteErrors.keys()].sort(),
+			allocation: this.allocation(mine, summaries),
+			changes: equityChanges(curve),
+		};
+	}
+
+	/** Deine Depots nach Symbol und Anlageklasse, bewertet wie in summary() (siehe AllocationSchema). */
+	protected allocation(accounts: Account[], summaries: AccountSummary[]): Allocation {
+		const bySymbol = new Map<string, number>();
+		let cash = 0;
+		for (const a of accounts) {
+			cash += summaries.find((s) => s.id === a.id)!.cashCents;
+			for (const [symbol, v] of valueHoldings(this.book(a.id).holdings, (s) => this.priced(s)).values) bySymbol.set(symbol, (bySymbol.get(symbol) ?? 0) + v);
+		}
+		const total = cash + [...bySymbol.values()].reduce((s, v) => s + v, 0);
+		const pct = (v: number) => (total > 0 ? (v / total) * 100 : null);
+		const rows = [...bySymbol].map(([symbol, valueCents]) => {
+			const i = this.instrument(symbol);
+			return { symbol, name: i?.name ?? symbol, assetClass: assetClassOf(i?.type), valueCents, pct: pct(valueCents) };
+		});
+		const classes: AssetClass[] = ["equity", "etf", "crypto", "cash", "other"];
+		return {
+			totalCents: total,
+			byClass: classes.map((assetClass) => {
+				const valueCents = assetClass === "cash" ? cash : rows.filter((r) => r.assetClass === assetClass).reduce((s, r) => s + r.valueCents, 0);
+				return { assetClass, valueCents, pct: pct(valueCents) };
+			}),
+			bySymbol: rows.sort((x, y) => y.valueCents - x.valueCents || (x.symbol < y.symbol ? -1 : 1)),
 		};
 	}
 

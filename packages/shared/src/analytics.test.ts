@@ -1,7 +1,7 @@
 // Auswertung mit von Hand gerechneten Fällen: Teilverkäufe über zwei Lose, Gebühren, USD mit Wechselkurs, Lücken in
 // den Tagesständen, ein Tag ohne Trades, die Woche der Zeitumstellung (TZ=Europe/Berlin aus vitest.config.ts).
 import { describe, expect, it } from "vitest";
-import { buildBook, cents, closedTrade, combineCurves, dayResults, drawdowns, groupStats, isoWeekday, rBuckets, tradeStats, type ClosedTrade, type LotContext, type TradeLike } from "./index.ts";
+import { assetClassOf, buildBook, cents, closedTrade, combineCurves, equityChanges, rangeStart, dayResults, drawdowns, groupStats, isoWeekday, rBuckets, tradeStats, type ClosedTrade, type LotContext, type TradeLike } from "./index.ts";
 
 const t = (id: number, side: "buy" | "sell", qty: number, price: number, fee = 100, time = id, symbol = "SAP.DE", fx = 1): TradeLike => ({ id, symbol, side, qty, price, valueCents: cents(qty * price * fx), feeCents: fee, time });
 const ctx = (over: Partial<LotContext> = {}): LotContext => ({ accountId: "a", name: "SAP SE", author: "Maurice", proposalId: null, stopLoss: null, buyPrice: 100, buyCurrency: "EUR", buyFx: 1, stopCurrency: "EUR", ...over });
@@ -145,5 +145,33 @@ describe("daily results", () => {
 		const g = groupStats([ct(1, null, { entryTime: beforeSwitch }), ct(2, null, { entryTime: afterSwitch })], (x) => new Date(x.entryTime).getHours());
 		expect(g.get(0)!.trades).toBe(2);
 		expect([isoWeekday(beforeSwitch), isoWeekday(afterSwitch)]).toEqual([7, 2]);
+	});
+});
+
+describe("overview ranges", () => {
+	const p = (day: string, equityCents: number, depositsCents = 100_000) => ({ day, equityCents, depositsCents });
+
+	it("start days, month ends capped, leap day", () => {
+		expect(["1W", "1M", "3M", "YTD", "1Y"].map((r) => rangeStart("2026-03-31", r as "1W"))).toEqual(["2026-03-24", "2026-02-28", "2025-12-31", "2025-12-31", "2025-03-31"]);
+		expect(rangeStart("2028-02-29", "1Y")).toBe("2027-02-28");
+		expect(rangeStart("2026-01-15", "1M")).toBe("2025-12-15");
+		expect(rangeStart("2026-11-01", "1W")).toBe("2026-10-25"); // über die Zeitumstellung
+	});
+
+	it("change since the last snapshot on or before the start, with and without deposits; null without history", () => {
+		const curve = [p("2025-12-30", 90_000, 90_000), p("2026-09-14", 100_000), p("2026-10-08", 104_000), p("2026-10-15", 160_000, 150_000)];
+		const c = Object.fromEntries(equityChanges(curve).map((x) => [x.range, x]));
+		expect(c["1W"]).toEqual({ range: "1W", fromDay: "2026-10-08", changeCents: 56_000, changePct: (56_000 / 104_000) * 100, resultCents: 6_000, resultPct: (6_000 / 104_000) * 100 });
+		expect(c["1M"]).toMatchObject({ fromDay: "2026-09-14", changeCents: 60_000, resultCents: 10_000, resultPct: 10 });
+		expect(c["3M"]).toMatchObject({ fromDay: "2025-12-30", changeCents: 70_000 });
+		expect(c.YTD).toMatchObject({ fromDay: "2025-12-30", changeCents: 70_000, resultCents: 10_000 });
+		expect(c["1Y"]).toEqual({ range: "1Y", fromDay: null, changeCents: null, changePct: null, resultCents: null, resultPct: null });
+		expect(c.all).toMatchObject({ fromDay: "2025-12-30", changeCents: 70_000 });
+		expect(equityChanges([p("2026-10-15", 1)]).every((x) => x.changeCents === null)).toBe(true);
+		expect(equityChanges([]).every((x) => x.fromDay === null)).toBe(true);
+	});
+
+	it("asset classes from the instrument type", () => {
+		expect(["EQUITY", "ETF", "CRYPTOCURRENCY", "MUTUALFUND", "", null].map(assetClassOf)).toEqual(["equity", "etf", "crypto", "other", "other", "other"]);
 	});
 });
