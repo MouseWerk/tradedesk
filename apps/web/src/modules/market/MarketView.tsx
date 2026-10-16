@@ -4,13 +4,13 @@ import { Link, useNavigate, useSearch as useRouteSearch } from "@tanstack/react-
 import { useEffect, useId, useState } from "react";
 import { Bell, Check, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
 import type { Alert, ChartRange, WatchItem } from "@desk/shared";
-import { useAgents, useChart, useOverview, useProposals, useSearch, useWatchlist } from "@/lib/api";
+import { useAgents, useChart, useCockpit, useOverview, useProposals, useSearch, useWatchlist } from "@/lib/api";
 import { ago, date, dateTime, numberError, parseDe, pct, price, tone } from "@/lib/format";
 import { CandleChart, type RefLine } from "@/ui/charts";
 import { Badge, Button, Card, Empty, Field, Input, Segmented, Select, Skeleton, cn } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
 import { FormDialog, useConfirm, useFormErrors } from "@/ui/overlay";
-import { Page, useAction } from "../common";
+import { Page, QuoteTag, useAction } from "../common";
 import { OrderTicket } from "../orders/OrderTicket";
 
 const RANGES: { id: ChartRange; label: string }[] = [
@@ -96,6 +96,9 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 		}
 	};
 	const shown = open && q.trim().length >= 2;
+	// ob ein Kurs zu alt ist, weiß der Server je Börse (Handelszeit); ohne Cockpit-Daten gilt keiner als alt
+	const { data: cockpit } = useCockpit();
+	const stale = new Set(cockpit?.scan.filter((r) => r.quoteStale).map((r) => r.symbol));
 	return (
 		<Card title="Watchlist" pad={false} className="flex flex-col" aside={`${items?.length ?? 0}`}>
 			<div className="relative border-b border-line p-3">
@@ -189,13 +192,20 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 										{w.held && <Badge className="h-4 px-1 text-[10px]">Depot</Badge>}
 										{w.alerts.some((a) => !a.triggeredAt) && <Bell className="size-3 text-fg-3" aria-label="Alarm gesetzt" />}
 									</span>
-									<span className="truncate text-[11.5px] text-fg-3" title={w.name}>
-										{w.name}
+									<span className="flex min-w-0 items-baseline gap-1.5 text-[11.5px] text-fg-3">
+										<span className="truncate" title={w.name}>
+											{w.name}
+										</span>
 									</span>
 								</span>
 								<span className="flex shrink-0 flex-col items-end leading-tight whitespace-nowrap tnum">
-									<span>{price(w.price, w.currency)}</span>
-									<span className={cn("text-[11.5px]", tone(w.changePct))}>{pct(w.changePct)}</span>
+									<span className={cn(stale.has(w.symbol) && "text-fg-3")} data-stale={stale.has(w.symbol) || undefined}>
+										{price(w.price, w.currency)}
+									</span>
+									<span className="flex items-baseline gap-1.5">
+										<QuoteTag quote={w.quote} stale={stale.has(w.symbol)} className="text-[10.5px]" />
+										<span className={cn("text-[11.5px]", stale.has(w.symbol) ? "text-fg-3" : tone(w.changePct))}>{pct(w.changePct)}</span>
+									</span>
 								</span>
 							</button>
 						</li>
@@ -239,7 +249,7 @@ function Detail({ item }: { item: WatchItem }) {
 							{item.name}
 						</h1>
 						<p className="text-[12px] text-fg-3">
-							{item.symbol} · {item.exchange === "CCC" ? "Krypto" : item.exchange || "–"} · {item.currency} · Stand {item.marketTime ? dateTime(item.marketTime) : "–"}
+							{item.symbol} · {item.exchange === "CCC" ? "Krypto" : item.exchange || "–"} · {item.currency} · Stand {item.marketTime ? dateTime(item.marketTime) : "–"} · <QuoteTag quote={item.quote} className="text-[12px]" />
 						</p>
 					</div>
 					<div className="flex items-baseline gap-2 tnum">

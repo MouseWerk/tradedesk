@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { Bell, Wallet } from "lucide-react";
 import type { ScanRow } from "@desk/shared";
 import { pct, price, tone } from "@/lib/format";
+import { quoteLabel } from "@/lib/quotes";
 import { Card, Segmented, cn } from "@/ui/kit";
 import { SessionDot } from "./parts";
 
@@ -40,6 +41,7 @@ export function Scanner({ rows, sort, onSort, selected, onSelect, listClassName 
 			<ul ref={list} className={cn("scroll-thin relative max-h-[calc(100vh-260px)] min-h-40 overflow-y-auto py-1", listClassName)} aria-label="Werte im Scanner – Pfeil hoch und runter wechselt den Wert" data-scanner>
 				{rows.map((r) => {
 					const on = r.symbol === selected;
+					const q = quoteLabel(r.quote, r.quoteStale);
 					return (
 						<li key={r.symbol}>
 							<button
@@ -59,8 +61,12 @@ export function Scanner({ rows, sort, onSort, selected, onSelect, listClassName 
 									{r.held && <Wallet className="size-3 shrink-0 text-fg-3" aria-label="im Depot" />}
 									{r.alerts > 0 && <Bell className="size-3 shrink-0 text-fg-3" aria-label="Alarm gesetzt" />}
 									{/* Beträge brechen nie um; weichen muss das Symbol (mit Tooltip) */}
-									<span className="ml-auto shrink-0 whitespace-nowrap tnum">{price(r.price, r.currency)}</span>
-									<span className={cn("w-[60px] shrink-0 text-right whitespace-nowrap tnum", tone(r.changePct))}>{pct(r.changePct)}</span>
+									{/* Herkunft und Alter im Tooltip; ein alter Kurs ist gedimmt (nie ein farbiger Rahmen) */}
+									<span className={cn("ml-auto shrink-0 whitespace-nowrap tnum", q.stale && "text-fg-3")} title={q.title} data-testid="scan-price" data-stale={q.stale || undefined}>
+										{price(r.price, r.currency)}
+										{q.stale && <span className="sr-only"> (veraltet)</span>}
+									</span>
+									<span className={cn("w-[60px] shrink-0 text-right whitespace-nowrap tnum", q.stale ? "text-fg-3" : tone(r.changePct))}>{pct(r.changePct)}</span>
 								</span>
 								<span className="flex w-full items-center gap-3 text-[11px] whitespace-nowrap text-fg-3 tnum">
 									<span title="Gap: Eröffnung gegen Vortagesschluss">Gap {pct(r.gapPct)}</span>
