@@ -12,7 +12,7 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
 - Commits are authored as `Maurice Kleindienst <kleindiema@gmail.com>`. No co-author or session trailers, no
   assistant or model names in commits, code, comments or docs.
 - No pull requests unless asked. No force push, branch deletion or history rewrite without an explicit request.
-- The repository is private; still no portfolio data in git (config.json and the database live in `~/.tradedesk`).
+- The repository is public under github.com/MouseWerk/tradedesk (decision 2026-10-16); never portfolio data in git (config.json and the database live in `~/.tradedesk`).
 - UI texts German with "du"; code, identifiers and commit messages English. No emojis anywhere.
 - Agents propose, the owner approves. There is no auto-approval; adding one is an owner decision recorded here.
 - Trade Republic has no official API and the unofficial ones need the owner's PIN: not used. Manual accounts are

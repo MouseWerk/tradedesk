@@ -52,7 +52,7 @@ against a program that edits the database.
 Requirements: Node.js 24 or newer, Python 3.10+ for the agent CLI.
 
 ```bash
-git clone https://github.com/mauricekleindienst/tradedesk
+git clone https://github.com/MouseWerk/tradedesk
 cd tradedesk
 npm ci
 npm run build
@@ -87,11 +87,11 @@ The fixture server (`--fixture`, self-test, tests) uses the test PIN `2468`.
 ### From your phone (Tailscale)
 
 The desk can also listen on this computer's Tailscale address, so your own Tailscale devices reach it, e.g.
-http://100.121.124.65:8095 from the phone. Only Tailscale addresses (100.64.0.0/10) are accepted, never the LAN or
+http://100.101.102.103:8095 from the phone. Only Tailscale addresses (100.64.0.0/10) are accepted, never the LAN or
 `0.0.0.0`; Tailscale encrypts the connection and only your devices are in your tailnet.
 
 1. Set your PIN first (the desk binds the Tailscale address only once a PIN exists).
-2. In `config.json`: `"listen": ["100.121.124.65"]` (your PC's address from `tailscale ip -4`), restart the desk.
+2. In `config.json`: `"listen": ["100.101.102.103"]` (your PC's address from `tailscale ip -4`), restart the desk.
 3. Allow the port in the Windows firewall for the tailnet only (PowerShell as administrator):
    `New-NetFirewallRule -DisplayName "Tradedesk (Tailscale)" -Direction Inbound -Protocol TCP -LocalPort 8095 -RemoteAddress 100.64.0.0/10 -Action Allow`
 4. On the phone open the address and log in with your PIN.
@@ -107,7 +107,7 @@ computer.
 | `port` | Default 8095 |
 | `market` | `yahoo` (free quotes from Yahoo Finance, unofficial, often delayed) or `off` (no network; positions valued at cost) |
 | `accounts` | Your accounts: `kind` `manual` (you trade at the broker and record it here), `paper`, or `broker` (Interactive Brokers: `ibAccount`, optional `gateway`, `conids`); `feeEur` per order; `startCashEur` |
-| `listen` | Extra addresses besides 127.0.0.1, Tailscale only (100.64.0.0/10), e.g. `["100.121.124.65"]` for the phone |
+| `listen` | Extra addresses besides 127.0.0.1, Tailscale only (100.64.0.0/10), e.g. `["100.101.102.103"]` for the phone |
 | `liveTrading` | `false` by default; must be `true` before orders go to a real-money broker account |
 | `agents` | Agent names; each gets a paper account `agent-<name>` with `startCashEur` |
 | `minConfidence` | 0–1; agent proposals below it are not created |

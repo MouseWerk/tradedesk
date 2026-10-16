@@ -7,8 +7,8 @@ import { makeFixture, type Fixture } from "../src/fixture.ts";
 import { deskHttp } from "./owner.ts";
 import { SESSION_HEADER } from "../src/auth.ts";
 
-const PC = "100.121.124.65";
-const PHONE = "100.65.110.55";
+const PC = "100.101.102.103"; // Beispieladressen im Tailscale-Bereich
+const PHONE = "100.88.77.66";
 let fx: Fixture;
 
 beforeEach(async () => {

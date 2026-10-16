@@ -5,7 +5,7 @@ all dialogs (Freigeben, Ablehnen, Neue Order, Trade erfassen, CSV importieren, E
 with confirmation, Alarm, Order from Markt, Not-Aus from Trading and Risiko), the chat drawer below 1280 px, skeletons
 with held API responses, keyboard paths and computed contrast. Fixture server (`--fixture --port 8191`, fake exchange,
 throwaway data) and a temporary Playwright script; 110+ screenshots were taken and the ones named below were looked at.
-Screenshots: `C:\Users\klein\AppData\Local\Temp\claude\F--GITHUB-aiworkdashboard\b31cf183-9962-4917-befd-a48eb60aeb34\scratchpad\audit-design\`
+Screenshots: im lokalen Arbeitsordner des Audits (nicht im Repo)
 (called SHOTS below; names are `<theme>-<width>-<chat|nochat>-<view>[-full].png`, `dlg-*`, `drawer-*`, `skel-*`).
 
 What already holds: no horizontal page scroll at any width or theme; no console errors or warnings on any view; the
