@@ -6,9 +6,9 @@ import { dayKey, ema, vwap } from "@desk/shared";
 import { useAnalysis, useChart, useWatchlist } from "@/lib/api";
 import { compact, date, hhmm, num, pct, price, tone } from "@/lib/format";
 import { CandleChart, type Overlay, type RefLine } from "@/ui/charts";
-import { Card, Empty, Segmented, Skeleton, cn } from "@/ui/kit";
+import { Card, Empty, Segmented, Skeleton } from "@/ui/kit";
 import { RangeBar } from "./Scanner";
-import { SessionDot, STATE_LABEL } from "./parts";
+import { SessionDot, STATE_LABEL, exchangeLabel } from "./parts";
 
 const RANGES: { id: ChartRange; label: string }[] = [
 	{ id: "1d", label: "1 T · 1 Min." },
@@ -18,11 +18,15 @@ const RANGES: { id: ChartRange; label: string }[] = [
 	{ id: "1y", label: "1 J" },
 ];
 
-export function IntradayChart({ row, cockpit, proposals }: { row: ScanRow; cockpit: Cockpit; proposals: Proposal[] }) {
+export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow; cockpit: Cockpit; proposals: Proposal[]; small?: boolean }) {
 	const [range, setRange] = useState<ChartRange>("1d");
 	const intraday = range === "1d" || range === "5d";
-	const { data: chart, isLoading, error } = useChart(row.symbol, range, range === "1d" ? cockpit.liveIntervalSec : undefined);
-	const { data: a } = useAnalysis(row.symbol);
+	const { data: shown, isLoading, error } = useChart(row.symbol, range, range === "1d" ? cockpit.liveIntervalSec : undefined);
+	// nie Kerzen oder Kennzahlen eines anderen Werts unter dieser Überschrift (beim Wechsel, solange die neuen laden)
+	const chart = shown?.symbol === row.symbol ? shown : undefined;
+	const { data: analysis } = useAnalysis(row.symbol);
+	const a = analysis?.symbol === row.symbol ? analysis : undefined;
+	const height = small ? 340 : 420;
 	const { data: watch } = useWatchlist();
 	const candles = chart?.candles ?? [];
 	const closes = candles.map((c) => c.c);
@@ -54,7 +58,7 @@ export function IntradayChart({ row, cockpit, proposals }: { row: ScanRow; cockp
 					</h1>
 					<p className="flex items-center gap-1.5 text-[12px] text-fg-3">
 						<SessionDot state={row.state} />
-						{row.exchange} · {STATE_LABEL[row.state]} · Stand {hhmm(row.marketTime)}
+						{exchangeLabel(row.exchange)} · {STATE_LABEL[row.state]} · Stand {hhmm(row.marketTime)}
 					</p>
 				</div>
 				<div className="flex items-baseline gap-2 tnum">
@@ -87,10 +91,12 @@ export function IntradayChart({ row, cockpit, proposals }: { row: ScanRow; cockp
 				</ul>
 			</div>
 			<div className="p-3 pt-2">
-				{isLoading && !chart ? (
-					<Skeleton className="h-[380px]" />
+				{(isLoading || (!chart && !error)) && !chart ? (
+					<Skeleton className="w-full" style={{ height }} />
 				) : error && !chart ? (
-					<Empty className="grid h-[380px] place-items-center">{(error as Error).message}</Empty>
+					<Empty className="grid place-items-center" style={{ height }}>
+						{(error as Error).message}
+					</Empty>
 				) : candles.length ? (
 					<CandleChart
 						label={`Kursverlauf ${row.symbol}, ${RANGES.find((r) => r.id === range)!.label}`}
@@ -100,10 +106,10 @@ export function IntradayChart({ row, cockpit, proposals }: { row: ScanRow; cockp
 						refs={refs}
 						format={fmt}
 						timeLabel={(t, long) => (intraday ? (long ? `${date(t)} ${hhmm(t)}` : range === "5d" ? new Date(t).toLocaleDateString("de-DE", { weekday: "short" }) + " " + hhmm(t) : hhmm(t)) : date(t))}
-						height={420}
+						height={height}
 					/>
 				) : (
-					<Empty className={cn("grid h-[380px] place-items-center")}>Heute noch keine Kerzen – die Börse ist {STATE_LABEL[row.state].toLowerCase()}. Zeitraum „5 T“ zeigt die letzten Tage.</Empty>
+					<Empty className="grid place-items-center" style={{ height }}>Heute noch keine Kerzen – die Börse ist {STATE_LABEL[row.state].toLowerCase()}. Zeitraum „5 T“ zeigt die letzten Tage.</Empty>
 				)}
 			</div>
 		</Card>

@@ -1,17 +1,24 @@
 // Risiko: Not-Aus und Grenzen je Depot. Änderungen gelten sofort (beim Verlassen des Feldes), mit Rückgängig.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { OctagonX, ShieldCheck } from "lucide-react";
 import type { RiskLimits } from "@desk/shared";
 import { useRisk } from "@/lib/api";
-import { parseDe, pct } from "@/lib/format";
+import { inputNumber, numberError, parseDe, pct } from "@/lib/format";
 import { Badge, Button, Card, Field, Input, Skeleton, cn } from "@/ui/kit";
+import { LoadError } from "@/ui/boundary";
 import { useConfirm } from "@/ui/overlay";
 import { Page, PageHead, useAction } from "../common";
 
 export default function RiskView() {
-	const { data } = useRisk();
+	const { data, error, refetch } = useRisk();
 	const { run, busy } = useAction();
 	const confirm = useConfirm();
+	if (error && !data)
+		return (
+			<Page>
+				<LoadError error={error} onRetry={() => void refetch()} />
+			</Page>
+		);
 	if (!data)
 		return (
 			<Page>
@@ -64,10 +71,10 @@ export default function RiskView() {
 }
 
 const FIELDS: { key: keyof Omit<RiskLimits, "accountId" | "requireStop">; label: string; hint: string; unit: string; toUi: (v: number) => string; fromUi: (v: number) => number }[] = [
-	{ key: "maxOrderCents", label: "Max. Orderwert", hint: "je Order, 0 = keine Grenze", unit: "€", toUi: (v) => String(v / 100).replace(".", ","), fromUi: (v) => Math.round(v * 100) },
-	{ key: "maxPositionPct", label: "Max. Position", hint: "Anteil nach dem Kauf", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
-	{ key: "maxRiskPct", label: "Risiko je Trade", hint: "Verlust bis Stop, 0 = keine", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
-	{ key: "dailyLossPct", label: "Tagesverlust-Stopp", hint: "danach keine Käufe", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "maxOrderCents", label: "Max. Orderwert", hint: "je Order, 0 = keine Grenze", unit: "€", toUi: (v) => inputNumber(v / 100, v % 100 ? 2 : 0), fromUi: (v) => Math.round(v * 100) },
+	{ key: "maxPositionPct", label: "Max. Position", hint: "Anteil am Depot nach dem Kauf", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "maxRiskPct", label: "Risiko je Trade", hint: "Verlust bis zum Stop, 0 = keine Grenze", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "dailyLossPct", label: "Tagesverlust-Stopp", hint: "danach keine Käufe, 0 = keine Grenze", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
 	{ key: "maxOpenProposals", label: "Offene Vorschläge", hint: "je Agent, 0 = keine Grenze", unit: "", toUi: (v) => String(v), fromUi: (v) => Math.round(v) },
 ];
 
@@ -75,11 +82,25 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 	const { run } = useAction();
 	const [vals, setVals] = useState(() => Object.fromEntries(FIELDS.map((f) => [f.key, f.toUi(limits[f.key])])) as Record<string, string>);
 	const [errs, setErrs] = useState<Record<string, string | null>>({});
-	useEffect(() => setVals(Object.fromEntries(FIELDS.map((f) => [f.key, f.toUi(limits[f.key])]))), [limits]);
+	// Neu vom Server nur die Felder, deren Wert sich dort geändert hat und die du gerade nicht bearbeitest – sonst
+	// überschrieb das Neuladen nach dem einen Feld, was du schon ins nächste getippt hattest
+	const editing = useRef<string | null>(null);
+	const lastServer = useRef(limits);
+	useEffect(() => {
+		const prev = lastServer.current;
+		lastServer.current = limits;
+		setVals((v) => {
+			const next = { ...v };
+			for (const f of FIELDS) if (limits[f.key] !== prev[f.key] && editing.current !== f.key) next[f.key] = f.toUi(limits[f.key]);
+			return next;
+		});
+	}, [limits]);
 	const commit = async (f: (typeof FIELDS)[number]) => {
 		const v = parseDe(vals[f.key]);
-		if (!(v >= 0) || (f.unit === "%" && v > 100)) return setErrs({ ...errs, [f.key]: f.unit === "%" ? "0 bis 100" : "0 oder mehr" });
+		if (!(v >= 0) || (f.unit === "%" && v > 100)) return setErrs({ ...errs, [f.key]: numberError(vals[f.key]) ?? (f.unit === "%" ? "0 bis 100" : "0 oder mehr") });
 		setErrs({ ...errs, [f.key]: null });
+		// gleiche Schreibweise wie vom Server (z. B. „5000“ → „5.000“)
+		setVals((x) => ({ ...x, [f.key]: f.toUi(f.fromUi(v)) }));
 		const next = f.fromUi(v);
 		if (next === limits[f.key]) return;
 		const prev = limits[f.key];
@@ -90,13 +111,18 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 			<div className="grid grid-cols-2 gap-3 @max-[480px]:grid-cols-1">
 				{FIELDS.map((f) => (
 					<Field key={f.key} label={`${f.label}${f.unit ? ` (${f.unit})` : ""}`} hint={f.hint} error={errs[f.key]}>
-						{(id) => (
+						{(id, a) => (
 							<Input
 								id={id}
+								{...a}
 								inputMode="decimal"
 								value={vals[f.key]}
 								onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })}
-								onBlur={() => void commit(f)}
+								onFocus={() => (editing.current = f.key)}
+								onBlur={() => {
+									editing.current = null;
+									void commit(f);
+								}}
 								onKeyDown={(e) => e.key === "Enter" && (e.currentTarget as HTMLInputElement).blur()}
 							/>
 						)}

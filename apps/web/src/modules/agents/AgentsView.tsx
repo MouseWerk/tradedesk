@@ -8,6 +8,7 @@ import { ago, dayLabel, eur, pct, tone } from "@/lib/format";
 import { LineChart, Sparkline, type LineSeries } from "@/ui/charts";
 import { Badge, Card, Empty, Select, Skeleton, cn } from "@/ui/kit";
 import { Page, PageHead } from "../common";
+import { LoadError } from "@/ui/boundary";
 
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)"];
 const KIND = { note: "Notiz", thesis: "These", review: "Rückblick" } as const;
@@ -15,10 +16,16 @@ const KIND = { note: "Notiz", thesis: "These", review: "Rückblick" } as const;
 const ret = (p: CurvePoint) => (p.depositsCents > 0 ? ((p.equityCents - p.depositsCents) / p.depositsCents) * 100 : null);
 
 export default function AgentsView() {
-	const { data, isLoading } = useAgents();
-	const { data: ov } = useOverview();
+	const { data, error, refetch } = useAgents();
+	const { data: ov, error: ovError, refetch: refetchOv } = useOverview();
 	const [who, setWho] = useState("");
-	if (isLoading || !data || !ov)
+	if ((error && !data) || (ovError && !ov))
+		return (
+			<Page>
+				<LoadError error={error ?? ovError} onRetry={() => void (refetch(), refetchOv())} />
+			</Page>
+		);
+	if (!data || !ov)
 		return (
 			<Page>
 				<Skeleton className="h-8 w-40" />
@@ -61,7 +68,8 @@ export default function AgentsView() {
 							})}
 						</ul>
 					</Card>
-					<div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-4">
+					{/* auto-fit: wenige Agenten füllen die Reihe statt 40 % davon */}
+					<div className="grid grid-cols-[repeat(auto-fit,minmax(min(300px,100%),1fr))] gap-4">
 						{data.agents.map((a, i) => (
 							<Card key={a.name} title={a.name} icon={<Bot className="size-4" />} aside={a.lastActive ? `aktiv ${ago(a.lastActive)}` : "noch nie aktiv"}>
 								<div className="flex items-end gap-3">
