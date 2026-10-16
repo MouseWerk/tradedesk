@@ -10,6 +10,18 @@ import { Desk } from "./desk.ts";
 import { FAKE_CATALOG, FakeMarket } from "./market.ts";
 import { FakeBroker } from "./broker.ts";
 
+/**
+ * Uhr für Selbsttest und Fixture-Server: läuft in Echtzeit, beginnt aber am letzten Werktag um 16:00 Ortszeit – dann
+ * sind XETRA und Nasdaq der Fake-Börse offen und Papier-Orders werden ausgeführt, egal wann der Test läuft.
+ */
+export function tradingDayClock(real: () => number = Date.now): () => number {
+	const d = new Date(real());
+	while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+	const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 16, 0).getTime();
+	const t0 = real();
+	return () => start + (real() - t0);
+}
+
 export interface Fixture {
 	dir: string;
 	cfg: Config;
@@ -20,8 +32,12 @@ export interface Fixture {
 	cleanup(): void;
 }
 
+/** Bekannte Test-PIN der Fixture (Selbsttest, Tests, Playwright) – nie für echte Daten. */
+export const FIXTURE_PIN = "2468";
+
 export const FIXTURE_CONFIG = {
 	user: "Maurice",
+	port: 8097,
 	accounts: [
 		{ id: "tr", name: "Trade Republic", kind: "manual", broker: "Trade Republic", feeEur: 1, startCashEur: 0 },
 		{ id: "papier", name: "Mein Papierdepot", kind: "paper", feeEur: 1, startCashEur: 20000 },
@@ -39,6 +55,7 @@ export async function makeFixture({ seed = true, now }: { seed?: boolean; now?: 
 	const bySymbol = new Map(FAKE_CATALOG.map((i) => [FakeBroker.conid(i.symbol), i.symbol]));
 	const broker = new FakeBroker((conid) => market.items.get(bySymbol.get(conid) ?? "")?.price ?? 0, clock);
 	const desk = new Desk(cfg, db, market, clock, new Map([["ibkr", broker]]));
+	desk.auth.presetPin(FIXTURE_PIN);
 	const fx: Fixture = {
 		dir, cfg, db, desk, market, broker,
 		cleanup() {
@@ -76,14 +93,16 @@ async function seedFixture({ desk, db, cfg }: Fixture) {
 	trade("agent-nova", "BTC-EUR", "buy", 0.05, 64000, 25, "EUR", 1, "proposal");
 	trade("agent-nova", "BTC-EUR", "sell", 0.02, 59000, 8, "EUR", 1, "proposal");
 
-	// Tagesstände: deterministischer Pfad, der beim heutigen Wert endet
+	// Tagesstände: deterministischer Pfad, der beim heutigen Wert endet. Ein Depot ohne Trades hat nur Cash – sein Stand
+	// bleibt flach (sonst zeigt es einen erfundenen Tagesgewinn und eine steigende Kurve ohne Positionen, Q1 D10).
 	for (const a of cfg.accounts) {
 		const s = desk.summary(a);
+		const traded = !!db.get("SELECT 1 FROM trade WHERE account_id = ?", a.id);
 		let seed = [...a.id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 		const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32);
 		let eq = s.equityCents;
 		for (let d = 1; d <= 90; d++) {
-			eq = Math.round(eq / (1 + (rnd() - 0.47) * 0.018));
+			if (traded) eq = Math.round(eq / (1 + (rnd() - 0.47) * 0.018));
 			db.run("INSERT OR REPLACE INTO snapshot (account_id, day, equity_cents, deposits_cents) VALUES (?,?,?,?)", a.id, dayKey(t0 - d * day), eq, s.depositsCents);
 		}
 	}

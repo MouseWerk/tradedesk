@@ -21,6 +21,7 @@ export interface Config {
 	proposalTtlHours: number;
 	quoteIntervalSec: number;
 	liveIntervalSec: number; // solange ein Browser offen ist
+	maxQuoteAgeSec: number; // während der Handelszeit entscheidet kein älterer Kurs (Vorschlag, Freigabe, Bestätigung, Limit)
 	liveTrading: boolean; // Hauptschalter: Orders mit echtem Geld nur, wenn true (IBKR-Papierkonten gehen immer)
 	brokers: Record<string, BrokerConfig>; // je Broker-Depot (kind "broker")
 	dbFile: string;
@@ -107,6 +108,7 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		proposalTtlHours: clampNum(raw.proposalTtlHours, 24, 1, 24 * 14),
 		quoteIntervalSec: Math.trunc(clampNum(raw.quoteIntervalSec, 60, 15, 3600)),
 		liveIntervalSec: Math.trunc(clampNum(raw.liveIntervalSec, 15, 5, 300)),
+		maxQuoteAgeSec: Math.trunc(clampNum(raw.maxQuoteAgeSec, 120, 30, 3600)),
 		liveTrading: raw.liveTrading === true,
 		brokers,
 	};

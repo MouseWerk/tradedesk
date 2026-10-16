@@ -1,6 +1,6 @@
 // Daytrading-Logik, rein und getestet: Indikatoren (EMA, VWAP, RSI, ATR), Session einer Börse, Tagesstatistik,
 // Positionsgröße aus Risiko und Stop. Server, Web und Agenten (über /api) rechnen alle hiermit.
-import type { Candle } from "./schema.ts";
+import { MAX_QTY, type Candle } from "./schema.ts";
 import { cents } from "./portfolio.ts";
 
 /** Exponentieller gleitender Durchschnitt; null, bis n Werte da sind (Start mit dem einfachen Mittel). */
@@ -172,7 +172,7 @@ export function positionSize(i: { budgetCents: number; entry: number; stop: numb
 	const byValue = i.maxValueCents !== undefined && i.maxValueCents > 0 ? i.maxValueCents / 100 / (i.entry * i.fx) : Number.POSITIVE_INFINITY;
 	const best = Math.min(byRisk, byCash, byValue);
 	const qty = Math.floor(best * step) / step;
-	if (!(qty > 0)) return null;
+	if (!(qty > 0) || qty > MAX_QTY || !Number.isFinite(qty * i.entry * i.fx * 100)) return null;
 	const limitedBy = best === byRisk ? "risk" : best === byCash ? "cash" : "value";
 	return { qty, riskCents: cents(qty * perShareRisk * i.fx) + 2 * i.feeCents, valueCents: cents(qty * i.entry * i.fx), perShareRisk, limitedBy };
 }

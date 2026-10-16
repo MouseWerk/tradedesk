@@ -14,12 +14,14 @@ export interface BrokerSession {
 export type PlaceResult =
 	| { kind: "submitted"; orderId: string; status: string }
 	| { kind: "reply"; replyId: string; message: string } // Broker fragt nach, bevor die Order arbeitet
-	| { kind: "rejected"; message: string };
+	| { kind: "rejected"; message: string } // eine Antwort des Brokers: die Order arbeitet nicht
+	| { kind: "unknown"; message: string }; // keine sichere Antwort (Zeitlimit, Abbruch, 5xx): die Order kann trotzdem arbeiten
 
 export interface BrokerOrder {
 	orderId: string;
 	cOID: string | null;
 	status: "working" | "filled" | "cancelled" | "rejected";
+	rawStatus: string; // Status im Wortlaut des Brokers, z. B. "Inactive"
 	filledQty: number;
 	avgPrice: number | null;
 }
@@ -32,7 +34,8 @@ export interface BrokerExecution {
 	qty: number;
 	price: number;
 	time: number;
-	commission: number; // in Kontowährung der Ausführung, positiv
+	commission: number; // positiv
+	commissionCurrency: string | null; // Währung der Gebühr, falls der Broker sie nennt; sonst gilt die Wertpapierwährung
 }
 
 export interface BrokerPosition {
@@ -50,7 +53,7 @@ export interface OrderTicket {
 	qty: number;
 	type: "market" | "limit";
 	limit?: number | null;
-	cOID: string; // eindeutig je Vorschlag: desk-<id>
+	cOID: string; // eindeutig über Datenbanken hinweg: desk-<Installation>-<id>
 }
 
 export interface Broker {
@@ -66,7 +69,7 @@ export interface Broker {
 	orders(): Promise<BrokerOrder[]>;
 	executions(): Promise<BrokerExecution[]>;
 	positions(): Promise<BrokerPosition[]>;
-	/** Cash in der Basiswährung des Kontos (EUR erwartet). */
+	/** Cash in der Basiswährung des Kontos; currency "BASE", wenn der Broker die Basiswährung nicht nennt. */
 	cash(): Promise<{ amount: number; currency: string } | null>;
 }
 
@@ -85,25 +88,36 @@ const EXCHANGES: Record<string, string[]> = {
 	VI: ["VSE"],
 };
 
+/**
+ * IBKR-Orderstatus → Desk. Endgültig sind nur Filled, Cancelled und ApiCancelled (und Rejected). PendingCancel kann noch
+ * ausgeführt werden, Inactive ist oft vorübergehend (außerhalb der Handelszeit, Prüfung bei IBKR): beides arbeitet noch.
+ */
 export function ibkrStatus(s: string): BrokerOrder["status"] {
 	const v = s.toLowerCase();
 	if (v === "filled") return "filled";
-	if (v === "cancelled" || v === "pendingcancel" || v === "apicancelled") return "cancelled";
-	if (v === "inactive" || v === "rejected") return "rejected";
+	if (v === "cancelled" || v === "apicancelled") return "cancelled";
+	if (v === "rejected") return "rejected";
 	return "working";
 }
 
-/** Antwort auf eine Order oder Bestätigung: Bestätigung der Order, Rückfrage oder Fehler. */
+/** Fehler beim Senden: ohne Antwort (Zeitlimit, Abbruch) oder bei 5xx ist das Ergebnis unbekannt, sonst eine Ablehnung. */
+export function sendFailure(e: unknown): PlaceResult {
+	const status = e instanceof HttpError ? e.status : 0;
+	const message = (e as Error).message;
+	return status === 0 || status >= 500 ? { kind: "unknown", message } : { kind: "rejected", message };
+}
+
+/** Antwort auf eine Order oder Bestätigung: Bestätigung der Order, Rückfrage, Fehler – oder nichts Verlässliches. */
 export function parsePlace(r: unknown): PlaceResult {
 	const first = (Array.isArray(r) ? r[0] : r) as Record<string, unknown> | undefined;
-	if (!first) return { kind: "rejected", message: "leere Antwort des Brokers" };
+	if (!first) return { kind: "unknown", message: "leere Antwort des Brokers" };
 	if (typeof first.error === "string") return { kind: "rejected", message: first.error };
 	if (first.order_id !== undefined) return { kind: "submitted", orderId: String(first.order_id), status: String(first.order_status ?? "") };
 	if (typeof first.id === "string") {
 		const msg = Array.isArray(first.message) ? first.message.join(" ") : String(first.message ?? "");
 		return { kind: "reply", replyId: first.id, message: msg.replace(/\s+/g, " ").trim() };
 	}
-	return { kind: "rejected", message: `unbekannte Antwort: ${JSON.stringify(first).slice(0, 200)}` };
+	return { kind: "unknown", message: `unbekannte Antwort: ${JSON.stringify(first).slice(0, 200)}` };
 }
 
 export class IbkrBroker implements Broker {
@@ -113,16 +127,21 @@ export class IbkrBroker implements Broker {
 	private readonly account: string;
 	private readonly conids: Record<string, number>;
 	private ready = false; // /iserver/accounts und /portfolio/accounts müssen vor Orders bzw. Bestand gerufen sein
+	private baseCurrency: string | null = null; // aus /portfolio/accounts
+	private primed = false; // erster Orderabruf mit force=true (frische Liste nach dem Start)
 
-	constructor(opts: { gateway: string; account: string; conids?: Record<string, number> }) {
+	private readonly timeoutMs: number;
+
+	constructor(opts: { gateway: string; account: string; conids?: Record<string, number>; timeoutMs?: number }) {
 		this.base = `${opts.gateway.replace(/\/+$/, "")}/v1/api`;
 		this.loginUrl = opts.gateway.replace(/\/+$/, "");
 		this.account = opts.account;
 		this.conids = opts.conids ?? {};
+		this.timeoutMs = opts.timeoutMs ?? 10_000;
 	}
 
 	private call<T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown) {
-		return localJson<T>(method, this.base + path, body);
+		return localJson<T>(method, this.base + path, body, { timeoutMs: this.timeoutMs });
 	}
 
 	async session(): Promise<BrokerSession> {
@@ -133,7 +152,9 @@ export class IbkrBroker implements Broker {
 				return { connected: !!s?.connected, authenticated: false, account: null, paper: null, message: s?.fail || s?.message || "Im Gateway nicht angemeldet." };
 			}
 			const a = await this.call<{ accounts?: string[]; isPaper?: boolean }>("GET", "/iserver/accounts");
-			await this.call("GET", "/portfolio/accounts");
+			const pa = await this.call<{ id?: string; accountId?: string; currency?: string }[]>("GET", "/portfolio/accounts");
+			const mine = Array.isArray(pa) ? pa.find((x) => x.id === this.account || x.accountId === this.account) : undefined;
+			this.baseCurrency = typeof mine?.currency === "string" && /^[A-Z]{3}$/.test(mine.currency) ? mine.currency : null;
 			const has = (a.accounts ?? []).includes(this.account);
 			this.ready = has;
 			return { connected: true, authenticated: true, account: has ? this.account : null, paper: typeof a.isPaper === "boolean" ? a.isPaper : null, message: has ? "" : `Konto ${this.account} ist in dieser Sitzung nicht handelbar (gefunden: ${(a.accounts ?? []).join(", ") || "keins"}).` };
@@ -169,13 +190,17 @@ export class IbkrBroker implements Broker {
 	}
 
 	async place(t: OrderTicket): Promise<PlaceResult> {
-		await this.ensure();
+		try {
+			await this.ensure();
+		} catch (e) {
+			return { kind: "rejected", message: (e as Error).message }; // noch nichts gesendet
+		}
 		const order: Record<string, unknown> = { acctId: this.account, conid: t.conid, side: t.side === "buy" ? "BUY" : "SELL", orderType: t.type === "limit" ? "LMT" : "MKT", quantity: t.qty, tif: "DAY", cOID: t.cOID };
 		if (t.type === "limit") order.price = t.limit;
 		try {
 			return parsePlace(await this.call("POST", `/iserver/account/${encodeURIComponent(this.account)}/orders`, { orders: [order] }));
 		} catch (e) {
-			return { kind: "rejected", message: (e as Error).message };
+			return sendFailure(e);
 		}
 	}
 
@@ -183,7 +208,7 @@ export class IbkrBroker implements Broker {
 		try {
 			return parsePlace(await this.call("POST", `/iserver/reply/${encodeURIComponent(replyId)}`, { confirmed: true }));
 		} catch (e) {
-			return { kind: "rejected", message: (e as Error).message };
+			return sendFailure(e);
 		}
 	}
 
@@ -194,18 +219,35 @@ export class IbkrBroker implements Broker {
 
 	async orders(): Promise<BrokerOrder[]> {
 		await this.ensure();
-		const r = await this.call<{ orders?: { orderId: number | string; order_ref?: string; status?: string; filledQuantity?: number; avgPrice?: string | number; acct?: string }[] }>("GET", "/iserver/account/orders");
+		type Raw = { orders?: { orderId: number | string; order_ref?: string; status?: string; filledQuantity?: number; avgPrice?: string | number; acct?: string }[] };
+		if (!this.primed) {
+			// nach dem Start einmal den Zwischenspeicher des Gateways leeren; diese Antwort ist laut IBKR leer, die nächste frisch
+			await this.call<Raw>("GET", "/iserver/account/orders?force=true").catch(() => undefined);
+			this.primed = true;
+		}
+		const r = await this.call<Raw>("GET", "/iserver/account/orders");
 		return (r.orders ?? [])
 			.filter((o) => !o.acct || o.acct === this.account)
-			.map((o) => ({ orderId: String(o.orderId), cOID: o.order_ref ?? null, status: ibkrStatus(o.status ?? ""), filledQty: Number(o.filledQuantity ?? 0), avgPrice: o.avgPrice === undefined || o.avgPrice === "" ? null : Number(o.avgPrice) }));
+			.map((o) => ({
+				orderId: String(o.orderId), cOID: o.order_ref ?? null, status: ibkrStatus(o.status ?? ""), rawStatus: o.status ?? "", filledQty: Number(o.filledQuantity ?? 0),
+				avgPrice: o.avgPrice === undefined || o.avgPrice === "" ? null : Number(o.avgPrice),
+			}));
 	}
 
 	async executions(): Promise<BrokerExecution[]> {
 		await this.ensure();
-		const r = await this.call<{ execution_id: string; order_ref?: string; conid?: string | number; side: string; size: number; price: string | number; trade_time_r: number; commission?: string | number; account?: string }[]>("GET", "/iserver/account/trades?days=7");
+		type Raw = { execution_id: string; order_ref?: string; conid?: string | number; side: string; size: number; price: string | number; trade_time_r: number; commission?: string | number; commission_currency?: string; comission_currency?: string; account?: string };
+		const r = await this.call<Raw[]>("GET", "/iserver/account/trades?days=7");
+		const ccy = (x: Raw) => {
+			const c = x.commission_currency ?? x.comission_currency; // IBKR schreibt das Feld je nach Version unterschiedlich
+			return typeof c === "string" && /^[A-Z]{3}$/.test(c) ? c : null;
+		};
 		return (r ?? [])
 			.filter((x) => (x.side === "B" || x.side === "S") && (!x.account || x.account === this.account))
-			.map((x) => ({ id: x.execution_id, cOID: x.order_ref ?? null, conid: x.conid === undefined ? null : Number(x.conid), side: x.side === "B" ? "buy" : "sell", qty: Number(x.size), price: Number(x.price), time: Number(x.trade_time_r), commission: Math.abs(Number(x.commission ?? 0)) || 0 }));
+			.map((x) => ({
+				id: x.execution_id, cOID: x.order_ref ?? null, conid: x.conid === undefined ? null : Number(x.conid), side: x.side === "B" ? "buy" : "sell", qty: Number(x.size), price: Number(x.price),
+				time: Number(x.trade_time_r), commission: Math.abs(Number(x.commission ?? 0)) || 0, commissionCurrency: ccy(x),
+			}));
 	}
 
 	async positions(): Promise<BrokerPosition[]> {
@@ -224,13 +266,26 @@ export class IbkrBroker implements Broker {
 		await this.ensure();
 		const r = await this.call<Record<string, { cashbalance?: number; currency?: string }>>("GET", `/portfolio/${encodeURIComponent(this.account)}/ledger`);
 		const base = r?.BASE;
-		return typeof base?.cashbalance === "number" ? { amount: base.cashbalance, currency: "BASE" } : null;
+		// BASE ist in der Basiswährung des Kontos – welche das ist, sagt /portfolio/accounts; unbekannt bleibt "BASE"
+		return typeof base?.cashbalance === "number" ? { amount: base.cashbalance, currency: this.baseCurrency ?? "BASE" } : null;
 	}
 }
 
 /* ------------------------------------------------------------------ Fake */
 
-/** Verhält sich wie das Gateway: Rückfrage bei großen Orders, Market-Orders sind beim nächsten Abruf ausgeführt. */
+interface FakeOrder {
+	t: OrderTicket;
+	status: BrokerOrder["status"];
+	raw: string; // Wortlaut wie bei IBKR (Submitted, PendingCancel, Inactive, Filled, Cancelled)
+	fillAt: number | null;
+	filled: number;
+	listed: boolean; // false: aus der Orderliste verschwunden (wie eine Tagesorder am nächsten Tag)
+}
+
+/**
+ * Verhält sich wie das Gateway: Rückfrage bei großen Orders, Market-Orders sind beim nächsten Abruf ausgeführt.
+ * Für Tests: verlorene Antworten (die Order arbeitet trotzdem), PendingCancel, Teilausführungen, verschwundene Orders.
+ */
 export class FakeBroker implements Broker {
 	readonly adapter = "fake" as const;
 	readonly loginUrl = null;
@@ -238,8 +293,12 @@ export class FakeBroker implements Broker {
 	paper = true; // Papier- oder Echtgeld-Sitzung im Gateway
 	replyAbove = Number.POSITIVE_INFINITY; // Stückzahl, ab der eine Rückfrage kommt
 	cashAmount = 25_000;
+	baseCurrency = "EUR";
+	loseNextAnswer = false; // nächste Order/Bestätigung kommt an, die Antwort geht verloren (Zeitlimit)
+	pendingCancel = false; // Storno bleibt "PendingCancel", bis finishCancel()
+	keepAlives = 0;
 	readonly placed: OrderTicket[] = [];
-	readonly book = new Map<string, { t: OrderTicket; status: BrokerOrder["status"]; fillAt: number | null }>();
+	readonly book = new Map<string, FakeOrder>();
 	readonly execs: BrokerExecution[] = [];
 	readonly extraPositions: BrokerPosition[] = [];
 	private next = 1000;
@@ -261,15 +320,22 @@ export class FakeBroker implements Broker {
 	async session(): Promise<BrokerSession> {
 		return this.authenticated ? { connected: true, authenticated: true, account: "DU0000001", paper: this.paper, message: "" } : { connected: true, authenticated: false, account: null, paper: null, message: "Im Gateway nicht angemeldet." };
 	}
-	async keepAlive() {}
+	async keepAlive() {
+		this.keepAlives++;
+	}
 	async resolve(symbol: string) {
 		if (symbol.includes("-")) throw new Error(`${symbol}: Krypto und Devisen handelt der Desk nicht über IBKR.`);
 		return { conid: FakeBroker.conid(symbol), description: `${symbol} (Fake)` };
 	}
 	private submit(t: OrderTicket): PlaceResult {
 		const id = String(this.next++);
-		this.book.set(id, { t, status: "working", fillAt: t.type === "market" ? this.now() : null });
-		return { kind: "submitted", orderId: id, status: "Submitted" };
+		this.book.set(id, { t, status: "working", raw: "Submitted", fillAt: t.type === "market" ? this.now() : null, filled: 0, listed: true });
+		return this.answer({ kind: "submitted", orderId: id, status: "Submitted" });
+	}
+	private answer(r: PlaceResult): PlaceResult {
+		if (!this.loseNextAnswer) return r;
+		this.loseNextAnswer = false;
+		return { kind: "unknown", message: "keine Antwort nach 10 s" };
 	}
 	async place(t: OrderTicket): Promise<PlaceResult> {
 		if (!this.authenticated) return { kind: "rejected", message: "nicht angemeldet" };
@@ -277,7 +343,7 @@ export class FakeBroker implements Broker {
 		if (t.qty > this.replyAbove) {
 			const id = `reply-${this.next++}`;
 			this.replies.set(id, t);
-			return { kind: "reply", replyId: id, message: `The following order "${t.side.toUpperCase()} ${t.qty}" size exceeds the Size Limit. Are you sure you want to submit this order?` };
+			return this.answer({ kind: "reply", replyId: id, message: `The following order "${t.side.toUpperCase()} ${t.qty}" size exceeds the Size Limit. Are you sure you want to submit this order?` });
 		}
 		return this.submit(t);
 	}
@@ -289,7 +355,28 @@ export class FakeBroker implements Broker {
 	}
 	async cancel(orderId: string) {
 		const o = this.book.get(orderId);
-		if (o && o.status === "working") o.status = "cancelled";
+		if (!o || o.status !== "working") return;
+		if (this.pendingCancel) o.raw = "PendingCancel";
+		else {
+			o.status = "cancelled";
+			o.raw = "Cancelled";
+		}
+	}
+	finishCancel(orderId: string) {
+		const o = this.book.get(orderId)!;
+		if (o.status !== "working") return;
+		o.status = "cancelled";
+		o.raw = "Cancelled";
+	}
+	/** Status im Wortlaut von IBKR setzen (z. B. "Inactive"). */
+	setRaw(orderId: string, raw: string) {
+		const o = this.book.get(orderId)!;
+		o.raw = raw;
+		o.status = ibkrStatus(raw);
+	}
+	/** Order verschwindet aus /iserver/account/orders (Ausführungen bleiben). */
+	drop(orderId: string) {
+		this.book.get(orderId)!.listed = false;
 	}
 	/** Limit-Orders füllt der Test mit fill(). */
 	fill(orderId: string, price?: number) {
@@ -297,16 +384,31 @@ export class FakeBroker implements Broker {
 		o.fillAt = this.now();
 		this.settle(orderId, price);
 	}
+	/** Teilausführung: qty Stück zu price, die Order arbeitet weiter. */
+	partial(orderId: string, qty: number, price?: number) {
+		const o = this.book.get(orderId)!;
+		o.filled += qty;
+		this.execs.push({ id: `exec-${orderId}-${this.execs.length}`, cOID: o.t.cOID, conid: o.t.conid, side: o.t.side, qty, price: price ?? this.prices(o.t.conid), time: this.now(), commission: 1.25, commissionCurrency: null });
+	}
 	private settle(orderId: string, price?: number) {
 		const o = this.book.get(orderId)!;
 		if (o.status !== "working") return;
 		o.status = "filled";
+		o.raw = "Filled";
+		const qty = o.t.qty - o.filled;
+		o.filled = o.t.qty;
 		const px = price ?? this.prices(o.t.conid);
-		this.execs.push({ id: `exec-${orderId}`, cOID: o.t.cOID, conid: o.t.conid, side: o.t.side, qty: o.t.qty, price: px, time: this.now(), commission: 1.25 });
+		this.execs.push({ id: `exec-${orderId}`, cOID: o.t.cOID, conid: o.t.conid, side: o.t.side, qty, price: px, time: this.now(), commission: 1.25, commissionCurrency: null });
 	}
 	async orders(): Promise<BrokerOrder[]> {
-		for (const [id, o] of this.book) if (o.status === "working" && o.fillAt !== null) this.settle(id);
-		return [...this.book.entries()].map(([id, o]) => ({ orderId: id, cOID: o.t.cOID, status: o.status, filledQty: o.status === "filled" ? o.t.qty : 0, avgPrice: o.status === "filled" ? (this.execs.find((e) => e.cOID === o.t.cOID)?.price ?? null) : null }));
+		for (const [id, o] of this.book) if (o.status === "working" && o.fillAt !== null && o.raw !== "PendingCancel") this.settle(id);
+		return [...this.book.entries()]
+			.filter(([, o]) => o.listed)
+			.map(([id, o]) => {
+				const fills = this.execs.filter((e) => e.cOID === o.t.cOID);
+				const qty = fills.reduce((s, e) => s + e.qty, 0);
+				return { orderId: id, cOID: o.t.cOID, status: o.status, rawStatus: o.raw, filledQty: qty, avgPrice: qty ? fills.reduce((s, e) => s + e.qty * e.price, 0) / qty : null };
+			});
 	}
 	async executions() {
 		return [...this.execs];
@@ -317,6 +419,6 @@ export class FakeBroker implements Broker {
 		return [...[...by.entries()].filter(([, q]) => q).map(([conid, qty]) => ({ conid, ticker: "", description: String(conid), qty, avgCost: null, currency: "" })), ...this.extraPositions];
 	}
 	async cash() {
-		return { amount: this.cashAmount, currency: "BASE" };
+		return { amount: this.cashAmount, currency: this.baseCurrency };
 	}
 }

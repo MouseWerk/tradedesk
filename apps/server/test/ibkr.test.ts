@@ -9,6 +9,10 @@ let gateway = "";
 const calls: { method: string; path: string; body: unknown }[] = [];
 let authed = true;
 let orderReply: unknown = [{ order_id: "987654", order_status: "Submitted", encrypt_message: "1" }];
+// Störungen des Gateways: keine Antwort (Zeitlimit), Verbindungsabbruch, Status-Code mit Fehler-Body
+let orderFault: { kind: "hang" } | { kind: "drop" } | { kind: "status"; status: number; body: unknown } | null = null;
+let baseCurrency: string | undefined = "EUR";
+let tradeExtra: Record<string, unknown> = {};
 
 beforeAll(async () => {
 	server = createServer((req, res) => {
@@ -24,7 +28,7 @@ beforeAll(async () => {
 			};
 			if (path === "/iserver/auth/status" && req.method === "POST") return send({ authenticated: authed, connected: true, competing: false, message: "" });
 			if (path === "/iserver/accounts") return send({ accounts: ["DU123456"], selectedAccount: "DU123456", isPaper: true });
-			if (path === "/portfolio/accounts") return send([{ id: "DU123456", accountId: "DU123456" }]);
+			if (path === "/portfolio/accounts") return send([{ id: "DU123456", accountId: "DU123456", ...(baseCurrency ? { currency: baseCurrency } : {}) }]);
 			if (path === "/tickle" && req.method === "POST") return send({ session: "x" });
 			if (path.startsWith("/trsrv/stocks")) {
 				const sym = new URL("http://x" + path).searchParams.get("symbols");
@@ -33,13 +37,19 @@ beforeAll(async () => {
 				if (sym === "DUP") return send({ DUP: [{ name: "A", assetClass: "STK", contracts: [{ conid: 1, exchange: "NYSE", isUS: true }] }, { name: "B", assetClass: "STK", contracts: [{ conid: 2, exchange: "NASDAQ", isUS: true }] }] });
 				return send({});
 			}
+			if ((path === "/iserver/account/DU123456/orders" || path.startsWith("/iserver/reply/")) && req.method === "POST" && orderFault) {
+				if (orderFault.kind === "hang") return; // antwortet nie
+				if (orderFault.kind === "drop") return req.socket.destroy();
+				return send(orderFault.body, orderFault.status);
+			}
 			if (path === "/iserver/account/DU123456/orders" && req.method === "POST") return send(orderReply);
 			if (path.startsWith("/iserver/reply/") && req.method === "POST") return send([{ order_id: "987655", order_status: "PreSubmitted" }]);
 			if (path === "/iserver/account/DU123456/order/987654" && req.method === "DELETE") return send({ msg: "Request was submitted", order_id: 987654 });
+			if (path === "/iserver/account/orders?force=true") return send({ orders: [], snapshot: false });
 			if (path === "/iserver/account/orders")
 				return send({ orders: [{ acct: "DU123456", orderId: 987654, order_ref: "desk-12", status: "Filled", filledQuantity: 3, avgPrice: "201.30" }, { acct: "U999", orderId: 1, status: "Submitted" }], snapshot: true });
 			if (path === "/iserver/account/trades?days=7")
-				return send([{ execution_id: "0000e0d5.01", order_ref: "desk-12", conid: "14204", side: "B", size: 3, price: "201.30", trade_time_r: 1702317649000, commission: "1.25", account: "DU123456" }]);
+				return send([{ execution_id: "0000e0d5.01", order_ref: "desk-12", conid: "14204", side: "B", size: 3, price: "201.30", trade_time_r: 1702317649000, commission: "1.25", account: "DU123456", ...tradeExtra }]);
 			if (path === "/portfolio/DU123456/positions/0") return send([{ conid: 14204, ticker: "SAP", contractDesc: "SAP SE", position: 3, avgPrice: 201.3, currency: "EUR", assetClass: "STK" }]);
 			if (path === "/portfolio/DU123456/ledger") return send({ BASE: { cashbalance: 24396.85, currency: "BASE" }, EUR: { cashbalance: 24396.85 } });
 			send({ error: "not found" }, 404);
@@ -53,9 +63,12 @@ beforeEach(() => {
 	calls.length = 0;
 	authed = true;
 	orderReply = [{ order_id: "987654", order_status: "Submitted", encrypt_message: "1" }];
+	orderFault = null;
+	baseCurrency = "EUR";
+	tradeExtra = {};
 });
 
-const ib = () => new IbkrBroker({ gateway, account: "DU123456" });
+const ib = () => new IbkrBroker({ gateway, account: "DU123456", timeoutMs: 300 });
 
 describe("IbkrBroker", () => {
 	it("checks the session with POST /iserver/auth/status and loads the accounts", async () => {
@@ -101,10 +114,10 @@ describe("IbkrBroker", () => {
 
 	it("reads orders, executions, positions and cash of this account only", async () => {
 		const b = ib();
-		expect(await b.orders()).toEqual([{ orderId: "987654", cOID: "desk-12", status: "filled", filledQty: 3, avgPrice: 201.3 }]);
-		expect(await b.executions()).toEqual([{ id: "0000e0d5.01", cOID: "desk-12", conid: 14204, side: "buy", qty: 3, price: 201.3, time: 1702317649000, commission: 1.25 }]);
+		expect(await b.orders()).toEqual([{ orderId: "987654", cOID: "desk-12", status: "filled", rawStatus: "Filled", filledQty: 3, avgPrice: 201.3 }]);
+		expect(await b.executions()).toEqual([{ id: "0000e0d5.01", cOID: "desk-12", conid: 14204, side: "buy", qty: 3, price: 201.3, time: 1702317649000, commission: 1.25, commissionCurrency: null }]);
 		expect(await b.positions()).toEqual([{ conid: 14204, ticker: "SAP", description: "SAP SE", qty: 3, avgCost: 201.3, currency: "EUR" }]);
-		expect(await b.cash()).toEqual({ amount: 24396.85, currency: "BASE" });
+		expect(await b.cash()).toEqual({ amount: 24396.85, currency: "EUR" }); // BASE in der Basiswährung aus /portfolio/accounts
 	});
 
 	it("cancels with DELETE /iserver/account/{acct}/order/{id}", async () => {
@@ -112,8 +125,53 @@ describe("IbkrBroker", () => {
 		expect(calls.some((c) => c.method === "DELETE" && c.path === "/iserver/account/DU123456/order/987654")).toBe(true);
 	});
 
-	it("maps IBKR order states", () => {
-		expect(["Filled", "Cancelled", "PendingCancel", "Inactive", "Submitted", "PreSubmitted"].map(ibkrStatus)).toEqual(["filled", "cancelled", "cancelled", "rejected", "working", "working"]);
-		expect(parsePlace([])).toMatchObject({ kind: "rejected" });
+	it("maps IBKR order states: only Filled, Cancelled and ApiCancelled are final (Q1 B10)", () => {
+		// PendingCancel kann noch ausgeführt werden, Inactive ist oft vorübergehend – beides arbeitet noch
+		expect(["Filled", "Cancelled", "ApiCancelled", "PendingCancel", "Inactive", "Submitted", "PreSubmitted", "PendingSubmit"].map(ibkrStatus)).toEqual(["filled", "cancelled", "cancelled", "working", "working", "working", "working", "working"]);
+	});
+
+	it("an empty or unknown answer is not a rejection but an unknown outcome (Q1 B3)", () => {
+		expect(parsePlace([])).toMatchObject({ kind: "unknown" });
+		expect(parsePlace({ foo: 1 })).toMatchObject({ kind: "unknown" });
+		expect(parsePlace({ error: "x" })).toMatchObject({ kind: "rejected" });
+	});
+
+	it("a timeout, a dropped connection or a 5xx on place and confirm is unknown, never rejected (Q1 B3)", async () => {
+		const t = { conid: 14204, side: "buy" as const, qty: 3, type: "market" as const, cOID: "desk-ab12cd34-1" };
+		orderFault = { kind: "hang" };
+		expect(await ib().place(t)).toMatchObject({ kind: "unknown" });
+		expect(await ib().confirm("07a13a5a")).toMatchObject({ kind: "unknown" });
+		orderFault = { kind: "drop" };
+		expect(await ib().place(t)).toMatchObject({ kind: "unknown" });
+		orderFault = { kind: "status", status: 503, body: { error: "Service Unavailable" } };
+		expect(await ib().place(t)).toMatchObject({ kind: "unknown" });
+		orderFault = { kind: "status", status: 400, body: { error: "Order rejected - reason: invalid price" } };
+		expect(await ib().place(t)).toEqual({ kind: "rejected", message: "HTTP 400: Order rejected - reason: invalid price" });
+	});
+
+	it("refuses before sending when the session is not ready", async () => {
+		authed = false;
+		expect(await ib().place({ conid: 1, side: "buy", qty: 1, type: "market", cOID: "desk-x-1" })).toMatchObject({ kind: "rejected" });
+		expect(calls.some((c) => c.path.endsWith("/orders") && c.method === "POST")).toBe(false);
+	});
+
+	it("reports cash in the account's base currency, or BASE when it is unknown (Q1 B22)", async () => {
+		baseCurrency = "USD";
+		expect(await ib().cash()).toEqual({ amount: 24396.85, currency: "USD" });
+		baseCurrency = undefined;
+		expect(await ib().cash()).toEqual({ amount: 24396.85, currency: "BASE" });
+	});
+
+	it("reads the commission currency when IBKR names it (Q1 B23)", async () => {
+		tradeExtra = { commission_currency: "EUR" };
+		expect((await ib().executions())[0].commissionCurrency).toBe("EUR");
+	});
+
+	it("asks for a fresh order list once after the start (Q1 B11)", async () => {
+		const b = ib();
+		await b.orders();
+		await b.orders();
+		expect(calls.filter((c) => c.path === "/iserver/account/orders?force=true")).toHaveLength(1);
+		expect(calls.filter((c) => c.path === "/iserver/account/orders")).toHaveLength(2);
 	});
 });

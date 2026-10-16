@@ -29,8 +29,11 @@ export interface QuoteData {
 
 export interface Market {
 	readonly kind: "yahoo" | "fake" | "off";
-	/** Kurse; Symbole ohne Antwort fehlen im Ergebnis, ein Fehler je Symbol bricht nicht alles ab. */
-	quotes(symbols: string[]): Promise<{ quotes: QuoteData[]; error: string | null }>;
+	/**
+	 * Kurse; Symbole ohne Antwort fehlen im Ergebnis und stehen in failed, ein Fehler je Symbol bricht nicht alles ab.
+	 * error nur, wenn gar nichts kam.
+	 */
+	quotes(symbols: string[]): Promise<{ quotes: QuoteData[]; error: string | null; failed?: { symbol: string; message: string }[] }>;
 	chart(symbol: string, range: ChartRange): Promise<{ meta: QuoteData; candles: Candle[] }>;
 	search(q: string): Promise<SearchHit[]>;
 	news(symbol: string): Promise<NewsItem[]>;
@@ -137,6 +140,7 @@ export class YahooMarket implements Market {
 
 	async quotes(symbols: string[]) {
 		let error: string | null = null;
+		const failed: { symbol: string; message: string }[] = [];
 		const got = await mapLimit(symbols, 4, async (s) => {
 			try {
 				const { meta, candles } = await this.fetchChart(s, "range=1d&interval=1h");
@@ -145,11 +149,12 @@ export class YahooMarket implements Market {
 				return { ...meta, dayOpen: first?.o ?? null };
 			} catch (e) {
 				error = `${s}: ${(e as Error).message}`;
+				failed.push({ symbol: s, message: (e as Error).message });
 				return null;
 			}
 		});
 		const quotes = got.filter((q): q is QuoteData => q !== null);
-		return { quotes, error: quotes.length || !symbols.length ? null : error };
+		return { quotes, error: quotes.length || !symbols.length ? null : error, failed };
 	}
 
 	chart(symbol: string, range: ChartRange) {
@@ -213,9 +218,9 @@ export const FAKE_CATALOG: FakeInstrument[] = [
 ];
 
 /** Handelszeiten der Fake-Börsen in Berliner Zeit (Stunde, Minute). */
-const FAKE_HOURS: Record<string, { tz: string; pre?: [number, number]; reg: [number, number]; end: [number, number]; post?: [number, number] }> = {
-	XETRA: { tz: "Europe/Berlin", pre: [8, 0], reg: [9, 0], end: [17, 30], post: [22, 0] },
-	NasdaqGS: { tz: "America/New_York", pre: [10, 0], reg: [15, 30], end: [22, 0], post: [23, 59] },
+const FAKE_HOURS: Record<string, { tz: string; pre?: [number, number]; reg: [number, number]; end: [number, number]; post?: [number, number]; weekdays?: boolean }> = {
+	XETRA: { tz: "Europe/Berlin", pre: [8, 0], reg: [9, 0], end: [17, 30], post: [22, 0], weekdays: true },
+	NasdaqGS: { tz: "America/New_York", pre: [10, 0], reg: [15, 30], end: [22, 0], post: [23, 59], weekdays: true },
 	CCC: { tz: "UTC", reg: [0, 0], end: [23, 59] },
 	CCY: { tz: "Europe/London", reg: [0, 0], end: [23, 59] },
 };
@@ -231,6 +236,7 @@ export class FakeMarket implements Market {
 	readonly kind = "fake" as const;
 	readonly items = new Map(FAKE_CATALOG.map((i) => [i.symbol, { ...i }]));
 	failing = false;
+	readonly failSymbols = new Set<string>(); // nur diese Symbole antworten nicht (z. B. HTTP 429 für ein Symbol)
 	calls = 0;
 	private readonly now: () => number;
 	constructor(now: () => number = Date.now) {
@@ -247,6 +253,8 @@ export class FakeMarket implements Market {
 		const h = FAKE_HOURS[exchange];
 		if (!h) return null;
 		const d = new Date(this.now());
+		// am Wochenende wie Yahoo: die Zeiten des letzten Handelstags (Freitag) – also geschlossen
+		if (h.weekdays) while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
 		const at = ([hh, mm]: [number, number]) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm).getTime();
 		return { preStart: h.pre ? at(h.pre) : null, regStart: at(h.reg), regEnd: at(h.end), postEnd: h.post ? at(h.post) : null };
 	}
@@ -263,8 +271,10 @@ export class FakeMarket implements Market {
 
 	async quotes(symbols: string[]) {
 		this.calls++;
-		if (this.failing) return { quotes: [], error: "Fake-Börse: nicht erreichbar" };
-		return { quotes: symbols.flatMap((s) => (this.items.has(s) ? [this.meta(this.items.get(s)!)] : [])), error: null };
+		if (this.failing) return { quotes: [], error: "Fake-Börse: nicht erreichbar", failed: symbols.map((symbol) => ({ symbol, message: "nicht erreichbar" })) };
+		const failed = symbols.filter((s) => this.failSymbols.has(s)).map((symbol) => ({ symbol, message: "HTTP 429" }));
+		const quotes = symbols.flatMap((s) => (this.items.has(s) && !this.failSymbols.has(s) ? [this.meta(this.items.get(s)!)] : []));
+		return { quotes, error: quotes.length || !symbols.length ? null : "Fake-Börse: keine Kurse", failed };
 	}
 
 	async chart(symbol: string, range: ChartRange) {

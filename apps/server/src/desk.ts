@@ -2,19 +2,21 @@
 // jede Änderung läuft synchron in einer Transaktion (Node ist einthreadig – zwei Klicks führen nie doppelt aus).
 // Agenten schlagen vor, du gibst frei. Echtes Geld bewegt der Desk nie: Orders für ein manuelles Depot
 // (z. B. Trade Republic) führst du selbst in der App des Brokers aus und trägst die Ausführung hier ein.
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type {
 	Account, AccountDetail, AccountSummary, AgentsData, Alert, Analysis, BrokerStatus, Reconcile, CashMove, Chart, ChartRange, ChatMessage, Check, Cockpit, CockpitPosition, CurvePoint, DeskEvent, ImportResult, JournalEntry,
 	NewsItem, Overview, Position, Proposal, ProposalStatus, RiskData, RiskLimits, ScanRow, SearchHit, SessionInfo, Side, Trade, WatchItem,
 } from "@desk/shared";
 import {
-	ProposalInputSchema, RiskLimitsSchema, atr, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
+	MAX_EUR, PriceSchema, ProposalInputSchema, QtySchema, RiskLimitsSchema, atr, cents, decimals, oversold, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
 	type DayStats, type SessionState,
 } from "@desk/shared";
 import type { Config } from "./config.ts";
 import type { Database } from "./db.ts";
 import { fxSymbol, type Market, type QuoteData } from "./market.ts";
-import type { Broker } from "./broker.ts";
+import type { Broker, BrokerExecution, BrokerOrder, PlaceResult } from "./broker.ts";
+import { OwnerAuth } from "./auth.ts";
 
 export class DeskError extends Error {
 	readonly status: number;
@@ -29,12 +31,13 @@ export class DeskError extends Error {
 /** Wer fragt: der Browser (du) oder ein Agent über cli/desk.py. */
 export type Origin = "web" | "cli";
 
-interface TradeRow { id: number; account_id: string; symbol: string; side: Side; qty: number; price: number; currency: string; fx: number; value_cents: number; fee_cents: number; time: number; source: Trade["source"]; proposal_id: number | null; note: string }
+interface TradeRow { id: number; account_id: string; symbol: string; side: Side; qty: number; price: number; currency: string; fx: number; value_cents: number; fee_cents: number; time: number; source: Trade["source"]; proposal_id: number | null; note: string; deleted_at?: number | null }
 interface ProposalRow {
 	id: number; account_id: string; author: string; symbol: string; side: Side; qty: number; order_type: "market" | "limit"; limit_price: number | null; stop_loss: number | null; take_profit: number | null;
 	confidence: number; thesis: string; status: ProposalStatus; reason: string; quote_price: number; warnings: string; created_at: number; decided_at: number | null; decided_by: string | null;
 	approved_qty: number | null; expires_at: number; fill_price: number | null; stop_hit_at: number | null; target_hit_at: number | null;
 	broker_order_id: string | null; broker_message: string | null; reply_id: string | null; broker_conid: number | null;
+	broker_coid: string | null; status_at: number | null; last_seen_at: number | null; filled_qty: number | null; closed_at: number | null;
 }
 interface QuoteRow {
 	symbol: string; price: number; prev_close: number | null; market_time: number | null; fetched_at: number; day_open: number | null; day_high: number | null; day_low: number | null; volume: number | null;
@@ -46,7 +49,38 @@ export const DEFAULT_LIMITS: Omit<RiskLimits, "accountId"> = { maxOrderCents: 50
 const SYMBOL = /^[A-Z0-9.=^-]{1,24}$/;
 const QUOTE_FRESH_MS = 60_000;
 const OPEN_LIMIT_DAYS = 30;
+const MARKET_WAIT_DAYS = 4; // eine Papier-Market-Order nach Börsenschluss wartet höchstens bis dahin auf die Eröffnung
 const PLACED_DAYS = 7;
+const CONFIRM_TTL_MS = 15 * 60_000; // eine Rückfrage des Brokers gilt so lange; danach neu freigeben
+const UNLISTED_MS = 24 * 3_600_000; // so lange darf eine Broker-Order aus der Orderliste fehlen, dann gilt sie als abgelaufen
+const BROKER_KEEPALIVE_MS = 60_000; // IBKR empfiehlt etwa einmal je Minute /tickle, unabhängig vom Kurstakt
+
+const MAX_FEE_EUR = 10_000;
+const MIN_TRADE_TIME = new Date(1990, 0, 1).getTime(); // davor erfasst niemand einen Trade – ein Tippfehler
+const dateText = (t: number) => new Date(t).toLocaleDateString("de-DE");
+
+/** Stückzahl aus einer Eingabe: endlich, > 0, höchstens MAX_QTY und 6 Nachkommastellen – sonst 400. */
+function parseQty(v: unknown, what = "Stückzahl"): number {
+	const r = QtySchema.safeParse(v);
+	if (!r.success || roundQty(r.data) <= 0) throw new DeskError(`${what}: größer als 0, höchstens 10 Mio. und höchstens 6 Nachkommastellen.`);
+	return roundQty(r.data);
+}
+
+function parsePrice(v: unknown, what = "Kurs"): number {
+	const r = PriceSchema.safeParse(v);
+	if (!r.success) throw new DeskError(`${what}: größer als 0, höchstens 10 Mio. und höchstens 8 Nachkommastellen.`);
+	return r.data;
+}
+
+/** Betrag in EUR mit höchstens zwei Nachkommastellen → Cent; fehlt er, gilt fallback. */
+function parseFeeCents(v: unknown, fallback: number): number {
+	if (v === undefined || v === null) return fallback;
+	if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > MAX_FEE_EUR || decimals(v) > 2) throw new DeskError(`Gebühr in EUR zwischen 0 und ${MAX_FEE_EUR.toLocaleString("de-DE")}, höchstens 2 Nachkommastellen.`);
+	return cents(v);
+}
+
+const RESERVING = "'open','placed','sending','confirm'"; // freigegeben, aber noch nicht (ganz) ausgeführt
+const eurText = (c: number) => `${(c / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
 
 const pct = (n: number) => `${n.toFixed(1).replace(".", ",")} %`;
 const num = (n: number) => n.toLocaleString("de-DE", { maximumFractionDigits: 6 });
@@ -54,6 +88,8 @@ const num = (n: number) => n.toLocaleString("de-DE", { maximumFractionDigits: 6 
 export class Desk extends EventEmitter {
 	marketState: "live" | "off" | "error";
 	marketError: string | null = null;
+	/** Symbol → Fehler des letzten Abrufs (auch wenn andere Symbole Kurse bekamen). */
+	readonly quoteErrors = new Map<string, string>();
 	quotesAt: number | null = null;
 	ticks = 0;
 	private timer: NodeJS.Timeout | null = null;
@@ -61,11 +97,13 @@ export class Desk extends EventEmitter {
 	private charts = new Map<string, { at: number; chart: Chart }>();
 	readonly brokers: Map<string, Broker>;
 	private brokerState = new Map<string, BrokerStatus>();
+	private ledgers = new Map<string, { key: string; rows: TradeRow[]; book: ReturnType<typeof buildBook> }>();
 
 	readonly cfg: Config;
 	readonly db: Database;
 	readonly market: Market;
 	readonly now: () => number;
+	readonly auth: OwnerAuth; // deine PIN und Sitzungen (ein Objekt je Desk: Sperre nach Fehlversuchen gilt prozessweit)
 
 	constructor(cfg: Config, db: Database, market: Market, now: () => number = Date.now, brokers: Map<string, Broker> = new Map()) {
 		super();
@@ -74,6 +112,7 @@ export class Desk extends EventEmitter {
 		this.db = db;
 		this.market = market;
 		this.now = now;
+		this.auth = new OwnerAuth(db, now);
 		this.setMaxListeners(200);
 		this.marketState = market.kind === "off" ? "off" : "live";
 		for (const a of cfg.accounts)
@@ -161,7 +200,7 @@ export class Desk extends EventEmitter {
 	async refresh(symbols: string[]): Promise<void> {
 		if (this.market.kind === "off" || !symbols.length) return;
 		const unique = [...new Set(symbols)];
-		const { quotes, error } = await this.market.quotes(unique);
+		const { quotes, error, failed } = await this.market.quotes(unique);
 		this.storeQuotes(quotes);
 		const currencies = new Set<string>();
 		for (const s of unique) {
@@ -169,12 +208,36 @@ export class Desk extends EventEmitter {
 			if (c && c !== "EUR") currencies.add(c);
 		}
 		const fxSyms = [...currencies].map(fxSymbol).filter((s) => !unique.includes(s));
-		const fxRes = fxSyms.length ? await this.market.quotes(fxSyms) : { quotes: [], error: null };
+		const fxRes = fxSyms.length ? await this.market.quotes(fxSyms) : { quotes: [], error: null, failed: [] };
 		this.storeQuotes(fxRes.quotes);
+		for (const q of [...quotes, ...fxRes.quotes]) this.quoteErrors.delete(q.symbol);
+		for (const f of [...(failed ?? []), ...(fxRes.failed ?? [])]) this.quoteErrors.set(f.symbol, f.message);
 		const err = error ?? fxRes.error;
 		this.marketState = err ? "error" : "live";
-		this.marketError = err;
+		// einzelne Ausfälle sichtbar machen: der Markt ist "live", aber diese Symbole haben keinen neuen Kurs
+		const some = [...this.quoteErrors.keys()];
+		this.marketError = err ?? (some.length ? `Kein neuer Kurs für ${some.slice(0, 6).join(", ")}${some.length > 6 ? ` und ${some.length - 6} weitere` : ""}` : null);
 		if (quotes.length) this.quotesAt = this.now();
+	}
+
+	/**
+	 * Warum ein Kurs für eine Entscheidung nicht reicht: während der Handelszeit älter als maxQuoteAgeSec (der Wechselkurs
+	 * ebenso). Außerhalb der Handelszeit ist der letzte Kurs der aktuelle. Ohne Handelszeiten gilt: wie offen.
+	 */
+	quoteProblem(symbol: string): string | null {
+		if (this.market.kind === "off") return null;
+		const q = this.quoteRow(symbol);
+		if (!q) return null; // ohne Kurs meldet die Risikoprüfung selbst "Kein aktueller Kurs"
+		if (q.reg_start !== null && this.sessionOf(q) !== "open") return null;
+		const max = this.cfg.maxQuoteAgeSec * 1000;
+		const age = (fetched: number) => `${Math.round((this.now() - fetched) / 60_000)} min`;
+		if (this.now() - q.fetched_at > max) return `Kein aktueller Kurs für ${symbol} – der letzte ist ${age(q.fetched_at)} alt (Grenze ${this.cfg.maxQuoteAgeSec} s während der Handelszeit).`;
+		const currency = this.instrument(symbol)?.currency;
+		if (currency && currency !== "EUR") {
+			const f = this.quoteRow(fxSymbol(currency));
+			if (!f || this.now() - f.fetched_at > max) return `Kein aktueller Wechselkurs ${currency}/EUR${f ? ` – der letzte ist ${age(f.fetched_at)} alt` : ""}.`;
+		}
+		return null;
 	}
 
 	private async ensureFresh(symbol: string) {
@@ -184,12 +247,62 @@ export class Desk extends EventEmitter {
 
 	/* ------------------------------------------------------------------ Depots */
 
+	/**
+	 * Trades und FIFO-Buch je Depot, zwischengespeichert, bis sich die Trades des Depots ändern (Anzahl, höchste ID, Summe
+	 * der aktiven IDs – fängt auch Löschen und Wiederherstellen). Ein Takt oder eine Abfrage baut das Buch so einmal statt
+	 * einmal je Position, Vorschlag oder Stop-Hinweis.
+	 */
+	private ledger(accountId: string): { rows: TradeRow[]; book: ReturnType<typeof buildBook> } {
+		const k = this.db.get<{ n: number; m: number | null; s: number | null }>("SELECT COUNT(*) AS n, MAX(id) AS m, SUM(CASE WHEN deleted_at IS NULL THEN id ELSE 0 END) AS s FROM trade WHERE account_id = ?", accountId)!;
+		const key = `${k.n}|${k.m ?? 0}|${k.s ?? 0}`;
+		const hit = this.ledgers.get(accountId);
+		if (hit && hit.key === key) return hit;
+		const rows = this.db.all<TradeRow>("SELECT * FROM trade WHERE account_id = ? AND deleted_at IS NULL ORDER BY time, id", accountId);
+		const book = buildBook(rows.map((t) => ({ id: t.id, symbol: t.symbol, side: t.side, qty: t.qty, price: t.price, valueCents: t.value_cents, feeCents: t.fee_cents, time: t.time })));
+		const entry = { key, rows, book };
+		this.ledgers.set(accountId, entry);
+		return entry;
+	}
+
 	private tradeRows(accountId: string): TradeRow[] {
-		return this.db.all<TradeRow>("SELECT * FROM trade WHERE account_id = ? AND deleted_at IS NULL ORDER BY time, id", accountId);
+		return this.ledger(accountId).rows;
+	}
+
+	/**
+	 * Vorschläge, deren Kauf-Lose noch im Bestand sind (FIFO), jüngstes Los zuerst. Ein Stop gilt nur für die Position, die
+	 * sein Vorschlag eröffnet hat – nicht für einen späteren Kauf von Hand desselben Symbols.
+	 */
+	private heldProposals(accountId: string): Map<string, number[]> {
+		const { rows, book } = this.ledger(accountId);
+		const byTrade = new Map(rows.map((t) => [t.id, t.proposal_id]));
+		const out = new Map<string, number[]>();
+		for (const [symbol, lots] of book.openLots) {
+			const ids = [...new Set(lots.map((l) => byTrade.get(l.tradeId)).filter((x): x is number => typeof x === "number"))].reverse();
+			if (ids.length) out.set(symbol, ids);
+		}
+		return out;
+	}
+
+	/**
+	 * Verkäufe, die mit dieser Änderung (add kommt dazu, remove fällt weg) zu ihrem Zeitpunkt nicht mehr gedeckt wären:
+	 * Trade-ID → Stück zu viel. Geprüft wird das ganze Buch in zeitlicher Reihenfolge, nicht nur der heutige Bestand.
+	 */
+	private newOversells(accountId: string, add: { id: number; symbol: string; side: Side; qty: number; time: number }[], remove?: number): Map<number, number> {
+		const rows = this.tradeRows(accountId);
+		const before = oversold(rows);
+		const after = oversold([...rows.filter((t) => t.id !== remove), ...add]);
+		return new Map([...after].filter(([id, q]) => q > (before.get(id) ?? 0) + 1e-9));
+	}
+
+	/** Zeitpunkt aus einer Eingabe: fehlt er, gilt jetzt; sonst ab 1990 und höchstens eine Minute in der Zukunft. */
+	private tradeTime(v: unknown): number {
+		if (v === undefined || v === null) return this.now();
+		if (typeof v !== "number" || !Number.isFinite(v) || v < MIN_TRADE_TIME || v > this.now() + 60_000) throw new DeskError("Zeitpunkt: ab 1990 und nicht in der Zukunft.");
+		return Math.trunc(v);
 	}
 
 	private book(accountId: string) {
-		return buildBook(this.tradeRows(accountId).map((t) => ({ id: t.id, symbol: t.symbol, side: t.side, qty: t.qty, price: t.price, valueCents: t.value_cents, feeCents: t.fee_cents, time: t.time })));
+		return this.ledger(accountId).book;
 	}
 
 	private depositsCents(a: Account): number {
@@ -221,6 +334,7 @@ export class Desk extends EventEmitter {
 			returnPct: returnPct(equity, deposits),
 			positions: book.holdings.size,
 			missingQuotes: v.missing,
+			oversoldTrades: [...book.oversold.keys()],
 		};
 	}
 
@@ -232,15 +346,17 @@ export class Desk extends EventEmitter {
 
 	private positions(a: Account, s: AccountSummary): Position[] {
 		const book = this.book(a.id);
+		const held = this.heldProposals(a.id);
 		const out: Position[] = [];
 		for (const h of book.holdings.values()) {
 			const i = this.instrument(h.symbol);
 			const p = this.priced(h.symbol);
 			const value = p ? orderValueCents(h.qty, p.price, p.fx) : h.costCents;
-			const last = this.db.get<{ stop_loss: number | null; take_profit: number | null }>(
-				"SELECT stop_loss, take_profit FROM proposal WHERE account_id = ? AND symbol = ? AND side = 'buy' AND status = 'filled' ORDER BY decided_at DESC LIMIT 1",
-				a.id, h.symbol,
-			);
+			// Stop und Ziel des jüngsten Vorschlags, dessen Kauf noch im Bestand ist; ein Kauf von Hand hat keinen
+			const ids = held.get(h.symbol) ?? [];
+			const last = ids.length
+				? this.db.get<{ stop_loss: number | null; take_profit: number | null }>(`SELECT stop_loss, take_profit FROM proposal WHERE id IN (${ids.map(() => "?").join(",")}) AND side = 'buy' ORDER BY (stop_loss IS NULL), decided_at DESC LIMIT 1`, ...ids)
+				: undefined;
 			out.push({
 				symbol: h.symbol,
 				name: i?.name ?? h.symbol,
@@ -332,6 +448,7 @@ export class Desk extends EventEmitter {
 			curve,
 			pending: this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE status = 'pending'")!.n,
 			events: this.events(30),
+			failedQuotes: [...this.quoteErrors.keys()].sort(),
 		};
 	}
 
@@ -432,9 +549,9 @@ export class Desk extends EventEmitter {
 	addAlert(body: { symbol?: unknown; op?: unknown; price?: unknown }, actor: string): WatchItem[] {
 		const symbol = this.normalizeSymbol(body.symbol);
 		if (body.op !== "above" && body.op !== "below") throw new DeskError("Alarm: über oder unter?");
-		if (typeof body.price !== "number" || !(body.price > 0)) throw new DeskError("Alarm: Kurs muss größer als 0 sein.");
-		this.db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES (?,?,?,?)", symbol, body.op, body.price, this.now());
-		this.event("alert.add", actor, `Alarm ${symbol} ${body.op === "above" ? "über" : "unter"} ${num(body.price)}`);
+		const price = parsePrice(body.price, "Alarm: Kurs");
+		this.db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES (?,?,?,?)", symbol, body.op, price, this.now());
+		this.event("alert.add", actor, `Alarm ${symbol} ${body.op === "above" ? "über" : "unter"} ${num(price)}`);
 		return this.watchlist();
 	}
 
@@ -445,17 +562,28 @@ export class Desk extends EventEmitter {
 
 	/* ------------------------------------------------------------------ Vorschläge und Orders */
 
-	private toProposal(r: ProposalRow): Proposal {
+	/** Risiko eines Kaufs bis zum Stop (inkl. beider Gebühren), Anteil am Depot und Kursziel in R. */
+	private riskOf(r: ProposalRow, fx: number | null, equityCents: number) {
+		const entry = r.fill_price ?? r.limit_price ?? this.priced(r.symbol)?.price ?? r.quote_price;
+		const stop = r.side === "buy" ? r.stop_loss : null;
+		if (!stop || !(entry > stop) || fx === null) return { riskCents: null, riskPct: null, targetR: null };
+		const riskCents = orderValueCents(r.approved_qty ?? r.qty, entry - stop, fx) + 2 * this.account(r.account_id).feeCents;
+		return { riskCents, riskPct: equityCents > 0 ? (riskCents / equityCents) * 100 : null, targetR: r.take_profit && r.take_profit > entry ? (r.take_profit - entry) / (entry - stop) : null };
+	}
+
+	private toProposal(r: ProposalRow, equityCents?: number): Proposal {
 		const i = this.instrument(r.symbol);
 		const p = this.priced(r.symbol);
 		const qty = r.approved_qty ?? r.qty;
 		const unit = r.limit_price ?? p?.price ?? r.quote_price;
+		const fx = p?.fx ?? this.fx(i?.currency ?? "EUR");
 		return {
 			id: r.id, accountId: r.account_id, author: r.author, symbol: r.symbol, name: i?.name ?? r.symbol, currency: i?.currency ?? "EUR", side: r.side, qty: r.qty, orderType: r.order_type,
 			limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, confidence: r.confidence, thesis: r.thesis, status: r.status, reason: r.reason, quotePrice: r.quote_price,
-			price: p?.price ?? null, estimateCents: orderValueCents(qty, unit, p?.fx ?? this.fx(i?.currency ?? "EUR") ?? 1), warnings: JSON.parse(r.warnings) as string[], createdAt: r.created_at,
+			price: p?.price ?? null, estimateCents: orderValueCents(qty, unit, fx ?? 1) /* nur Anzeige */, warnings: JSON.parse(r.warnings) as string[], createdAt: r.created_at,
 			decidedAt: r.decided_at, decidedBy: r.decided_by, approvedQty: r.approved_qty, expiresAt: r.expires_at, fillPrice: r.fill_price,
-			brokerOrderId: r.broker_order_id, brokerMessage: r.broker_message,
+			brokerOrderId: r.broker_order_id, brokerMessage: r.broker_message, filledQty: r.filled_qty,
+			...this.riskOf(r, fx, equityCents ?? this.summary(this.account(r.account_id)).equityCents),
 		};
 	}
 
@@ -482,29 +610,72 @@ export class Desk extends EventEmitter {
 			params.push(opts.author);
 		}
 		const rows = this.db.all<ProposalRow>(`SELECT * FROM proposal ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT ?`, ...params, opts.limit ?? 300);
-		return rows.map((r) => this.toProposal(r));
+		const equity = new Map(this.cfg.accounts.map((a) => [a.id, this.summary(a).equityCents]));
+		return rows.map((r) => this.toProposal(r, equity.get(r.account_id)));
 	}
 
-	private check(a: Account, o: { side: Side; qty: number; orderType: "market" | "limit"; limitPrice?: number | null; stopLoss?: number | null; takeProfit?: number | null; symbol: string }, openByAuthor?: number, byAgent = false): Check {
+	/**
+	 * Was freigegebene, noch nicht (ganz) ausgeführte Orders eines Depots binden: Cash und Positionswert der Käufe, Stück
+	 * der Verkäufe. Ohne Kurs oder Wechselkurs einer Kauf-Order lässt sich das Cash nicht prüfen (unpriced).
+	 */
+	private reserved(accountId: string, exclude?: number): { cashCents: number; buyValue: Map<string, number>; sellQty: Map<string, number>; unpriced: number[]; riskCents: number } {
+		const a = this.account(accountId);
+		const out = { cashCents: 0, buyValue: new Map<string, number>(), sellQty: new Map<string, number>(), unpriced: [] as number[], riskCents: 0 };
+		for (const r of this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE account_id = ? AND status IN (${RESERVING}) AND id != ?`, accountId, exclude ?? 0)) {
+			const qty = roundQty((r.approved_qty ?? r.qty) - (r.filled_qty ?? 0)); // der ausgeführte Teil steckt schon im Buch
+			if (qty <= 0) continue;
+			if (r.side === "sell") {
+				out.sellQty.set(r.symbol, (out.sellQty.get(r.symbol) ?? 0) + qty);
+				continue;
+			}
+			const p = this.priced(r.symbol);
+			const fx = p?.fx ?? this.fx(this.instrument(r.symbol)?.currency ?? "");
+			const unit = r.limit_price ?? p?.price ?? r.quote_price;
+			if (fx === null || !(unit > 0)) {
+				out.unpriced.push(r.id);
+				continue;
+			}
+			const value = orderValueCents(qty, unit, fx);
+			out.cashCents += value + a.feeCents;
+			out.buyValue.set(r.symbol, (out.buyValue.get(r.symbol) ?? 0) + value);
+			if (r.stop_loss && r.stop_loss < unit) out.riskCents += orderValueCents(qty, unit - r.stop_loss, fx) + 2 * a.feeCents;
+		}
+		return out;
+	}
+
+	/**
+	 * Risikoprüfung gegen Bestand, Cash und alle schon freigegebenen offenen Orders des Depots (exclude: die Order selbst).
+	 * Während der Handelszeit nur mit frischem Kurs.
+	 */
+	private check(a: Account, o: { side: Side; qty: number; orderType: "market" | "limit"; limitPrice?: number | null; stopLoss?: number | null; takeProfit?: number | null; symbol: string }, opts: { openByAuthor?: number; byAgent?: boolean; exclude?: number } = {}): Check {
 		const s = this.summary(a);
 		const p = this.priced(o.symbol);
 		const book = this.book(a.id);
 		const held = book.holdings.get(o.symbol);
-		return checkOrder({
+		const res = this.reserved(a.id, opts.exclude);
+		const c = checkOrder({
 			...o,
 			price: p?.price ?? null,
 			fx: p?.fx ?? null,
-			cashCents: s.cashCents,
+			cashCents: s.cashCents - res.cashCents,
 			equityCents: s.equityCents,
 			feeCents: a.feeCents,
-			heldQty: held?.qty ?? 0,
-			positionValueCents: held ? (p ? orderValueCents(held.qty, p.price, p.fx) : held.costCents) : 0,
+			heldQty: Math.max(0, roundQty((held?.qty ?? 0) - (res.sellQty.get(o.symbol) ?? 0))),
+			positionValueCents: (held ? (p ? orderValueCents(held.qty, p.price, p.fx) : held.costCents) : 0) + (res.buyValue.get(o.symbol) ?? 0),
 			limits: this.limits(a.id),
 			killSwitch: this.killSwitch,
 			dayLossPct: this.dayLossPct(a, s),
-			openByAuthor,
-			byAgent,
+			openByAuthor: opts.openByAuthor,
+			byAgent: opts.byAgent ?? false,
 		});
+		const violations = [...c.violations];
+		const warnings = [...c.warnings];
+		const stale = this.quoteProblem(o.symbol);
+		if (stale) violations.unshift(stale);
+		if (o.side === "buy" && res.unpriced.length) violations.push(`Freigegebene Order ${res.unpriced.map((id) => `#${id}`).join(", ")} ohne Kurs oder Wechselkurs – das gebundene Cash ist nicht prüfbar.`);
+		if (o.side === "buy" && res.cashCents > 0) warnings.push(`Freigegebene, noch offene Orders binden ${eurText(res.cashCents)} – im verfügbaren Cash schon abgezogen.`);
+		if (o.side === "sell" && res.sellQty.get(o.symbol)) warnings.push(`${num(res.sellQty.get(o.symbol)!)} Stück ${o.symbol} sind schon in offenen Verkaufsorders gebunden.`);
+		return { ...c, ok: violations.length === 0, violations, warnings };
 	}
 
 	/**
@@ -513,6 +684,9 @@ export class Desk extends EventEmitter {
 	 */
 	async submit(body: unknown, origin: Origin, { dryRun = false } = {}): Promise<{ ok: boolean; check: Check; proposal: Proposal | null }> {
 		const raw = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+		// Tippfehler wie "stoploss" sind kein "ohne Stop": unbekannte Felder von Agenten werden abgewiesen
+		const unknown = origin === "cli" ? Object.keys(raw).filter((k) => !(k in ProposalInputSchema.shape)) : [];
+		if (unknown.length) throw new DeskError(`Ungültiger Vorschlag: unbekanntes Feld „${unknown[0].slice(0, 40)}“ – erlaubt: ${Object.keys(ProposalInputSchema.shape).join(", ")}.`);
 		const parsed = ProposalInputSchema.safeParse(origin === "web" ? { confidence: 1, thesis: "Eigene Order", ...raw, author: this.cfg.user } : raw);
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
@@ -533,8 +707,13 @@ export class Desk extends EventEmitter {
 		if (!isUser && input.confidence < this.cfg.minConfidence) extra.push(`Zuversicht ${Math.round(input.confidence * 100)} % liegt unter dem Mindestwert von ${Math.round(this.cfg.minConfidence * 100)} %.`);
 		if (input.orderType === "market" && input.limitPrice) extra.push("Market-Order mit Limitkurs – orderType \"limit\" verwenden oder den Limitkurs weglassen.");
 		if (!extra.length) await this.ensureFresh(symbol);
-		const openByAuthor = isUser ? undefined : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE account_id = ? AND author = ? AND status = 'pending'", a.id, author)!.n;
-		const c = this.check(a, { ...input, symbol }, openByAuthor, !isUser);
+		// "je Autor": über alle Depots gezählt, sonst hielte ein Agent mit vier Depots viermal so viele offen
+		const openByAuthor = isUser ? undefined : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND status = 'pending'", author)!.n;
+		const c = this.check(a, { ...input, symbol }, { openByAuthor, byAgent: !isUser });
+		const waiting = input.side === "buy" ? this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND side = 'buy' AND status = 'pending'", a.id) : [];
+		const waitingCents = waiting.reduce((sum, w) => sum + orderValueCents(w.qty, w.limit_price ?? w.quote_price, this.priced(w.symbol)?.fx ?? 1) + a.feeCents, 0);
+		if (waiting.length && c.ok && waitingCents + c.estimateCents + c.feeCents > this.summary(a).cashCents - this.reserved(a.id).cashCents)
+			c.warnings.push(`Zusammen mit ${waiting.length} wartenden Kaufvorschlägen reicht das Cash nicht für alle – bei der Freigabe wird neu geprüft.`);
 		const check: Check = { ...c, ok: c.ok && !extra.length, violations: [...extra, ...c.violations] };
 		if (!check.ok && !dryRun && !isUser) this.event("proposal.blocked", author, `Vorschlag ${sideLabel[input.side]} ${num(input.qty)} ${symbol} nicht angelegt: ${check.violations[0]}`);
 		if (dryRun || !check.ok) return { ok: check.ok, check, proposal: null };
@@ -555,6 +734,20 @@ export class Desk extends EventEmitter {
 		return { ok: true, check, proposal: this.proposal(id) };
 	}
 
+	/**
+	 * Prüfung direkt bevor eine Order rausgeht (Freigabe, Bestätigen einer Broker-Rückfrage): Kursbewegung seit dem
+	 * Vorschlag (bei Agenten) und die volle Risikoprüfung. null heißt: darf raus.
+	 */
+	private verdict(r: ProposalRow, qty: number): { status: "stale" | "rejected"; reason: string } | null {
+		const a = this.account(r.account_id);
+		const p = this.priced(r.symbol);
+		if (r.author !== this.cfg.user && p && movePct(r.quote_price, p.price) > this.cfg.staleMovePct)
+			return { status: "stale", reason: `Kurs hat sich um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt. Agent soll neu vorschlagen.` };
+		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, { byAgent: r.author !== this.cfg.user, exclude: r.id });
+		if (!check.ok) return { status: "rejected", reason: `Risikoprüfung vor dem Senden: ${check.violations.join(" ")}` };
+		return null;
+	}
+
 	/** Ausführen innerhalb einer Transaktion; nimmt den Vorschlag nur, solange er noch "pending" ist. */
 	private execute(id: number, qty: number, by: string): Proposal {
 		const r = this.proposalRow(id);
@@ -571,17 +764,10 @@ export class Desk extends EventEmitter {
 		};
 		const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id}`;
 		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
-		if (r.author !== this.cfg.user && p && movePct(r.quote_price, p.price) > this.cfg.staleMovePct) {
-			const reason = `Kurs hat sich um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt. Agent soll neu vorschlagen.`;
-			set("stale", { reason });
-			this.event("proposal.stale", by, `${label}: ${reason}`, notify);
-			return this.proposal(id);
-		}
-		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, undefined, r.author !== this.cfg.user);
-		if (!check.ok) {
-			const reason = `Risikoprüfung bei Freigabe: ${check.violations.join(" ")}`;
-			set("rejected", { reason });
-			this.event("proposal.rejected", by, `${label}: ${reason}`, notify);
+		const v = this.verdict(r, qty);
+		if (v) {
+			set(v.status, { reason: v.reason });
+			this.event(v.status === "stale" ? "proposal.stale" : "proposal.rejected", by, `${label}: ${v.reason}`, notify);
 			return this.proposal(id);
 		}
 		if (a.kind === "broker") {
@@ -592,7 +778,7 @@ export class Desk extends EventEmitter {
 				this.event("proposal.rejected", by, `${label}: ${reason}`, notify);
 				return this.proposal(id);
 			}
-			set("sending", { expires_at: now + PLACED_DAYS * 86_400_000 });
+			set("sending", { expires_at: now + PLACED_DAYS * 86_400_000, status_at: now });
 			return this.proposal(id);
 		}
 		if (a.kind === "manual") {
@@ -600,9 +786,15 @@ export class Desk extends EventEmitter {
 			this.event("proposal.placed", by, `${label} freigegeben – jetzt in ${a.broker} ausführen und die Ausführung eintragen.`, notify);
 			return this.proposal(id);
 		}
-		if (r.order_type === "limit" && r.limit_price && !crossed(r.side, p!.price, r.limit_price)) {
+		if (r.order_type === "limit" && r.limit_price && (!crossed(r.side, p!.price, r.limit_price) || !this.inSession(r.symbol))) {
 			set("open", { expires_at: now + OPEN_LIMIT_DAYS * 86_400_000 });
 			this.event("proposal.open", by, `${label} freigegeben – Limit ${num(r.limit_price)} ${p!.currency} offen.`, notify);
+			return this.proposal(id);
+		}
+		if (!this.inSession(r.symbol)) {
+			// Papier füllt nur zur Handelszeit – sonst zum letzten Schlusskurs, mit dem Wissen von heute
+			set("open", { expires_at: now + MARKET_WAIT_DAYS * 86_400_000, reason: "wartet auf den Handelsbeginn" });
+			this.event("proposal.open", by, `${label} freigegeben – wartet auf den Handelsbeginn.`, notify);
 			return this.proposal(id);
 		}
 		set("filled", { fill_price: p!.price });
@@ -617,10 +809,13 @@ export class Desk extends EventEmitter {
 		if (r.status !== "pending") throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.toProposal(r));
 		let qty = r.qty;
 		if (body.qty !== undefined) {
-			if (typeof body.qty !== "number" || !(body.qty > 0) || body.qty > r.qty + 1e-9) throw new DeskError(`Freigeben darfst du höchstens ${num(r.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
-			qty = roundQty(body.qty);
+			qty = parseQty(body.qty); // 0,0000001 wird nicht zu 0 gerundet und abgelehnt, sondern ist eine falsche Eingabe
+			if (qty > r.qty + 1e-9) throw new DeskError(`Freigeben darfst du höchstens ${num(r.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
 		}
 		await this.refresh([r.symbol]); // direkt vor dem Schreiben neu lesen
+		// ein alter Kurs entscheidet nichts – der Vorschlag bleibt offen, du gibst später frei
+		const stale = this.quoteProblem(r.symbol);
+		if (stale) throw new DeskError(`${stale} Nichts ausgeführt, der Vorschlag wartet weiter.`, 409, this.toProposal(r));
 		const out = this.db.tx(() => this.execute(id, qty, this.cfg.user));
 		if (out.status === "sending") await this.sendToBroker(id);
 		this.emit("tick", { at: this.now() });
@@ -664,17 +859,19 @@ export class Desk extends EventEmitter {
 		const a = this.account(r.account_id);
 		if (a.kind !== "manual") throw new DeskError(`Ausführungen von ${a.broker} kommen automatisch über die API.`, 409, this.toProposal(r));
 		const max = r.approved_qty ?? r.qty;
-		const qty = typeof body.qty === "number" ? roundQty(body.qty) : max;
-		if (!(qty > 0) || qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
-		if (typeof body.price !== "number" || !(body.price > 0)) throw new DeskError("Ausführungskurs in EUR fehlt.");
-		const feeCents = typeof body.feeEur === "number" && body.feeEur >= 0 ? Math.round(body.feeEur * 100) : a.feeCents;
-		const time = typeof body.time === "number" && body.time > 0 && body.time <= this.now() + 60_000 ? body.time : this.now();
+		const qty = body.qty === undefined || body.qty === null ? max : parseQty(body.qty);
+		if (qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
+		const price = parsePrice(body.price, "Ausführungskurs in EUR");
+		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
+		const time = this.tradeTime(body.time);
 		if (r.side === "sell" && (this.book(a.id).holdings.get(r.symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${r.symbol}.`);
+		if (r.side === "sell" && this.newOversells(a.id, [{ id: Number.MAX_SAFE_INTEGER, symbol: r.symbol, side: "sell", qty, time }]).size)
+			throw new DeskError(`Am ${dateText(time)} waren weniger als ${num(qty)} Stück ${r.symbol} im Depot – Zeitpunkt prüfen.`);
 		this.db.tx(() => {
-			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", body.price, qty, id);
+			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", price, qty, id);
 			if (!changes) throw new DeskError("Schon eingetragen.", 409);
-			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: body.price as number, currency: "EUR", fx: 1, feeCents, time, source: "proposal", proposalId: id, note: "" });
-			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id} zu ${num(body.price as number)} € in ${a.broker} ausgeführt`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
+			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "proposal", proposalId: id, note: "" });
+			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id} zu ${num(price)} € in ${a.broker} ausgeführt`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
 		});
 		this.emit("tick", { at: this.now() });
 		return this.proposal(id);
@@ -711,17 +908,46 @@ export class Desk extends EventEmitter {
 		return this.cfg.accounts.filter((a) => a.kind === "broker").map((a) => this.brokerStatus(a.id));
 	}
 
-	/** Symbol zu einer Kontrakt-ID dieses Depots (aus gesendeten Orders oder config.json). */
+	/** Symbol zu einer Kontrakt-ID dieses Depots (aus gesendeten Orders, dem Abgleich oder config.json). */
 	private symbolOfConid(accountId: string, conid: number | null): string | null {
 		if (conid === null) return null;
-		return this.db.get<{ symbol: string }>("SELECT symbol FROM broker_conid WHERE account_id = ? AND conid = ?", accountId, conid)?.symbol ?? null;
+		const known = this.db.get<{ symbol: string }>("SELECT symbol FROM broker_conid WHERE account_id = ? AND conid = ?", accountId, conid)?.symbol;
+		return known ?? Object.entries(this.cfg.brokers[accountId]?.conids ?? {}).find(([, c]) => c === conid)?.[0] ?? null;
 	}
 
 	private rememberConid(accountId: string, conid: number, symbol: string) {
 		this.db.run("INSERT INTO broker_conid (account_id, conid, symbol) VALUES (?,?,?) ON CONFLICT (account_id, conid) DO UPDATE SET symbol = excluded.symbol", accountId, conid, symbol);
 	}
 
-	/** Reservierte Order ("sending") an den Broker geben. Ergebnis: beim Broker, Rückfrage oder abgelehnt. */
+	/** Einmal je Schlüssel (Tabelle setting): für Hinweise, die bei jedem Abruf wieder auftreten würden. */
+	private noteOnce(key: string, fn: () => void) {
+		if (this.db.run("INSERT OR IGNORE INTO setting (key, value) VALUES (?, ?)", key, String(this.now())).changes) fn();
+	}
+
+	/**
+	 * Kennung dieser Installation (zufällig, einmal erzeugt). Steht in jeder Client-Order-ID, damit desk-<id> aus einer
+	 * neuen, wiederhergestellten oder zweiten Datenbank nie mit einer alten Order desselben IBKR-Kontos verwechselt wird.
+	 */
+	get installId(): string {
+		const row = this.db.get<{ value: string }>("SELECT value FROM setting WHERE key = 'install_id'");
+		if (row) return row.value;
+		this.db.run("INSERT OR IGNORE INTO setting (key, value) VALUES ('install_id', ?)", randomBytes(4).toString("hex"));
+		return this.db.get<{ value: string }>("SELECT value FROM setting WHERE key = 'install_id'")!.value;
+	}
+
+	/** Client-Order-ID eines Vorschlags; Orders von vor Migration 4 hießen desk-<id>. */
+	private coidOf(r: ProposalRow): string {
+		return r.broker_coid ?? `desk-${r.id}`;
+	}
+
+	/** Beim Broker gebuchte Stück und Durchschnittskurs eines Vorschlags (aus den Trades – die Wahrheit des Buchs). */
+	private fillsOf(id: number): { qty: number; avg: number | null } {
+		const f = this.db.get<{ q: number | null; v: number | null }>("SELECT SUM(qty) AS q, SUM(qty * price) AS v FROM trade WHERE proposal_id = ? AND deleted_at IS NULL", id);
+		const qty = roundQty(f?.q ?? 0);
+		return { qty, avg: qty > 0 ? (f!.v ?? 0) / qty : null };
+	}
+
+	/** Reservierte Order ("sending") an den Broker geben. Ergebnis: beim Broker, Rückfrage, abgelehnt oder unbekannt. */
 	private async sendToBroker(id: number): Promise<void> {
 		const r = this.proposalRow(id);
 		if (r.status !== "sending") return;
@@ -729,9 +955,10 @@ export class Desk extends EventEmitter {
 		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
 		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
 		const fail = (msg: string) => {
-			this.db.run("UPDATE proposal SET status = 'rejected', reason = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${msg}`, id);
+			this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${msg}`, this.now(), id);
 			this.event("proposal.rejected", "Desk", `${label}: ${a.broker} – ${msg}`, notify);
 		};
+		// bis hierher ist nichts gesendet: jeder Fehler ist eine Ablehnung
 		let broker: Broker;
 		try {
 			broker = this.brokerOf(a.id);
@@ -747,38 +974,78 @@ export class Desk extends EventEmitter {
 		} catch (e) {
 			return fail((e as Error).message);
 		}
+		const cOID = `desk-${this.installId}-${id}`;
 		this.rememberConid(a.id, conid, r.symbol);
-		this.db.run("UPDATE proposal SET broker_conid = ? WHERE id = ?", conid, id);
-		const res = await broker.place({ conid, side: r.side, qty: r.approved_qty ?? r.qty, type: r.order_type, limit: r.limit_price, cOID: `desk-${id}` });
+		this.db.run("UPDATE proposal SET broker_conid = ?, broker_coid = ?, status_at = ? WHERE id = ?", conid, cOID, this.now(), id);
+		let res: PlaceResult;
+		try {
+			res = await broker.place({ conid, side: r.side, qty: r.approved_qty ?? r.qty, type: r.order_type, limit: r.limit_price, cOID });
+		} catch (e) {
+			res = { kind: "unknown", message: (e as Error).message }; // ab hier kann die Order beim Broker sein
+		}
 		this.applyPlace(id, res);
 	}
 
-	private applyPlace(id: number, res: Awaited<ReturnType<Broker["place"]>>) {
+	private applyPlace(id: number, res: PlaceResult) {
 		const r = this.proposalRow(id);
 		const a = this.account(r.account_id);
+		const now = this.now();
 		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
 		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
 		if (res.kind === "submitted") {
-			this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ?, broker_message = NULL, reply_id = NULL WHERE id = ? AND status = 'sending'", res.orderId, id);
+			this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ?, broker_message = NULL, reply_id = NULL, reason = '', status_at = ?, last_seen_at = ? WHERE id = ? AND status = 'sending'", res.orderId, now, now, id);
 			this.event("broker.sent", "Desk", `${label} an ${a.broker} gesendet (Order ${res.orderId}${a.live ? ", echtes Geld" : ", Papierkonto"})`, notify);
 		} else if (res.kind === "reply") {
-			this.db.run("UPDATE proposal SET status = 'confirm', reply_id = ?, broker_message = ? WHERE id = ? AND status = 'sending'", res.replyId, res.message.slice(0, 1000), id);
+			this.db.run("UPDATE proposal SET status = 'confirm', reply_id = ?, broker_message = ?, status_at = ? WHERE id = ? AND status = 'sending'", res.replyId, res.message.slice(0, 1000), now, id);
 			this.event("broker.confirm", "Desk", `${label}: ${a.broker} fragt nach – „${res.message.slice(0, 200)}“ – bitte unter Orders bestätigen oder stornieren.`, { to: [this.cfg.user], ref: `#${id}` });
+		} else if (res.kind === "unknown") {
+			// keine sichere Antwort: die Order kann beim Broker arbeiten. Sie bleibt "wird gesendet"; der Abruf findet sie über
+			// ihre Client-Order-ID oder sagt nach 5 Minuten, dass du beim Broker nachsehen musst. Nie erneut senden.
+			const reason = `Keine sichere Antwort von ${a.broker} (${res.message}) – Ergebnis unbekannt. Der Desk sucht die Order über ihre ID und sendet nicht erneut.`;
+			this.db.run("UPDATE proposal SET reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", reason.slice(0, 500), now, id);
+			this.event("broker.unknown", "Desk", `${label}: ${reason}`, { to: [this.cfg.user, ...(notify?.to ?? [])], ref: `#${id}` });
 		} else {
-			this.db.run("UPDATE proposal SET status = 'rejected', reason = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${res.message}`.slice(0, 500), id);
+			this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${res.message}`.slice(0, 500), now, id);
 			this.event("proposal.rejected", "Desk", `${label}: ${a.broker} hat abgelehnt – ${res.message}`, notify);
 		}
 	}
 
-	/** Rückfrage des Brokers bestätigen – nur du, im Browser, nach dem Lesen des Originaltexts. */
+	/**
+	 * Rückfrage des Brokers bestätigen – nur du, im Browser, nach dem Lesen des Originaltexts. Bestätigen ist der Moment,
+	 * in dem die Order wirklich losgeht: Kursalter, Kursbewegung, Risikoprüfung und Sitzung werden wie bei der Freigabe
+	 * neu geprüft, und eine Rückfrage gilt nur 15 Minuten.
+	 */
 	async confirmBroker(id: number): Promise<Proposal> {
 		const r = this.proposalRow(id);
 		if (r.status !== "confirm" || !r.reply_id) throw new DeskError("Hier gibt es keine offene Rückfrage des Brokers.", 409, this.toProposal(r));
 		if (this.killSwitch) throw new DeskError("Not-Aus ist aktiv – keine Orders, bis du ihn ausschaltest.", 409, this.toProposal(r));
 		const a = this.account(r.account_id);
 		if (a.live && !this.cfg.liveTrading) throw new DeskError(`Live-Handel ist aus – in config.json "liveTrading": true setzen.`, 409, this.toProposal(r));
-		if (!this.db.run("UPDATE proposal SET status = 'sending' WHERE id = ? AND status = 'confirm'", id).changes) throw new DeskError("Schon bestätigt.", 409);
-		const res = await this.brokerOf(a.id).confirm(r.reply_id);
+		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
+		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
+		const end = (status: ProposalStatus, reason: string, kind: string) => {
+			if (this.db.run("UPDATE proposal SET status = ?, reason = ?, status_at = ? WHERE id = ? AND status = 'confirm'", status, reason.slice(0, 500), this.now(), id).changes)
+				this.event(kind, this.cfg.user, `${label}: ${reason}`, notify);
+			this.emit("tick", { at: this.now() });
+			return this.proposal(id);
+		};
+		if (this.now() - (r.status_at ?? r.decided_at ?? r.created_at) > CONFIRM_TTL_MS) return end("expired", "Rückfrage des Brokers nicht innerhalb von 15 Minuten bestätigt – nichts gesendet.", "proposal.expired");
+		await this.refresh([r.symbol]);
+		const stale = this.quoteProblem(r.symbol);
+		if (stale) throw new DeskError(`${stale} Nichts gesendet, die Rückfrage wartet weiter.`, 409, this.toProposal(r));
+		const verdict = this.verdict(r, r.approved_qty ?? r.qty);
+		if (verdict) return end(verdict.status, verdict.reason, verdict.status === "stale" ? "proposal.stale" : "proposal.rejected");
+		const broker = this.brokerOf(a.id);
+		const session = await broker.session();
+		if (!session.account) throw new DeskError(`${a.broker}: ${session.message || "nicht angemeldet"} – erst im Gateway anmelden, dann bestätigen.`, 409, this.toProposal(r));
+		if (a.live && session.paper === true) return end("rejected", "das Gateway ist mit einem Papierkonto angemeldet, das Depot ist aber als echtes Konto eingetragen", "proposal.rejected");
+		if (!this.db.run("UPDATE proposal SET status = 'sending', status_at = ? WHERE id = ? AND status = 'confirm'", this.now(), id).changes) throw new DeskError("Schon bestätigt.", 409);
+		let res: PlaceResult;
+		try {
+			res = await broker.confirm(r.reply_id);
+		} catch (e) {
+			res = { kind: "unknown", message: (e as Error).message };
+		}
 		this.applyPlace(id, res);
 		this.emit("tick", { at: this.now() });
 		return this.proposal(id);
@@ -797,50 +1064,98 @@ export class Desk extends EventEmitter {
 		await broker.keepAlive();
 		const orders = await broker.orders();
 		const execs = await broker.executions();
+		const missing = new Set<string>(); // Instrumente oder Wechselkurse, ohne die eine Ausführung noch nicht gebucht wird
 		this.db.tx(() => {
-			// beim Senden unterbrochen (Absturz, Netz): über die eigene Order-ID beim Broker wiederfinden, nie erneut senden
-			for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND status = 'sending' AND decided_at < ?", accountId, this.now() - 60_000)) {
-				const o = orders.find((x) => x.cOID === `desk-${r.id}`);
-				if (o) this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ? WHERE id = ? AND status = 'sending'", o.orderId, r.id);
-				else if (r.decided_at! < this.now() - 5 * 60_000 && this.db.run("UPDATE proposal SET status = 'rejected', reason = ? WHERE id = ? AND status = 'sending'", `Senden an ${a.broker} unterbrochen – Order dort nicht gefunden. Bei ${a.broker} prüfen; der Desk sendet nicht erneut.`, r.id).changes)
+			const now = this.now();
+			// unterbrochen oder ohne Antwort gesendet: über die Client-Order-ID beim Broker wiederfinden, nie erneut senden
+			for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND status = 'sending' AND COALESCE(status_at, decided_at) < ?", accountId, now - 60_000)) {
+				const o = orders.find((x) => x.cOID === this.coidOf(r));
+				if (o) {
+					if (this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ?, reason = '', status_at = ?, last_seen_at = ? WHERE id = ? AND status = 'sending'", o.orderId, now, now, r.id).changes)
+						this.event("broker.sent", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: bei ${a.broker} gefunden (Order ${o.orderId}).`, { to: [this.cfg.user], ref: `#${r.id}` });
+				} else if ((r.status_at ?? r.decided_at!) < now - 5 * 60_000 && this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", `Senden an ${a.broker} unterbrochen – Order dort nicht gefunden. Bei ${a.broker} prüfen; der Desk sendet nicht erneut.`, now, r.id).changes)
 					this.event("proposal.rejected", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: Senden an ${a.broker} unterbrochen – bitte dort prüfen.`, { to: [this.cfg.user], ref: `#${r.id}` });
 			}
-			for (const e of execs) this.importExecution(a, e);
-			for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND status = 'placed' AND broker_order_id IS NOT NULL", accountId)) {
-				const o = orders.find((x) => x.orderId === r.broker_order_id || x.cOID === `desk-${r.id}`);
-				if (!o) continue;
-				const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${r.id}` };
-				const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}`;
-				if (o.status === "filled") {
-					if (this.db.run("UPDATE proposal SET status = 'filled', fill_price = ? WHERE id = ? AND status = 'placed'", o.avgPrice, r.id).changes)
-						this.event("trade.fill", "Desk", `${label} bei ${a.broker} ausgeführt${o.avgPrice ? ` zu ${num(o.avgPrice)}` : ""}`, notify ?? { to: [], ref: `#${r.id}` });
-				} else if (o.status === "cancelled" || o.status === "rejected") {
-					const why = o.status === "cancelled" ? `bei ${a.broker} storniert` : `von ${a.broker} abgelehnt`;
-					if (this.db.run(`UPDATE proposal SET status = ?, reason = ? WHERE id = ? AND status = 'placed'`, o.status === "cancelled" ? "cancelled" : "rejected", why, r.id).changes) this.event("proposal.cancelled", "Desk", `${label} ${why}`, notify);
-				}
-			}
+			for (const e of execs) this.importExecution(a, e, missing);
+			this.syncOrders(a, orders, now);
 		});
+		if (missing.size) await this.refresh([...missing]).catch(() => undefined); // beim nächsten Abruf wird gebucht
+	}
+
+	/** Orderstatus des Brokers auf die Vorschläge übertragen; Ausführungen (Trades) sind die Wahrheit über die Stückzahl. */
+	private syncOrders(a: Account, orders: BrokerOrder[], now: number) {
+		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND broker_order_id IS NOT NULL AND status IN ('placed','filled','cancelled','rejected','expired')", a.id);
+		for (const r of rows) {
+			const o = orders.find((x) => x.orderId === r.broker_order_id || x.cOID === this.coidOf(r));
+			const want = r.approved_qty ?? r.qty;
+			const f = this.fillsOf(r.id);
+			const notify = { to: r.author === this.cfg.user ? [this.cfg.user] : [this.cfg.user, r.author], ref: `#${r.id}` };
+			const label = `${sideLabel[r.side]} ${num(want)} ${r.symbol} #${r.id}`;
+			const part = (q: number) => `teilweise ausgeführt: ${num(q)} von ${num(want)} Stück`;
+			if (f.qty > 0 && f.qty !== (r.filled_qty ?? 0)) this.db.run("UPDATE proposal SET filled_qty = ?, fill_price = ? WHERE id = ?", f.qty, f.avg, r.id);
+			if (r.status === "filled") continue;
+			if (r.status !== "placed") {
+				// schon storniert, abgelehnt oder abgelaufen – und trotzdem kommt eine Ausführung (z. B. während PendingCancel)
+				if (f.qty > (r.filled_qty ?? 0) + 1e-9) {
+					const full = f.qty >= want - 1e-9;
+					this.db.run("UPDATE proposal SET status = ?, reason = ?, status_at = ? WHERE id = ?", full ? "filled" : r.status, full ? "" : `${part(f.qty)}, Rest ${r.reason || "nicht ausgeführt"}`.slice(0, 500), now, r.id);
+					this.event("trade.fill", "Desk", `${label}: nach „${r.reason || r.status}“ doch bei ${a.broker} ausgeführt (${num(f.qty)} Stück) – Bestand prüfen.`, notify);
+				}
+				continue;
+			}
+			if (o) this.db.run("UPDATE proposal SET last_seen_at = ? WHERE id = ?", now, r.id);
+			if (o?.status === "filled" || f.qty >= want - 1e-9) {
+				if (this.db.run("UPDATE proposal SET status = 'filled', fill_price = COALESCE(?, fill_price), reason = '', status_at = ? WHERE id = ? AND status = 'placed'", f.avg ?? o?.avgPrice ?? null, now, r.id).changes)
+					this.event("trade.fill", "Desk", `${label} bei ${a.broker} ausgeführt${f.avg ?? o?.avgPrice ? ` zu ${num(f.avg ?? o!.avgPrice!)}` : ""}`, notify);
+			} else if (o && (o.status === "cancelled" || o.status === "rejected")) {
+				const why = `${o.status === "cancelled" ? `bei ${a.broker} storniert` : `von ${a.broker} abgelehnt`}${f.qty > 0 ? ` (${part(f.qty)})` : ""}`;
+				if (this.db.run("UPDATE proposal SET status = ?, reason = ?, status_at = ? WHERE id = ? AND status = 'placed'", o.status, why, now, r.id).changes) this.event("proposal.cancelled", "Desk", `${label} ${why}`, notify);
+			} else if (!o) {
+				// nicht mehr gelistet (eine Tagesorder verschwindet am nächsten Tag): nach 24 h ohne Lebenszeichen abgelaufen
+				const seen = r.last_seen_at ?? r.status_at ?? r.decided_at ?? r.created_at;
+				if (now - seen > UNLISTED_MS) {
+					const why = `bei ${a.broker} nicht mehr gelistet – dort prüfen${f.qty > 0 ? ` (${part(f.qty)})` : ""}`;
+					if (this.db.run("UPDATE proposal SET status = 'expired', reason = ?, status_at = ? WHERE id = ? AND status = 'placed'", why, now, r.id).changes) this.event("proposal.expired", "Desk", `${label} ${why}`, notify);
+				}
+			} else if (o.rawStatus.toLowerCase() === "inactive") {
+				this.noteOnce(`inactive:${r.id}`, () => {
+					this.db.run("UPDATE proposal SET broker_message = ? WHERE id = ?", `${a.broker} meldet „Inactive“ – die Order arbeitet nicht, kann aber wieder aktiv werden (z. B. außerhalb der Handelszeit). Bei ${a.broker} prüfen.`, r.id);
+					this.event("broker.inactive", "Desk", `${label}: ${a.broker} meldet „Inactive“ – bitte dort prüfen.`, notify);
+				});
+			}
+		}
 	}
 
 	/** Ausführung des Brokers einmalig als Trade buchen (Schlüssel: Ausführungs-ID), auch wenn sie nicht vom Desk kam. */
-	private importExecution(a: Account, e: Awaited<ReturnType<Broker["executions"]>>[number]) {
+	private importExecution(a: Account, e: BrokerExecution, missing: Set<string>) {
 		const key = `exec:${e.id}`;
 		if (this.db.get("SELECT 1 FROM trade WHERE account_id = ? AND import_key = ?", a.id, key)) return;
-		const fromDesk = e.cOID && /^desk-\d+$/.test(e.cOID) ? Number(e.cOID.slice(5)) : null;
-		const proposal = fromDesk ? this.db.get<ProposalRow>("SELECT * FROM proposal WHERE id = ? AND account_id = ?", fromDesk, a.id) : undefined;
+		// einem Vorschlag nur zuordnen, wenn Depot, Client-Order-ID und Kontrakt passen
+		const byCoid = e.cOID?.startsWith("desk-") ? this.db.get<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND (broker_coid = ? OR (broker_coid IS NULL AND 'desk-' || id = ?))", a.id, e.cOID, e.cOID) : undefined;
+		const proposal = byCoid && byCoid.broker_conid !== null && e.conid !== null && byCoid.broker_conid === e.conid ? byCoid : undefined;
+		if (byCoid && !proposal)
+			this.noteOnce(`mismatch:${a.id}:${e.id}`, () => this.event("broker.mismatch", "Desk", `${a.broker}: Ausführung ${e.id} trägt die Order-ID von #${byCoid.id}, aber einen anderen Kontrakt (${e.conid ?? "?"} statt ${byCoid.broker_conid ?? "?"}) – nicht diesem Vorschlag zugeordnet.`, { to: [this.cfg.user], ref: `#${byCoid.id}` }));
 		const symbol = proposal?.symbol ?? this.symbolOfConid(a.id, e.conid);
 		if (!symbol) {
-			const seen = `unmapped:${a.id}:${e.conid}`;
-			if (!this.db.get("SELECT 1 FROM setting WHERE key = ?", seen)) {
-				this.db.run("INSERT INTO setting (key, value) VALUES (?, '1')", seen);
-				this.event("broker.unknown", "Desk", `${a.broker}: Ausführung für Kontrakt ${e.conid} ohne Symbol – in config.json unter "conids" zuordnen, dann „Mit ${a.broker} abgleichen“.`);
-			}
+			this.noteOnce(`unmapped:${a.id}:${e.conid}`, () => this.event("broker.unknown", "Desk", `${a.broker}: Ausführung für Kontrakt ${e.conid} ohne Symbol – in config.json unter "conids" zuordnen, dann „Mit ${a.broker} abgleichen“.`));
 			return;
 		}
-		const currency = this.instrument(symbol)?.currency ?? "EUR";
-		const fx = this.fx(currency) ?? 1;
+		// vom Abgleich schon im Bestand übernommen: nicht noch einmal buchen
+		const reconciled = Number(this.db.get<{ value: string }>("SELECT value FROM setting WHERE key = ?", `reconciled:${a.id}:${e.conid}`)?.value ?? 0);
+		if (!proposal && e.conid !== null && e.time <= reconciled) return;
+		// ohne Währung und Wechselkurs wird nichts geraten (nie fx = 1): warten, Kurs holen, beim nächsten Abruf buchen
+		const inst = this.instrument(symbol);
+		const fx = inst ? this.fx(inst.currency) : null;
+		const feeFx = e.commissionCurrency ? this.fx(e.commissionCurrency) : fx;
+		if (!inst || fx === null || feeFx === null) {
+			missing.add(symbol);
+			if (inst && inst.currency !== "EUR") missing.add(fxSymbol(inst.currency));
+			if (e.commissionCurrency && e.commissionCurrency !== "EUR") missing.add(fxSymbol(e.commissionCurrency));
+			this.noteOnce(`fxwait:${a.id}:${e.id}`, () => this.event("broker.wait", "Desk", `${a.broker}: Ausführung ${num(e.qty)} ${symbol} wartet auf ${inst ? `den Wechselkurs ${inst.currency}/EUR` : "Kursdaten (Währung)"} – wird gebucht, sobald er da ist.`));
+			return;
+		}
 		this.insertTrade(a, {
-			symbol, side: e.side, qty: e.qty, price: e.price, currency, fx, feeCents: Math.round(e.commission * fx * 100), time: e.time,
+			symbol, side: e.side, qty: e.qty, price: e.price, currency: inst.currency, fx, feeCents: cents(e.commission * feeFx), time: e.time,
 			source: proposal ? (proposal.author === this.cfg.user ? "order" : "proposal") : "import", proposalId: proposal?.id ?? null, note: proposal ? "" : `${a.broker}`, importKey: key,
 		});
 	}
@@ -852,42 +1167,55 @@ export class Desk extends EventEmitter {
 		const broker = this.brokerOf(accountId);
 		await this.pollBroker(accountId);
 		const status = this.brokerStatus(accountId);
-		if (!status.brokerAccount) return { status, rows: [], brokerCashCents: null, deskCashCents: this.summary(a).cashCents, differences: 0 };
+		if (!status.brokerAccount) return { status, rows: [], brokerCashCents: null, deskCashCents: this.summary(a).cashCents, differences: 0, cashNote: null };
 		const [positions, cash] = await Promise.all([broker.positions(), broker.cash()]);
 		const book = this.book(a.id);
 		const rows: Reconcile["rows"] = [];
 		const seen = new Set<string>();
 		for (const p of positions) {
-			const symbol = this.symbolOfConid(a.id, p.conid) ?? Object.entries(this.cfg.brokers[a.id]?.conids ?? {}).find(([, c]) => c === p.conid)?.[0] ?? null;
+			const symbol = this.symbolOfConid(a.id, p.conid);
 			if (symbol) seen.add(symbol);
 			rows.push({ symbol, conid: p.conid, description: p.description, brokerQty: p.qty, deskQty: symbol ? (book.holdings.get(symbol)?.qty ?? 0) : 0, avgCost: p.avgCost, currency: p.currency });
 		}
 		for (const h of book.holdings.values()) if (!seen.has(h.symbol)) rows.push({ symbol: h.symbol, conid: null, description: h.symbol, brokerQty: 0, deskQty: h.qty, avgCost: null, currency: this.instrument(h.symbol)?.currency ?? "EUR" });
 		const deskCash = this.summary(a).cashCents;
-		const brokerCash = cash ? Math.round(cash.amount * 100) : null;
-		return { status, rows, brokerCashCents: brokerCash, deskCashCents: deskCash, differences: rows.filter((r) => Math.abs(r.brokerQty - r.deskQty) > 1e-9).length + (brokerCash !== null && Math.abs(brokerCash - deskCash) >= 100 ? 1 : 0) };
+		// Cash nur in EUR vergleichen: eine andere oder unbekannte Basiswährung wird nicht als EUR gebucht
+		const eurCash = cash && cash.currency === "EUR" ? cents(cash.amount) : null;
+		const cashNote = cash && cash.currency !== "EUR" ? `Cash bei ${a.broker} in ${cash.currency === "BASE" ? "unbekannter Basiswährung" : cash.currency} – der Desk gleicht nur EUR ab.` : null;
+		return { status, rows, brokerCashCents: eurCash, deskCashCents: deskCash, differences: rows.filter((r) => Math.abs(r.brokerQty - r.deskQty) > 1e-9).length + (eurCash !== null && Math.abs(eurCash - deskCash) >= 100 ? 1 : 0), cashNote };
 	}
 
-	/** Abgleich übernehmen: Unterschiede als Eröffnungs-/Korrekturbuchungen und Cash-Ausgleich. Nur du, nur nach Ansicht. */
+	/**
+	 * Abgleich übernehmen: Unterschiede als Eröffnungs-/Korrekturbuchungen und Cash-Ausgleich. Nur du, nur nach Ansicht.
+	 * Zuerst die Zuordnungen merken und die damit zuordenbaren Ausführungen buchen, dann nur den Rest als Korrektur – und
+	 * Ausführungen bis jetzt für diese Kontrakte als übernommen markieren, damit nichts doppelt gebucht wird.
+	 */
 	async applyReconcile(accountId: string): Promise<Reconcile> {
-		const r = await this.reconcile(accountId);
-		if (!r.status.brokerAccount) throw new DeskError(`${this.account(accountId).broker}: nicht angemeldet – erst im Gateway anmelden.`, 409);
 		const a = this.account(accountId);
+		const first = await this.reconcile(accountId);
+		if (!first.status.brokerAccount) throw new DeskError(`${a.broker}: nicht angemeldet – erst im Gateway anmelden.`, 409);
+		for (const row of first.rows) if (row.symbol && row.conid !== null) this.rememberConid(a.id, row.conid, row.symbol);
+		const r = await this.reconcile(accountId); // bucht die jetzt zuordenbaren Ausführungen
+		const skipped: string[] = [];
 		this.db.tx(() => {
+			const now = this.now();
 			for (const row of r.rows) {
 				const diff = roundQty(row.brokerQty - row.deskQty);
 				if (!row.symbol || Math.abs(diff) < 1e-9) continue;
-				if (row.conid !== null) this.rememberConid(a.id, row.conid, row.symbol);
-				const p = this.priced(row.symbol);
-				const price = row.avgCost ?? p?.price;
-				if (!price) continue;
-				const currency = this.instrument(row.symbol)?.currency ?? (row.currency || "EUR");
-				this.insertTrade(a, { symbol: row.symbol, side: diff > 0 ? "buy" : "sell", qty: Math.abs(diff), price, currency, fx: this.fx(currency) ?? 1, feeCents: 0, time: this.now(), source: "import", proposalId: null, note: `Abgleich ${a.broker}` });
+				const currency = this.instrument(row.symbol)?.currency ?? (row.currency || null);
+				const fx = currency ? this.fx(currency) : null;
+				const price = row.avgCost ?? this.priced(row.symbol)?.price;
+				if (!price || fx === null || !currency) {
+					skipped.push(row.symbol);
+					continue;
+				}
+				this.insertTrade(a, { symbol: row.symbol, side: diff > 0 ? "buy" : "sell", qty: Math.abs(diff), price, currency, fx, feeCents: 0, time: now, source: "import", proposalId: null, note: `Abgleich ${a.broker}` });
+				if (row.conid !== null) this.db.run("INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", `reconciled:${a.id}:${row.conid}`, String(now));
 			}
 			const deskCash = this.summary(a).cashCents;
 			if (r.brokerCashCents !== null && r.brokerCashCents !== deskCash)
-				this.db.run("INSERT INTO cash_move (account_id, amount_cents, time, note) VALUES (?,?,?,?)", a.id, r.brokerCashCents - deskCash, this.now(), `Abgleich ${a.broker}`);
-			this.event("broker.reconcile", this.cfg.user, `${a.name} mit ${a.broker} abgeglichen (${r.differences} Unterschiede übernommen)`);
+				this.db.run("INSERT INTO cash_move (account_id, amount_cents, time, note) VALUES (?,?,?,?)", a.id, r.brokerCashCents - deskCash, now, `Abgleich ${a.broker}`);
+			this.event("broker.reconcile", this.cfg.user, `${a.name} mit ${a.broker} abgeglichen (${r.differences} Unterschiede übernommen)${skipped.length ? ` – ohne Kurs oder Wechselkurs nicht übernommen: ${skipped.join(", ")}` : ""}`);
 		});
 		this.emit("tick", { at: this.now() });
 		return this.reconcile(accountId);
@@ -906,17 +1234,19 @@ export class Desk extends EventEmitter {
 		const symbol = this.normalizeSymbol(body.symbol);
 		const side = body.side === "sell" ? "sell" : body.side === "buy" ? "buy" : null;
 		if (!side) throw new DeskError("Kauf oder Verkauf?");
-		if (typeof body.qty !== "number" || !(body.qty > 0)) throw new DeskError("Stückzahl muss größer als 0 sein.");
-		if (typeof body.price !== "number" || !(body.price > 0)) throw new DeskError("Kurs muss größer als 0 sein.");
-		const feeCents = typeof body.feeEur === "number" && body.feeEur >= 0 ? Math.round(body.feeEur * 100) : a.feeCents;
-		const time = typeof body.time === "number" && body.time > 0 && body.time <= this.now() + 60_000 ? body.time : this.now();
+		const qty = parseQty(body.qty);
+		const price = parsePrice(body.price);
+		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
+		const time = this.tradeTime(body.time);
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		if (!this.instrument(symbol) && this.market.kind !== "off") await this.refresh([symbol]); // Name und Kurs, wenn Yahoo das Symbol kennt
-		const qty = roundQty(body.qty);
 		const id = this.db.tx(() => {
 			if (side === "sell" && (this.book(a.id).holdings.get(symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${symbol}.`);
-			const id = this.insertTrade(a, { symbol, side, qty, price: body.price as number, currency: "EUR", fx: 1, feeCents, time, source: "manual", proposalId: null, note });
-			this.event("trade.manual", this.cfg.user, `${sideLabel[side]} ${num(qty)} ${symbol} zu ${num(body.price as number)} € erfasst (${a.name})`);
+			// auch zurückdatiert: ein Verkauf vor dem Kauf würde Geld erzeugen, das es nie gab
+			if (this.newOversells(a.id, [{ id: Number.MAX_SAFE_INTEGER, symbol, side, qty, time }]).size)
+				throw new DeskError(side === "sell" ? `Am ${dateText(time)} waren weniger als ${num(qty)} Stück ${symbol} im Depot – Zeitpunkt prüfen.` : `Dieser Trade lässt einen späteren Verkauf ungedeckt.`);
+			const id = this.insertTrade(a, { symbol, side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "manual", proposalId: null, note });
+			this.event("trade.manual", this.cfg.user, `${sideLabel[side]} ${num(qty)} ${symbol} zu ${num(price)} € erfasst (${a.name})`);
 			return id;
 		});
 		this.emit("tick", { at: this.now() });
@@ -926,6 +1256,10 @@ export class Desk extends EventEmitter {
 	/** Löschen mit Rückgängig: der Trade wird nur ausgeblendet, restoreTrade holt ihn zurück. */
 	deleteTrade(accountId: string, id: number, restore = false) {
 		const a = this.manual(accountId);
+		// ein Kauf, an dem spätere Verkäufe hängen, bleibt; ein gelöschter Verkauf kommt nur zurück, wenn er gedeckt ist
+		const row = this.db.get<TradeRow>("SELECT * FROM trade WHERE id = ? AND account_id = ?", id, a.id);
+		if (row && !restore && row.deleted_at === null && this.newOversells(a.id, [], id).size) throw new DeskError("Spätere Verkäufe hängen an diesem Kauf – zuerst den Verkauf löschen.", 409);
+		if (row && restore && row.deleted_at !== null && this.newOversells(a.id, [row]).size) throw new DeskError(`Der Verkauf vom ${dateText(row.time)} wäre nicht mehr gedeckt – nicht wiederhergestellt.`, 409);
 		const { changes } = this.db.run(
 			restore ? "UPDATE trade SET deleted_at = NULL WHERE id = ? AND account_id = ? AND deleted_at IS NOT NULL" : "UPDATE trade SET deleted_at = ? WHERE id = ? AND account_id = ? AND deleted_at IS NULL AND source IN ('manual','import')",
 			...(restore ? [id, a.id] : [this.now(), id, a.id]),
@@ -937,8 +1271,11 @@ export class Desk extends EventEmitter {
 
 	cashMove(accountId: string, body: { amountEur?: unknown; note?: unknown }): CashMove {
 		const a = this.account(accountId);
-		if (typeof body.amountEur !== "number" || !Number.isFinite(body.amountEur) || body.amountEur === 0) throw new DeskError("Betrag in EUR, positiv für Einzahlung, negativ für Auszahlung.");
-		const amount = Math.round(body.amountEur * 100);
+		const v = body.amountEur;
+		// endlich, nicht 0, höchstens 100 Mio. € und ganze Cent: -0,004 € ist keine Auszahlung, 1e308 € kein Kontostand
+		if (typeof v !== "number" || !Number.isFinite(v) || v === 0 || Math.abs(v) > MAX_EUR || decimals(v) > 2)
+			throw new DeskError("Betrag in EUR mit höchstens 2 Nachkommastellen (bis 100 Mio.), positiv für Einzahlung, negativ für Auszahlung.");
+		const amount = cents(v);
 		if (amount < 0 && this.summary(a).cashCents + amount < 0) throw new DeskError("Auszahlung größer als das Cash im Depot.");
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		const time = this.now();
@@ -948,25 +1285,60 @@ export class Desk extends EventEmitter {
 		return { id: lastId, accountId: a.id, amountCents: amount, time, note };
 	}
 
+	/**
+	 * CSV-Zeilen, die zusammen mit dem Buch gedeckt sind. Ein Verkauf, der zu seinem Zeitpunkt mehr verkauft als da war,
+	 * wird als Fehler genannt; macht eine neue Zeile einen bestehenden Verkauf ungedeckt, fällt der späteste neue Verkauf
+	 * desselben Symbols davor weg. Linear je Durchgang, meist genügt einer.
+	 */
+	private coveredCsvRows<T extends { line: number; symbol: string; side: Side; qty: number; time: number }>(accountId: string, rows: T[], errors: string[]): T[] {
+		const base = (this.db.get<{ m: number | null }>("SELECT MAX(id) AS m FROM trade")?.m ?? 0) + 1;
+		let keep = rows.map((r, i) => ({ r, id: base + i }));
+		for (let pass = 0; pass <= rows.length; pass++) {
+			const bad = this.newOversells(accountId, keep.map((k) => ({ id: k.id, symbol: k.r.symbol, side: k.r.side, qty: k.r.qty, time: k.r.time })));
+			if (!bad.size) break;
+			const drop = new Set<number>();
+			for (const id of bad.keys()) {
+				const own = keep.find((k) => k.id === id);
+				if (own) drop.add(id);
+				else {
+					const t = this.db.get<TradeRow>("SELECT * FROM trade WHERE id = ?", id)!;
+					const culprit = keep.filter((k) => k.r.side === "sell" && k.r.symbol === t.symbol && k.r.time <= t.time).at(-1);
+					if (culprit) drop.add(culprit.id);
+				}
+			}
+			if (!drop.size) break;
+			for (const k of keep) if (drop.has(k.id)) errors.push(`Zeile ${k.r.line}: Verkauf ${num(k.r.qty)} ${k.r.symbol} am ${dateText(k.r.time)} – zu dem Zeitpunkt nicht genug Stück im Depot.`);
+			keep = keep.filter((k) => !drop.has(k.id));
+		}
+		return keep.map((k) => k.r);
+	}
+
 	async importCsv(accountId: string, text: unknown): Promise<ImportResult> {
 		const a = this.manual(accountId);
 		if (typeof text !== "string" || !text.trim()) throw new DeskError("Leere Datei.");
 		if (text.length > 2_000_000) throw new DeskError("Datei zu groß (höchstens 2 MB).");
-		const { rows, errors } = parseTradesCsv(text);
-		const foreign = [...new Set(rows.filter((r) => r.currency !== "EUR").map((r) => r.currency))];
-		if (foreign.length && this.market.kind !== "off") await this.refresh(foreign.map(fxSymbol));
-		const unknown = [...new Set(rows.map((r) => r.symbol))].filter((s) => !this.instrument(s));
+		const parsed = parseTradesCsv(text);
+		const errors = parsed.errors;
+		// keine Zeilen aus der Zukunft oder von vor 1990
+		const dated = parsed.rows.filter((r) => {
+			const bad = r.time > this.now() + 60_000 ? "liegt in der Zukunft" : r.time < MIN_TRADE_TIME ? "liegt vor 1990" : null;
+			if (bad) errors.push(`Zeile ${r.line}: Datum ${bad}.`);
+			return !bad;
+		});
+		const unknown = [...new Set(dated.map((r) => r.symbol))].filter((s) => !this.instrument(s));
 		if (unknown.length && this.market.kind !== "off") await this.refresh(unknown);
 		let imported = 0;
 		let skipped = 0;
 		this.db.tx(() => {
+			// schon importierte Zeilen zählen nicht; die neuen müssen zusammen mit dem Buch gedeckt sein (kein Verkauf vor dem Kauf)
+			const fresh = dated.filter((r) => {
+				const known = !!this.db.get("SELECT 1 FROM trade WHERE account_id = ? AND import_key = ?", a.id, r.key);
+				if (known) skipped++;
+				return !known;
+			});
+			const rows = this.coveredCsvRows(a.id, fresh, errors);
 			for (const r of rows) {
-				const fx = r.currency === "EUR" ? 1 : (this.quoteRow(fxSymbol(r.currency))?.price ?? null);
-				if (fx === null) {
-					errors.push(`Zeile ${r.line}: kein Wechselkurs für ${r.currency} – Kurs in EUR angeben.`);
-					continue;
-				}
-				const id = this.insertTrade(a, { symbol: r.symbol, side: r.side, qty: r.qty, price: r.price, currency: r.currency, fx, feeCents: r.feeCents, time: r.time, source: "import", proposalId: null, note: r.note, importKey: r.key });
+				const id = this.insertTrade(a, { symbol: r.symbol, side: r.side, qty: r.qty, price: r.price, currency: r.currency, fx: r.fx ?? 1, feeCents: r.feeCents, time: r.time, source: "import", proposalId: null, note: r.note, importKey: r.key });
 				if (id) imported++;
 				else skipped++;
 			}
@@ -1166,6 +1538,7 @@ export class Desk extends EventEmitter {
 				marketTime: q?.market_time ?? null,
 				held: held.has(symbol),
 				alerts: alerts.find((a) => a.symbol === symbol)?.n ?? 0,
+				quoteStale: this.quoteErrors.has(symbol) || this.quoteProblem(symbol) !== null,
 			};
 		});
 	}
@@ -1233,8 +1606,11 @@ export class Desk extends EventEmitter {
 		const days = this.cfg.accounts.map((a) => {
 			const s = this.summary(a);
 			const rows = this.tradeRows(a.id);
+			let openRisk = this.reserved(a.id).riskCents;
 			for (const p of this.positions(a, s)) {
 				const fx = this.priced(p.symbol)?.fx ?? null;
+				// offene Position mit Stop: was bis zum Stop noch verloren gehen kann, plus die Verkaufsgebühr
+				if (p.stopLoss && p.nativePrice !== null && fx !== null) openRisk += orderValueCents(p.qty, Math.max(0, p.nativePrice - p.stopLoss), fx) + a.feeCents;
 				const avgNative = fx ? p.avgPrice / fx : null;
 				positions.push({
 					accountId: a.id, symbol: p.symbol, name: p.name, currency: p.currency, qty: p.qty, avgPrice: p.avgPrice, price: p.price, nativePrice: p.nativePrice,
@@ -1243,7 +1619,15 @@ export class Desk extends EventEmitter {
 					openedToday: rows.some((t) => t.symbol === p.symbol && t.side === "buy" && t.time >= from),
 				});
 			}
-			return { accountId: a.id, name: a.name, owner: a.owner, kind: a.kind, equityCents: s.equityCents, cashCents: s.cashCents, dayChangeCents: s.dayChangeCents, dayLossPct: this.dayLossPct(a, s), stats: this.dayStatsOf(a.id) };
+			// Tagesverlust-Stopp in EUR auf den Stand von gestern, wie in der Risikoprüfung
+			const prev = this.prevSnapshot(a.id);
+			const pctLimit = this.limits(a.id).dailyLossPct;
+			const limit = pctLimit > 0 && prev && prev.equity_cents > 0 ? cents((prev.equity_cents / 100) * (pctLimit / 100)) : null;
+			const loss = Math.max(0, -(s.dayChangeCents ?? 0));
+			return {
+				accountId: a.id, name: a.name, owner: a.owner, kind: a.kind, equityCents: s.equityCents, cashCents: s.cashCents, dayChangeCents: s.dayChangeCents, dayLossPct: this.dayLossPct(a, s),
+				openRiskCents: openRisk, dayLossLimitCents: limit, dayLossHeadroomCents: limit === null ? null : Math.max(0, limit - loss), stats: this.dayStatsOf(a.id),
+			};
 		});
 		return {
 			user: this.cfg.user,
@@ -1252,6 +1636,7 @@ export class Desk extends EventEmitter {
 			marketError: this.marketError,
 			quotesAt: this.quotesAt,
 			liveIntervalSec: this.cfg.liveIntervalSec,
+			failedQuotes: [...this.quoteErrors.keys()].sort(),
 			sessions: this.sessions(),
 			scan: this.scan(),
 			days,
@@ -1275,13 +1660,15 @@ export class Desk extends EventEmitter {
 
 	/* ------------------------------------------------------------------ Chat */
 
+	/**
+	 * Chat: ohne since die neuesten limit Nachrichten (Verlauf im Browser); mit since die nächsten limit nach since in
+	 * Reihenfolge – wer liest, blättert so weiter, bis weniger als limit kommen, und verliert in einem Schwall nichts.
+	 */
 	chat(opts: { since?: number; limit?: number } = {}): ChatMessage[] {
-		const rows = this.db.all<{ id: number; time: number; author: string; role: ChatMessage["role"]; text: string; recipients: string; ref: string | null }>(
-			"SELECT * FROM chat WHERE id > ? ORDER BY id DESC LIMIT ?",
-			opts.since ?? 0,
-			opts.limit ?? 200,
-		);
-		return rows.reverse().map((r) => ({ id: r.id, time: r.time, author: r.author, role: r.role, text: r.text, to: JSON.parse(r.recipients) as string[], ref: r.ref }));
+		type Row = { id: number; time: number; author: string; role: ChatMessage["role"]; text: string; recipients: string; ref: string | null };
+		const limit = opts.limit ?? 200;
+		const rows = opts.since === undefined ? this.db.all<Row>("SELECT * FROM chat ORDER BY id DESC LIMIT ?", limit).reverse() : this.db.all<Row>("SELECT * FROM chat WHERE id > ? ORDER BY id ASC LIMIT ?", opts.since, limit);
+		return rows.map((r) => ({ id: r.id, time: r.time, author: r.author, role: r.role, text: r.text, to: JSON.parse(r.recipients) as string[], ref: r.ref }));
 	}
 
 	private postChat(m: Omit<ChatMessage, "id" | "time">): ChatMessage {
@@ -1321,7 +1708,10 @@ export class Desk extends EventEmitter {
 		if (this.ticking) return this.ticking;
 		this.ticking = (async () => {
 			try {
-				await this.refresh(this.trackedSymbols());
+				const tracked = this.trackedSymbols();
+				// Fehler von Symbolen, die niemand mehr verfolgt, nicht ewig melden (Wechselkurse bleiben, die hängen an Beständen)
+				for (const s of this.quoteErrors.keys()) if (!s.endsWith("=X") && !tracked.includes(s)) this.quoteErrors.delete(s);
+				await this.refresh(tracked);
 				await this.refreshDaily(this.scanSymbols().filter((s) => !this.dailyStat(s)).slice(0, 3)).catch(() => undefined);
 				for (const id of this.brokers.keys()) await this.pollBroker(id).catch((e) => console.error(`broker ${id}:`, (e as Error).message));
 				this.db.tx(() => {
@@ -1341,28 +1731,50 @@ export class Desk extends EventEmitter {
 		return this.ticking;
 	}
 
+	/** Börse des Symbols offen und der Kurs aus der laufenden Sitzung? */
+	private inSession(symbol: string): boolean {
+		const q = this.quoteRow(symbol);
+		if (!q || this.sessionOf(q) !== "open") return false;
+		return q.market_time === null || q.reg_start === null || q.market_time >= q.reg_start;
+	}
+
+	/** Offene Papier-Orders: Limits, sobald der Kurs sie erreicht, Market-Orders zur Eröffnung – nur zur Handelszeit. */
 	private fillLimits() {
 		if (this.killSwitch) return;
 		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'open' ORDER BY id")) {
+			if (!this.inSession(r.symbol) || this.quoteProblem(r.symbol)) continue; // warten statt auf altem Kurs ausführen
 			const p = this.priced(r.symbol);
-			if (!p || !r.limit_price || !crossed(r.side, p.price, r.limit_price)) continue;
+			if (!p || (r.limit_price && !crossed(r.side, p.price, r.limit_price))) continue;
 			const a = this.account(r.account_id);
 			const qty = r.approved_qty ?? r.qty;
-			const c = this.check(a, { side: r.side, qty, orderType: "market", symbol: r.symbol });
+			const byAgent = r.author !== this.cfg.user;
 			const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol}`;
-			if (!c.ok) {
-				this.db.run("UPDATE proposal SET status = 'cancelled', reason = ? WHERE id = ? AND status = 'open'", `Limit erreicht, aber Risikoprüfung: ${c.violations.join(" ")}`, r.id);
-				this.event("proposal.cancelled", "Desk", `${label}: Limit erreicht, nicht ausgeführt – ${c.violations[0]}`);
+			if (!r.limit_price && byAgent && movePct(r.quote_price, p.price) > this.cfg.staleMovePct) {
+				const reason = `Kurs hat sich bis zur Eröffnung um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt.`;
+				if (this.db.run("UPDATE proposal SET status = 'stale', reason = ? WHERE id = ? AND status = 'open'", reason, r.id).changes) this.event("proposal.stale", "Desk", `${label} #${r.id}: ${reason}`, { to: [r.author], ref: `#${r.id}` });
 				continue;
 			}
-			if (!this.db.run("UPDATE proposal SET status = 'filled', fill_price = ? WHERE id = ? AND status = 'open'", p.price, r.id).changes) continue;
-			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: "Limit" });
-			this.event("trade.fill", "Desk", `${label} #${r.id} zu ${num(p.price)} ${p.currency} ausgeführt (Limit ${num(r.limit_price)}, ${a.name})`, { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
+			// dieselbe Prüfung wie bei der Freigabe, mit Stop, Risiko je Trade und Stop-Pflicht – ohne sich selbst als Reservierung
+			const c = this.check(a, { side: r.side, qty, orderType: "market", stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, { byAgent, exclude: r.id });
+			if (!c.ok) {
+				const what = r.limit_price ? "Limit erreicht" : "Börse offen";
+				this.db.run("UPDATE proposal SET status = 'cancelled', reason = ? WHERE id = ? AND status = 'open'", `${what}, aber Risikoprüfung: ${c.violations.join(" ")}`, r.id);
+				this.event("proposal.cancelled", "Desk", `${label}: ${what}, nicht ausgeführt – ${c.violations[0]}`, byAgent ? { to: [r.author], ref: `#${r.id}` } : undefined);
+				continue;
+			}
+			if (!this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, reason = '' WHERE id = ? AND status = 'open'", p.price, r.id).changes) continue;
+			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: r.limit_price ? "Limit" : "Eröffnung" });
+			this.event("trade.fill", "Desk", `${label} #${r.id} zu ${num(p.price)} ${p.currency} ausgeführt (${r.limit_price ? `Limit ${num(r.limit_price)}` : "zur Eröffnung"}, ${a.name})`, { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
 		}
 	}
 
 	private expire() {
 		const now = this.now();
+		// eine unbeantwortete Rückfrage des Brokers verfällt; bestätigt werden kann sie danach nicht mehr
+		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'confirm' AND COALESCE(status_at, decided_at, created_at) <= ?", now - CONFIRM_TTL_MS)) {
+			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ?, status_at = ? WHERE id = ? AND status = 'confirm'", "Rückfrage des Brokers nicht innerhalb von 15 Minuten bestätigt – nichts gesendet.", now, r.id).changes)
+				this.event("proposal.expired", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: Rückfrage des Brokers abgelaufen – nichts gesendet.`, { to: r.author === this.cfg.user ? [this.cfg.user] : [this.cfg.user, r.author], ref: `#${r.id}` });
+		}
 		// Broker-Orders laufen beim Broker ab (Tagesorder); deren Ende meldet der Abruf, nicht diese Uhr
 		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status IN ('pending','open','placed') AND expires_at <= ? AND broker_order_id IS NULL", now)) {
 			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ? WHERE id = ? AND status = ?", r.status === "pending" ? "nicht rechtzeitig entschieden" : "nicht ausgeführt", r.id, r.status).changes)
@@ -1381,9 +1793,16 @@ export class Desk extends EventEmitter {
 
 	/** Stop-Loss und Kursziel sind Hinweise an dich, keine automatischen Orders. */
 	private checkStops() {
-		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'filled' AND side = 'buy' AND ((stop_loss IS NOT NULL AND stop_hit_at IS NULL) OR (take_profit IS NOT NULL AND target_hit_at IS NULL))");
+		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'filled' AND side = 'buy' AND closed_at IS NULL AND ((stop_loss IS NOT NULL AND stop_hit_at IS NULL) OR (take_profit IS NOT NULL AND target_hit_at IS NULL))");
+		const held = new Map<string, Set<number>>(); // Depot → Vorschläge mit gehaltenen Losen
+		const booked = new Set(rows.length ? this.db.all<{ p: number }>(`SELECT DISTINCT proposal_id AS p FROM trade WHERE deleted_at IS NULL AND proposal_id IN (${rows.map((r) => r.id).join(",")})`).map((x) => x.p) : []);
 		for (const r of rows) {
-			if (!this.book(r.account_id).holdings.has(r.symbol)) continue;
+			if (!held.has(r.account_id)) held.set(r.account_id, new Set([...this.heldProposals(r.account_id).values()].flat()));
+			if (!held.get(r.account_id)!.has(r.id)) {
+				// gebucht, aber verkauft: der Hinweis ist erledigt und kommt nie wieder (auch nicht für einen späteren Kauf)
+				if (booked.has(r.id)) this.db.run("UPDATE proposal SET closed_at = ? WHERE id = ?", this.now(), r.id);
+				continue; // ohne gebuchte Ausführung (Broker meldet sie noch) wartet der Hinweis
+			}
 			const q = this.quoteRow(r.symbol);
 			if (!q) continue;
 			const a = this.account(r.account_id);
@@ -1413,7 +1832,13 @@ export class Desk extends EventEmitter {
 	start() {
 		this.stop();
 		let last = 0;
+		let lastKeepAlive = this.now();
 		this.timer = setInterval(() => {
+			// Broker-Sitzungen eigenständig wach halten – auch bei Kurstakt 3600 s oder gestörter Börse
+			if (this.brokers.size && this.now() - lastKeepAlive >= BROKER_KEEPALIVE_MS) {
+				lastKeepAlive = this.now();
+				for (const [id, b] of this.brokers) void b.keepAlive().catch((e) => console.error(`broker ${id} keepAlive:`, (e as Error).message));
+			}
 			const every = (this.viewers > 0 ? this.cfg.liveIntervalSec : this.cfg.quoteIntervalSec) * 1000 * (this.marketState === "error" ? 3 : 1);
 			if (this.now() - last < every) return;
 			last = this.now();

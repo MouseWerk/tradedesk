@@ -1,10 +1,10 @@
 // SQLite über das eingebaute node:sqlite. Migrationen nummeriert und nur additiv (PRAGMA user_version);
 // eine veröffentlichte Migration wird nie geändert, die nächste bekommt die nächste Nummer.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
 	/* 1 */ `
 	CREATE TABLE trade (
 		id INTEGER PRIMARY KEY,
@@ -88,6 +88,15 @@ const MIGRATIONS: string[] = [
 	ALTER TABLE proposal ADD COLUMN broker_conid INTEGER;
 	CREATE TABLE broker_conid (account_id TEXT NOT NULL, conid INTEGER NOT NULL, symbol TEXT NOT NULL, PRIMARY KEY (account_id, conid));
 	`,
+	/* 4: Anmeldung des Besitzers (nur Hashes der Sitzungs-Tokens), robuste Broker-Orders, geschlossene Stop-Hinweise */ `
+	CREATE TABLE owner_session (token_hash TEXT PRIMARY KEY, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+	ALTER TABLE proposal ADD COLUMN broker_coid TEXT;
+	ALTER TABLE proposal ADD COLUMN status_at INTEGER;
+	ALTER TABLE proposal ADD COLUMN last_seen_at INTEGER;
+	ALTER TABLE proposal ADD COLUMN filled_qty REAL;
+	ALTER TABLE proposal ADD COLUMN closed_at INTEGER;
+	CREATE INDEX trade_proposal ON trade (proposal_id) WHERE proposal_id IS NOT NULL;
+	`,
 ];
 
 function param(v: unknown): SQLInputValue {
@@ -140,7 +149,13 @@ export function openDatabase(file: string): Database {
 	};
 	const version = Number((raw.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
 	if (version > MIGRATIONS.length) throw new Error(`Datenbank ${file} stammt aus einer neueren Version (${version} > ${MIGRATIONS.length}) – bitte die neuere Version starten.`);
-	if (version < MIGRATIONS.length && existed && version > 0) copyFileSync(file, `${file}.v${version}.bak`); // Sicherung vor jeder Migration
+	// Sicherung vor jeder Migration: VACUUM INTO schreibt eine vollständige, in sich stimmige Kopie – auch mit dem, was
+	// erst im WAL steht (eine Kopie nur der Hauptdatei wäre älter, als sie aussieht, oder kaputt)
+	if (version < MIGRATIONS.length && existed && version > 0) {
+		const bak = `${file}.v${version}.bak`;
+		rmSync(bak, { force: true });
+		raw.exec(`VACUUM INTO '${bak.replaceAll("'", "''")}'`);
+	}
 	for (let v = version; v < MIGRATIONS.length; v++) {
 		tx(() => {
 			raw.exec(MIGRATIONS[v]);

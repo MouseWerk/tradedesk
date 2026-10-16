@@ -8,7 +8,7 @@ describe("cents", () => {
 		expect(cents(1.005)).toBe(101);
 		expect(cents(-1.005)).toBe(-101);
 		expect(cents(0.1 + 0.2)).toBe(30);
-		expect(cents(Number.NaN)).toBe(0);
+		expect(() => cents(Number.NaN)).toThrow(); // nie still 0 (Q1 B2)
 	});
 });
 
@@ -95,11 +95,13 @@ describe("movePct", () => {
 
 describe("parseTradesCsv", () => {
 	it("reads German CSV with decimal comma, umlaut headers and quotes", () => {
-		const r = parseTradesCsv('﻿Datum;Symbol;Seite;Stück;Kurs;Gebühr;Währung;Notiz\n02.03.2026;sap.de;Kauf;3;1.181,40;1,00;EUR;"Sparplan; März"\n\n2026-03-05 09:30;AAPL;verkauf;0,5;230;0;USD;');
+		// Fremdwährung mit dem Kurs des Handelstags (Q1 B17)
+		const r = parseTradesCsv('﻿Datum;Symbol;Seite;Stück;Kurs;Gebühr;Währung;Notiz;Wechselkurs\n02.03.2026;sap.de;Kauf;3;1.181,40;1,00;EUR;"Sparplan; März";\n\n2026-03-05 09:30;AAPL;verkauf;0,5;230;0;USD;;0,92');
 		expect(r.errors).toEqual([]);
 		expect(r.rows).toHaveLength(2);
 		expect(r.rows[0]).toMatchObject({ symbol: "SAP.DE", side: "buy", qty: 3, price: 1181.4, feeCents: 100, note: "Sparplan; März" });
 		expect(new Date(r.rows[1].time).getHours()).toBe(9);
+		expect(r.rows[1]).toMatchObject({ currency: "USD", fx: 0.92 });
 	});
 	it("reads English CSV with commas", () => {
 		const r = parseTradesCsv("date,symbol,side,qty,price,fee\n2026-01-02,MSFT,buy,1.5,400.5,1");

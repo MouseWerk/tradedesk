@@ -2,11 +2,21 @@
 // Geldbeträge in Cent (EUR), kaufmännisch gerundet an genau einer Stelle: cents().
 import type { Check, ProposalStatus, RiskLimits, Side } from "./schema.ts";
 
-/** EUR → Cent, kaufmännisch (halbe Cent vom Nullpunkt weg). */
+/**
+ * EUR → Cent, kaufmännisch (halbe Cent vom Nullpunkt weg). Ein nicht endlicher oder nicht mehr exakt darstellbarer
+ * Betrag ist ein Fehler, nie 0: sonst rutscht eine Order über 1e308 € als "0,00 €" durch jede Grenze.
+ */
 export function cents(eur: number): number {
-	if (!Number.isFinite(eur)) return 0;
+	const abs = Math.abs(eur) * 100 * (1 + Number.EPSILON);
+	if (!Number.isFinite(abs) || abs > Number.MAX_SAFE_INTEGER) throw new RangeError(`Betrag ${eur} € ist nicht darstellbar.`);
 	const sign = eur < 0 ? -1 : 1;
-	return sign * Math.round(Math.abs(eur) * 100 * (1 + Number.EPSILON)) || 0;
+	return sign * Math.round(abs) || 0;
+}
+
+/** Wie cents(), aber null statt Fehler – für Prüfungen, die einen nicht darstellbaren Betrag als Verstoß melden. */
+export function centsOrNull(eur: number): number | null {
+	const abs = Math.abs(eur) * 100 * (1 + Number.EPSILON);
+	return Number.isFinite(abs) && abs <= Number.MAX_SAFE_INTEGER ? cents(eur) : null;
 }
 
 export const QTY_DECIMALS = 6;
@@ -17,7 +27,10 @@ export function roundQty(q: number): number {
 
 export function decimals(n: number): number {
 	const s = String(n);
-	if (s.includes("e-")) return Number(s.split("e-")[1]);
+	if (s.includes("e-")) {
+		const [mantissa, exp] = s.split("e-");
+		return Number(exp) + (mantissa.includes(".") ? mantissa.split(".")[1].length : 0);
+	}
 	return s.includes(".") ? s.split(".")[1].length : 0;
 }
 
@@ -57,9 +70,12 @@ export interface Book {
 	feesCents: number;
 	buysCents: number; // Summe Kaufwert + Gebühr
 	sellsCents: number; // Summe Verkaufswert − Gebühr
+	oversold: Map<number, number>; // Verkauf → Stück über den Bestand zu seinem Zeitpunkt (sollte leer sein)
+	openLots: Map<string, { tradeId: number; qty: number }[]>; // noch gehaltene Lose je Symbol, ältestes zuerst
 }
 
 interface Lot {
+	tradeId: number;
 	qty: number;
 	price: number;
 	costCents: number;
@@ -69,6 +85,7 @@ interface Lot {
 export function buildBook(trades: TradeLike[]): Book {
 	const lots = new Map<string, Lot[]>();
 	const realizedBySell = new Map<number, number>();
+	const oversold = new Map<number, number>();
 	let realizedCents = 0;
 	let feesCents = 0;
 	let buysCents = 0;
@@ -81,7 +98,7 @@ export function buildBook(trades: TradeLike[]): Book {
 		if (t.side === "buy") {
 			buysCents += t.valueCents + t.feeCents;
 			// Preis je Stück in EUR aus dem gebuchten Wert: bei Trade Republic kauft man AAPL in EUR, notiert ist sie in USD
-			list.push({ qty: t.qty, price: t.valueCents / 100 / t.qty, costCents: t.valueCents + t.feeCents });
+			list.push({ tradeId: t.id, qty: t.qty, price: t.valueCents / 100 / t.qty, costCents: t.valueCents + t.feeCents });
 			continue;
 		}
 		sellsCents += t.valueCents - t.feeCents;
@@ -97,6 +114,7 @@ export function buildBook(trades: TradeLike[]): Book {
 			left = roundQty(left - take);
 			if (lot.qty <= 1e-9) list.shift();
 		}
+		if (left > 1e-9) oversold.set(t.id, left);
 		const soldQty = roundQty(t.qty - left);
 		// Erlös nur für die tatsächlich gehaltenen Stück
 		const proceeds = soldQty >= t.qty - 1e-9 ? t.valueCents - t.feeCents : Math.round(((t.valueCents - t.feeCents) * soldQty) / t.qty);
@@ -105,14 +123,31 @@ export function buildBook(trades: TradeLike[]): Book {
 		realizedCents += realized;
 	}
 	const holdings = new Map<string, Holding>();
+	const openLots = new Map<string, { tradeId: number; qty: number }[]>();
 	for (const [symbol, list] of lots) {
+		if (list.length) openLots.set(symbol, list.map((l) => ({ tradeId: l.tradeId, qty: l.qty })));
 		const qty = roundQty(list.reduce((s, l) => s + l.qty, 0));
 		if (qty <= 1e-9) continue;
 		const costCents = list.reduce((s, l) => s + l.costCents, 0);
 		const avgPrice = list.reduce((s, l) => s + l.qty * l.price, 0) / qty;
 		holdings.set(symbol, { symbol, qty, costCents, avgPrice });
 	}
-	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents };
+	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents, oversold, openLots };
+}
+
+/** Verkäufe, die zu ihrem Zeitpunkt mehr Stück verkaufen, als im Bestand waren (Trade-ID → Stück zu viel). Wie buildBook sortiert. */
+export function oversold(trades: Pick<TradeLike, "id" | "symbol" | "side" | "qty" | "time">[]): Map<number, number> {
+	const held = new Map<string, number>();
+	const out = new Map<number, number>();
+	for (const t of [...trades].sort((a, b) => a.time - b.time || a.id - b.id)) {
+		const h = held.get(t.symbol) ?? 0;
+		if (t.side === "buy") held.set(t.symbol, roundQty(h + t.qty));
+		else {
+			if (t.qty > h + 1e-9) out.set(t.id, roundQty(t.qty - h));
+			held.set(t.symbol, Math.max(0, roundQty(h - t.qty)));
+		}
+	}
+	return out;
 }
 
 export interface Valued {
@@ -178,6 +213,9 @@ export interface OrderCheckInput {
 	byAgent?: boolean; // Stop-Pflicht gilt für Agenten
 }
 
+/** Weiter vom Kurs darf ein Limit nicht liegen. */
+export const MAX_LIMIT_MOVE_PCT = 50;
+
 const eur = (c: number) => `${(c / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
 
 /** Risikoprüfung vor jedem Vorschlag, jeder Freigabe und jeder Ausführung. Verstöße blockieren, Hinweise nicht. */
@@ -188,12 +226,22 @@ export function checkOrder(i: OrderCheckInput): Check {
 	if (!(i.qty > 0) || !Number.isFinite(i.qty)) violations.push("Stückzahl muss größer als 0 sein.");
 	else if (decimals(i.qty) > QTY_DECIMALS) violations.push(`Stückzahl mit höchstens ${QTY_DECIMALS} Nachkommastellen.`);
 	if (i.orderType === "limit" && !(i.limitPrice && i.limitPrice > 0)) violations.push("Limit-Order ohne Limitkurs.");
-	if (i.price === null || i.fx === null) {
+	const bad = (v: number | null | undefined) => v !== null && v !== undefined && !(Number.isFinite(v) && v > 0);
+	if (bad(i.stopLoss)) violations.push("Stop-Loss ist keine gültige Zahl.");
+	if (bad(i.takeProfit)) violations.push("Kursziel ist keine gültige Zahl.");
+	if (i.price === null || i.fx === null || bad(i.price) || bad(i.fx)) {
 		violations.push(`Kein aktueller Kurs für ${i.symbol} – ohne Kurs keine Order.`);
 		return { ok: false, violations, warnings, estimateCents: 0, feeCents: i.feeCents, price: i.price };
 	}
 	const p = i.orderType === "limit" && i.limitPrice ? i.limitPrice : i.price;
-	const estimateCents = orderValueCents(i.qty, p, i.fx);
+	// ein nicht darstellbarer Orderwert (z. B. Limit 1e308) ist ein Verstoß, nie 0 €
+	const estimate = Number.isFinite(i.qty) ? centsOrNull(i.qty * p * i.fx) : null;
+	if (estimate === null) {
+		violations.push("Orderwert ist nicht darstellbar – Stückzahl und Kurs prüfen.");
+		return { ok: false, violations, warnings, estimateCents: 0, feeCents: i.feeCents, price: i.price };
+	}
+	const estimateCents = estimate;
+	if (estimateCents <= 0) violations.push("Orderwert unter einem Cent – keine Order.");
 	if (i.side === "sell") {
 		if (i.heldQty + 1e-9 < i.qty) violations.push(`Im Depot sind nur ${i.heldQty.toLocaleString("de-DE")} Stück ${i.symbol} – Leerverkäufe gibt es hier nicht.`);
 		if (i.stopLoss || i.takeProfit) warnings.push("Stop-Loss und Kursziel gelten nur für Käufe und werden ignoriert.");
@@ -208,9 +256,10 @@ export function checkOrder(i: OrderCheckInput): Check {
 		if (i.stopLoss && i.stopLoss >= p) violations.push("Stop-Loss muss unter dem Kaufkurs liegen.");
 		else if (i.stopLoss) {
 			// Risiko je Trade: Verlust bis zum Stop plus Kauf- und Verkaufsgebühr
-			const risk = orderValueCents(i.qty, p - i.stopLoss, i.fx) + 2 * i.feeCents;
+			const risk = (centsOrNull(i.qty * (p - i.stopLoss) * i.fx) ?? Number.POSITIVE_INFINITY) + 2 * i.feeCents;
 			const riskPct = i.equityCents > 0 ? (risk / i.equityCents) * 100 : 0;
-			if (i.limits.maxRiskPct > 0 && riskPct > i.limits.maxRiskPct)
+			if (!Number.isFinite(risk)) violations.push("Risiko bis zum Stop ist nicht darstellbar.");
+			else if (i.limits.maxRiskPct > 0 && riskPct > i.limits.maxRiskPct)
 				violations.push(`Risiko bis zum Stop ${eur(risk)} = ${riskPct.toFixed(2).replace(".", ",")} % des Depots – Grenze ${String(i.limits.maxRiskPct).replace(".", ",")} % je Trade.`);
 		} else if (i.byAgent && i.limits.requireStop) violations.push("Käufe von Agenten brauchen einen Stop-Loss.");
 		else warnings.push("Ohne Stop-Loss ist das Risiko dieser Order nicht begrenzt.");
@@ -219,7 +268,9 @@ export function checkOrder(i: OrderCheckInput): Check {
 	if (i.limits.maxOrderCents > 0 && estimateCents > i.limits.maxOrderCents) violations.push(`Orderwert ${eur(estimateCents)} liegt über der Grenze von ${eur(i.limits.maxOrderCents)}.`);
 	if (i.openByAuthor !== undefined && i.limits.maxOpenProposals > 0 && i.openByAuthor >= i.limits.maxOpenProposals)
 		violations.push(`Schon ${i.openByAuthor} offene Vorschläge – Grenze ${i.limits.maxOpenProposals}. Erst entscheiden lassen.`);
-	if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > 10) warnings.push("Limit liegt mehr als 10 % vom aktuellen Kurs entfernt.");
+	// ein Limit weit weg vom Kurs ist fast immer ein Tippfehler – ab 50 % keine Order, ab 10 % ein Hinweis
+	if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > MAX_LIMIT_MOVE_PCT) violations.push(`Limit liegt mehr als ${MAX_LIMIT_MOVE_PCT} % vom aktuellen Kurs entfernt – Tippfehler?`);
+	else if (i.orderType === "limit" && i.limitPrice && movePct(i.price, i.limitPrice) > 10) warnings.push("Limit liegt mehr als 10 % vom aktuellen Kurs entfernt.");
 	if (estimateCents > 0 && i.feeCents / estimateCents > 0.02) warnings.push(`Gebühr ist ${((i.feeCents / estimateCents) * 100).toFixed(1).replace(".", ",")} % des Orderwerts.`);
 	return { ok: violations.length === 0, violations, warnings, estimateCents, feeCents: i.feeCents, price: i.price };
 }
