@@ -34,6 +34,7 @@ Exit codes: 0 ok, 1 refused or failed (message on stderr), 2 server not reachabl
 """
 import argparse
 import json
+import locale
 import os
 import sys
 import threading
@@ -100,6 +101,29 @@ def num(v) -> str:
         return "-"
     s = f"{v:,.6f}".rstrip("0").rstrip(".")
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def read_stdin() -> str:
+    """Text von stdin ("-") immer als UTF-8 lesen. Windows dekodiert stdin sonst in der ANSI-Codepage, und aus
+    „vorbörslich“ wird „vorbÃ¶rslich“. Was kein UTF-8 ist (Tastatur in einer alten Konsole), fällt auf die Codepage zurück."""
+    raw = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read().encode("utf-8")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode(locale.getpreferredencoding(False), errors="replace")
+    return text.lstrip("\ufeff")
+
+
+def chat_since(since: int, limit: int = 100, pages: int = 50):
+    """Alle Nachrichten nach since, seitenweise in Reihenfolge – auch wenn in einem Schwall mehr als limit kamen."""
+    msgs = []
+    for _ in range(pages):
+        page = call("GET", f"/api/chat?since={since}&limit={limit}")
+        msgs += page
+        if len(page) < limit:
+            break
+        since = max(m["id"] for m in page)
+    return msgs
 
 
 def out(args, data, text: str):
@@ -180,7 +204,7 @@ def cmd_proposals(args):
 
 
 def cmd_journal(args):
-    text = sys.stdin.read() if args.text == "-" else args.text
+    text = read_stdin() if args.text == "-" else args.text
     body = {"author": args.as_, "text": text, "kind": args.kind}
     if args.symbol:
         body["symbol"] = args.symbol.upper()
@@ -255,7 +279,7 @@ def chat_line(m) -> str:
 
 
 def cmd_say(args):
-    text = sys.stdin.read() if args.text == "-" else args.text
+    text = read_stdin() if args.text == "-" else args.text
     body = {"author": args.as_, "text": text, "to": args.to or []}
     if args.ref:
         body["ref"] = args.ref
@@ -264,8 +288,7 @@ def cmd_say(args):
 
 
 def cmd_read(args):
-    since = 0 if args.all else read_seen(args.as_)
-    msgs = call("GET", f"/api/chat?since={since}&limit={args.limit}")
+    msgs = call("GET", f"/api/chat?limit={args.limit}") if args.all else chat_since(read_seen(args.as_), args.limit)
     me = args.as_.lower()
     if not args.all:
         msgs = [m for m in msgs if m["author"].lower() != me]
@@ -281,7 +304,7 @@ def cmd_wait(args):
     since = read_seen(args.as_)
     deadline = time.time() + max(5, args.timeout)
     while True:
-        msgs = call("GET", f"/api/chat?since={since}&limit=100")
+        msgs = chat_since(since)
         mine = [m for m in msgs if m["author"].lower() != me and (not m["to"] or any(t.lower() == me for t in m["to"]))]
         if msgs:
             since = max(m["id"] for m in msgs)
@@ -305,7 +328,7 @@ def cmd_brief(args):
     me = next(a for a in ping["agents"] if a.lower() == me.lower())
     cp = call("GET", "/api/cockpit")
     props = call("GET", "/api/proposals?" + urllib.parse.urlencode({"author": me, "limit": "20"}))
-    msgs = call("GET", f"/api/chat?since={read_seen(me)}&limit=100")
+    msgs = chat_since(read_seen(me))
     msgs = [m for m in msgs if m["author"] != me and (not m["to"] or me in m["to"])]
     own = next((d for d in cp["days"] if d["owner"] == me), None)
     data = {"me": me, "killSwitch": cp["killSwitch"], "market": cp["market"], "sessions": cp["sessions"], "myAccount": own,
@@ -436,6 +459,7 @@ def main(argv=None) -> int:
 
 def selftest() -> int:
     seen = []
+    chat_extra = []
 
     class Fake(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -459,10 +483,15 @@ def selftest() -> int:
             if self.path.startswith("/api/market/quote/"):
                 return self.reply(200, {"symbol": "SAP.DE", "name": "SAP SE", "currency": "EUR", "price": 201.25, "fx": 1, "priceEur": 201.25, "watched": True})
             if self.path.startswith("/api/chat"):
-                since = int(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("since", ["0"])[0])
+                # wie der Server: mit since die nächsten limit in Reihenfolge, ohne since die neuesten limit
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                limit = int(q.get("limit", ["200"])[0])
                 msgs = [{"id": 4, "time": 1, "author": "Nova", "role": "agent", "text": "@Atlas Gap bei SAP?", "to": ["Atlas"], "ref": "SAP.DE"},
-                        {"id": 5, "time": 2, "author": "Owner", "role": "user", "text": "an alle", "to": [], "ref": None}]
-                return self.reply(200, [m for m in msgs if m["id"] > since])
+                        {"id": 5, "time": 2, "author": "Owner", "role": "user", "text": "an alle", "to": [], "ref": None}] + chat_extra
+                if "since" not in q:
+                    return self.reply(200, msgs[-limit:])
+                since = int(q["since"][0])
+                return self.reply(200, [m for m in msgs if m["id"] > since][:limit])
             if self.path == "/api/market/scan":
                 return self.reply(200, [{"symbol": "SAP.DE", "state": "open", "price": 201.25, "changePct": 2.2, "gapPct": 0.5, "relVolume": 1.8, "atrPct": 2.1, "rangePos": 0.8, "held": False},
                                         {"symbol": "NVDA", "state": "pre", "price": 217.0, "changePct": -4.0, "gapPct": -3.0, "relVolume": None, "atrPct": None, "rangePos": None, "held": True}])
@@ -498,6 +527,7 @@ def selftest() -> int:
 
     import contextlib
     import io
+    import subprocess
 
     def run(argv):
         o, e = io.StringIO(), io.StringIO()
@@ -536,6 +566,19 @@ def selftest() -> int:
         check("wait times out with exit 3 when nothing is new", code == 3 and "nothing new" in o)
         code, o, _ = run(["wait", "--as", "Nova", "--timeout", "2", "--every", "0.1"])
         check("wait returns messages for everyone at once", code == 0 and "#5 Owner" in o)
+        chat_extra.extend({"id": i, "time": i, "author": "Nova", "role": "agent", "text": f"Schwall {i}", "to": [], "ref": None} for i in range(6, 13))
+        code, o, _ = run(["read", "--as", "Atlas", "--limit", "2"])
+        check("read pages through a burst larger than --limit and loses nothing", code == 0 and all(f"#{i} Nova" in o for i in range(6, 13)) and read_seen("Atlas") == 12)
+        code, o, _ = run(["read", "--as", "Atlas", "--limit", "2"])
+        check("after the burst nothing is new", code == 0 and "no new messages" in o)
+        # echter Prozess wie unter Windows: Text über stdin ("-") als UTF-8, auch wenn die Konsole eine ANSI-Codepage hat
+        word = "vorbörslich – Größe über 5 €"
+        for cmd in (["say", "--as", "Atlas", "-"], ["journal", "--as", "Atlas", "-"]):
+            env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+            r = subprocess.run([sys.executable, os.path.abspath(__file__), *cmd], input=(word + "\n").encode("utf-8"), env=env, capture_output=True, timeout=30)
+            check(f"{cmd[0]} reads umlauts from stdin as UTF-8", r.returncode == 0 and seen[-1][2]["text"].strip() == word)
+        code, o, _ = run(["say", "--as", "Atlas", word])
+        check("say sends umlauts from argv unchanged", code == 0 and seen[-1][2]["text"] == word)
         os.environ["TRADEDESK_URL"] = "http://127.0.0.1:9"
         code, _, e = run(["status"])
         check("unreachable server exits 2", code == 2 and "not reachable" in e)

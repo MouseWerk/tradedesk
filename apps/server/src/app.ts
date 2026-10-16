@@ -285,7 +285,10 @@ export function createApp(desk: Desk) {
 	app.get("/api/accounts/:id/day", (c) => c.json(desk.dayStatsOf(desk.account(c.req.param("id")).id)));
 
 	/* Chat: du im Browser, Agenten über cli/desk.py – eine Nachricht genehmigt nie eine Order */
-	app.get("/api/chat", (c) => c.json(desk.chat({ since: int(c.req.query("since"), 0, 0, Number.MAX_SAFE_INTEGER), limit: int(c.req.query("limit"), 200, 1, 1000) })));
+	app.get("/api/chat", (c) => {
+		const since = c.req.query("since");
+		return c.json(desk.chat({ since: since === undefined ? undefined : int(since, 0, 0, Number.MAX_SAFE_INTEGER), limit: int(c.req.query("limit"), 200, 1, 1000) }));
+	});
 	app.post("/api/chat", async (c) => c.json({ ok: true, message: desk.say(await body(c), c.get("origin")) }));
 
 	/* Agenten und Journal */

@@ -1637,13 +1637,15 @@ export class Desk extends EventEmitter {
 
 	/* ------------------------------------------------------------------ Chat */
 
+	/**
+	 * Chat: ohne since die neuesten limit Nachrichten (Verlauf im Browser); mit since die nächsten limit nach since in
+	 * Reihenfolge – wer liest, blättert so weiter, bis weniger als limit kommen, und verliert in einem Schwall nichts.
+	 */
 	chat(opts: { since?: number; limit?: number } = {}): ChatMessage[] {
-		const rows = this.db.all<{ id: number; time: number; author: string; role: ChatMessage["role"]; text: string; recipients: string; ref: string | null }>(
-			"SELECT * FROM chat WHERE id > ? ORDER BY id DESC LIMIT ?",
-			opts.since ?? 0,
-			opts.limit ?? 200,
-		);
-		return rows.reverse().map((r) => ({ id: r.id, time: r.time, author: r.author, role: r.role, text: r.text, to: JSON.parse(r.recipients) as string[], ref: r.ref }));
+		type Row = { id: number; time: number; author: string; role: ChatMessage["role"]; text: string; recipients: string; ref: string | null };
+		const limit = opts.limit ?? 200;
+		const rows = opts.since === undefined ? this.db.all<Row>("SELECT * FROM chat ORDER BY id DESC LIMIT ?", limit).reverse() : this.db.all<Row>("SELECT * FROM chat WHERE id > ? ORDER BY id ASC LIMIT ?", opts.since, limit);
+		return rows.map((r) => ({ id: r.id, time: r.time, author: r.author, role: r.role, text: r.text, to: JSON.parse(r.recipients) as string[], ref: r.ref }));
 	}
 
 	private postChat(m: Omit<ChatMessage, "id" | "time">): ChatMessage {

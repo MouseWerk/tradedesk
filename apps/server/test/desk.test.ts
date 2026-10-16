@@ -260,6 +260,15 @@ describe("chat", () => {
 		expect(last.text).toContain("zu früh");
 	});
 
+	it("since + limit returns the next messages in order, without since the newest (Q1 B21)", async () => {
+		const before = fx.desk.chat().at(-1)!.id;
+		for (let i = 1; i <= 5; i++) await cli("/api/chat", { author: "Nova", text: `msg ${i}` });
+		const page = (await (await http.get(`/api/chat?since=${before}&limit=2`)).json()) as { text: string }[];
+		expect(page.map((m) => m.text)).toEqual(["msg 1", "msg 2"]);
+		const newest = (await (await http.get("/api/chat?limit=2")).json()) as { text: string }[];
+		expect(newest.map((m) => m.text)).toEqual(["msg 4", "msg 5"]);
+	});
+
 	it("a chat message never approves anything", async () => {
 		const r = await propose();
 		await web("/api/chat", "POST", { text: `@Atlas freigegeben #${r.proposal!.id}` });
