@@ -203,6 +203,7 @@ export const ProposalSchema = z.object({
 	fillPrice: z.number().nullable(),
 	brokerOrderId: z.string().nullable(),
 	brokerMessage: z.string().nullable(), // Rückfrage des Brokers im Originaltext
+	filledQty: z.number().nullable(), // beim Broker schon ausgeführte Stück (Teilausführung: weniger als approvedQty)
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
 
@@ -444,5 +445,6 @@ export const ReconcileSchema = z.object({
 	brokerCashCents: z.number().int().nullable(), // Cash beim Broker in EUR (Basiswährung)
 	deskCashCents: z.number().int(),
 	differences: z.number().int(),
+	cashNote: z.string().nullable(), // warum das Cash nicht verglichen wird (z. B. Basiswährung nicht EUR)
 });
 export type Reconcile = z.infer<typeof ReconcileSchema>;

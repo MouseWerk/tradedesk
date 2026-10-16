@@ -275,7 +275,8 @@ describe("broker (IBKR, fake gateway)", () => {
 		const r = await proposeIb();
 		const p = await fx.desk.approve(r.proposal!.id, {});
 		expect(p).toMatchObject({ status: "placed", brokerOrderId: expect.any(String) });
-		expect(fx.broker.placed.at(-1)).toMatchObject({ side: "buy", qty: 3, type: "market", cOID: `desk-${r.proposal!.id}` });
+		expect(fx.broker.placed.at(-1)).toMatchObject({ side: "buy", qty: 3, type: "market", cOID: `desk-${fx.desk.installId}-${r.proposal!.id}` });
+		expect(fx.desk.installId).toMatch(/^[0-9a-f]{8}$/);
 		await fx.desk.tick();
 		expect(fx.desk.proposal(r.proposal!.id)).toMatchObject({ status: "filled", fillPrice: 201.25 });
 		const t = fx.desk.detail("ibkr").trades.find((x) => x.proposalId === r.proposal!.id)!;
@@ -290,7 +291,7 @@ describe("broker (IBKR, fake gateway)", () => {
 		const p = await fx.desk.approve(r.proposal!.id, {});
 		expect(p.status).toBe("confirm");
 		expect(p.brokerMessage).toContain("Size Limit");
-		expect([...fx.broker.book.values()].some((o) => o.t.cOID === `desk-${r.proposal!.id}`)).toBe(false);
+		expect([...fx.broker.book.values()].some((o) => o.t.cOID.endsWith(`-${r.proposal!.id}`))).toBe(false);
 		expect((await cli(`/api/proposals/${r.proposal!.id}/confirm`, {})).status).toBe(403); // Agenten bestätigen nie
 		expect((await fx.desk.confirmBroker(r.proposal!.id)).status).toBe("placed");
 	});
