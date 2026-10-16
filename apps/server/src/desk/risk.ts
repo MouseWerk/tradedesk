@@ -3,6 +3,7 @@ import type { Account, RiskData, RiskLimits } from "@desk/shared";
 import { RiskLimitsSchema } from "@desk/shared";
 import { DEFAULT_LIMITS, DeskError } from "./core.ts";
 import { DeskBook } from "./book.ts";
+import { de } from "../i18n/de.ts";
 
 export abstract class DeskRisk extends DeskBook {
 	dayLossPct(a: Account, s = this.summary(a)): number | null {
@@ -31,19 +32,19 @@ export abstract class DeskRisk extends DeskBook {
 	setLimits(accountId: string, body: unknown): RiskData {
 		const a = this.account(accountId);
 		const parsed = RiskLimitsSchema.safeParse({ ...this.limits(a.id), ...(body && typeof body === "object" ? body : {}), accountId: a.id });
-		if (!parsed.success) throw new DeskError(`Ungültige Grenze: ${parsed.error.issues[0].path.join(".")} – ${parsed.error.issues[0].message}`);
+		if (!parsed.success) throw new DeskError(de.risk.invalidLimit(parsed.error.issues[0].path.join("."), parsed.error.issues[0].message));
 		const l = parsed.data;
 		this.db.run(
 			"UPDATE risk SET max_order_cents = ?, max_position_pct = ?, daily_loss_pct = ?, max_open_proposals = ?, max_risk_pct = ?, require_stop = ? WHERE account_id = ?",
 			l.maxOrderCents, l.maxPositionPct, l.dailyLossPct, l.maxOpenProposals, l.maxRiskPct, l.requireStop, a.id,
 		);
-		this.event("risk.limits", this.cfg.user, `Grenzen für ${a.name} geändert`);
+		this.event("risk.limits", this.cfg.user, de.risk.limitsChanged(a.name));
 		return this.risk();
 	}
 
 	setKill(on: boolean): RiskData {
 		this.db.run("INSERT INTO setting (key, value) VALUES ('kill_switch', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", on ? "1" : "0");
-		this.event("risk.kill", this.cfg.user, on ? "Not-Aus eingeschaltet – keine Freigaben und keine Ausführungen" : "Not-Aus ausgeschaltet");
+		this.event("risk.kill", this.cfg.user, on ? de.risk.killOn : de.risk.killOff);
 		this.emit("tick", { at: this.now() });
 		return this.risk();
 	}

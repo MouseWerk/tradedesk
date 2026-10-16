@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Account } from "@desk/shared";
+import { de } from "./i18n/de.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,7 +59,7 @@ const clampNum = (v: unknown, d: number, lo: number, hi: number) => (typeof v ==
 
 /** Aus der Datei, was gültig ist; fehlerhafte Einträge fallen weg, statt den Start zu verhindern. */
 export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "home" | "dbFile" | "webDist" | "dev">, env = process.env): Config {
-	const user = typeof raw.user === "string" && NAME.test(raw.user) ? raw.user : (env.USERNAME ?? env.USER ?? "Ich");
+	const user = typeof raw.user === "string" && NAME.test(raw.user) ? raw.user : (env.USERNAME ?? env.USER ?? de.config.defaultUser);
 	const accounts: Account[] = [];
 	const brokers: Record<string, BrokerConfig> = {};
 	for (const r of Array.isArray(raw.accounts) ? (raw.accounts as Record<string, unknown>[]) : []) {
@@ -82,20 +83,20 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 			name: typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : r.id,
 			kind,
 			owner: "user",
-			broker: typeof r.broker === "string" && r.broker.trim() ? r.broker.trim().slice(0, 40) : kind === "paper" ? "Papier" : kind === "broker" ? "Interactive Brokers" : "Broker",
+			broker: typeof r.broker === "string" && r.broker.trim() ? r.broker.trim().slice(0, 40) : kind === "paper" ? de.config.paperBroker : kind === "broker" ? "Interactive Brokers" : de.config.manualBroker,
 			feeCents: eurToCents(r.feeEur, 100),
 			startCashCents: eurToCents(r.startCashEur, kind === "paper" ? 1_000_000 : 0),
 			live,
 		});
 	}
-	if (!accounts.length) accounts.push({ id: "papier", name: "Papierdepot", kind: "paper", owner: "user", broker: "Papier", feeCents: 100, startCashCents: 1_000_000, live: false });
+	if (!accounts.length) accounts.push({ id: "papier", name: de.config.paperDepot, kind: "paper", owner: "user", broker: de.config.paperBroker, feeCents: 100, startCashCents: 1_000_000, live: false });
 	const agents: string[] = [];
 	for (const r of Array.isArray(raw.agents) ? (raw.agents as unknown[]) : []) {
 		const a = (typeof r === "string" ? { name: r } : r) as Record<string, unknown>;
 		const name = typeof a?.name === "string" ? a.name.trim() : "";
 		if (!NAME.test(name) || name.toLowerCase() === user.toLowerCase() || agents.some((x) => x.toLowerCase() === name.toLowerCase())) continue;
 		agents.push(name);
-		accounts.push({ id: agentAccountId(name), name: `Papierdepot ${name}`, kind: "paper", owner: name, broker: "Papier", feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000), live: false });
+		accounts.push({ id: agentAccountId(name), name: de.config.agentDepot(name), kind: "paper", owner: name, broker: de.config.paperBroker, feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000), live: false });
 	}
 	return {
 		...base,
@@ -133,7 +134,7 @@ export function cleanListen(raw: unknown): string[] {
 		const addr = a.trim();
 		if (addr === "127.0.0.1" || addr === "localhost") continue; // gilt immer
 		if (!isTailscaleV4(addr)) {
-			console.warn(`listen: ${addr} ignoriert – nur Tailscale-Adressen (100.64.0.0/10) sind erlaubt.`);
+			console.warn(de.config.listenIgnored(addr));
 			continue;
 		}
 		if (!out.includes(addr)) out.push(addr);

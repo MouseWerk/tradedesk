@@ -4,6 +4,7 @@ import { atr, dayKey, ema, last, rsi, sessionState, vwap } from "@desk/shared";
 import { fxSymbol, type QuoteData } from "../market.ts";
 import { DeskError, parsePrice, num, type QuoteRow } from "./core.ts";
 import { DeskRisk } from "./risk.ts";
+import { de } from "../i18n/de.ts";
 
 const SYMBOL = /^[A-Z0-9.=^-]{1,24}$/;
 const QUOTE_FRESH_MS = 60_000;
@@ -51,7 +52,7 @@ export abstract class DeskMarket extends DeskRisk {
 		this.marketState = err ? "error" : "live";
 		// einzelne Ausfälle sichtbar machen: der Markt ist "live", aber diese Symbole haben keinen neuen Kurs
 		const some = [...this.quoteErrors.keys()];
-		this.marketError = err ?? (some.length ? `Kein neuer Kurs für ${some.slice(0, 6).join(", ")}${some.length > 6 ? ` und ${some.length - 6} weitere` : ""}` : null);
+		this.marketError = err ?? (some.length ? de.quotes.noNewQuote(some.slice(0, 6).join(", "), some.length - 6) : null);
 		if (quotes.length) this.quotesAt = this.now();
 	}
 
@@ -81,12 +82,12 @@ export abstract class DeskMarket extends DeskRisk {
 		if (!q) return null; // ohne Kurs meldet die Risikoprüfung selbst "Kein aktueller Kurs"
 		if (q.reg_start !== null && this.sessionOf(q) !== "open") return null;
 		const max = this.cfg.maxQuoteAgeSec * 1000;
-		const age = (fetched: number) => `${Math.round((this.now() - fetched) / 60_000)} min`;
-		if (this.now() - q.fetched_at > max) return `Kein aktueller Kurs für ${symbol} – der letzte ist ${age(q.fetched_at)} alt (Grenze ${this.cfg.maxQuoteAgeSec} s während der Handelszeit).`;
+		const age = (fetched: number) => de.quotes.age(Math.round((this.now() - fetched) / 60_000));
+		if (this.now() - q.fetched_at > max) return de.quotes.stale(symbol, age(q.fetched_at), this.cfg.maxQuoteAgeSec);
 		const currency = this.instrument(symbol)?.currency;
 		if (currency && currency !== "EUR") {
 			const f = this.quoteRow(fxSymbol(currency));
-			if (!f || this.now() - f.fetched_at > max) return `Kein aktueller Wechselkurs ${currency}/EUR${f ? ` – der letzte ist ${age(f.fetched_at)} alt` : ""}.`;
+			if (!f || this.now() - f.fetched_at > max) return de.quotes.staleFx(currency, f ? age(f.fetched_at) : null);
 		}
 		return null;
 	}
@@ -138,7 +139,7 @@ export abstract class DeskMarket extends DeskRisk {
 
 	normalizeSymbol(raw: unknown): string {
 		const s = typeof raw === "string" ? raw.trim().toUpperCase() : "";
-		if (!SYMBOL.test(s)) throw new DeskError("Ungültiges Symbol – Yahoo-Schreibweise, z. B. SAP.DE, AAPL, EUNL.DE oder BTC-EUR.");
+		if (!SYMBOL.test(s)) throw new DeskError(de.quotes.invalidSymbol);
 		return s;
 	}
 
@@ -146,18 +147,18 @@ export abstract class DeskMarket extends DeskRisk {
 		const symbol = this.normalizeSymbol(raw);
 		if (this.market.kind !== "off") {
 			await this.refresh([symbol]);
-			if (!this.quoteRow(symbol)) throw new DeskError(`Kein Kurs für ${symbol} gefunden – Symbol prüfen (Yahoo-Schreibweise, z. B. SAP.DE).`, 404);
+			if (!this.quoteRow(symbol)) throw new DeskError(de.quotes.symbolNotFound(symbol), 404);
 		} else if (!this.instrument(symbol)) {
 			this.db.run("INSERT INTO instrument (symbol, name, currency) VALUES (?,?,?)", symbol, symbol, "EUR");
 		}
 		const { changes } = this.db.run("INSERT OR IGNORE INTO watch (symbol, added_at, added_by) VALUES (?,?,?)", symbol, this.now(), actor);
-		if (changes) this.event("watch.add", actor, `${symbol} auf die Watchlist`);
+		if (changes) this.event("watch.add", actor, de.quotes.watchAdded(symbol));
 		return this.watchlist();
 	}
 
 	removeWatch(raw: unknown, actor: string): WatchItem[] {
 		const symbol = this.normalizeSymbol(raw);
-		if (this.db.run("DELETE FROM watch WHERE symbol = ?", symbol).changes) this.event("watch.remove", actor, `${symbol} von der Watchlist`);
+		if (this.db.run("DELETE FROM watch WHERE symbol = ?", symbol).changes) this.event("watch.remove", actor, de.quotes.watchRemoved(symbol));
 		return this.watchlist();
 	}
 
@@ -167,7 +168,7 @@ export abstract class DeskMarket extends DeskRisk {
 		try {
 			return await this.market.search(s);
 		} catch (e) {
-			throw new DeskError(`Suche nicht möglich: ${(e as Error).message}`, 502);
+			throw new DeskError(de.quotes.searchFailed((e as Error).message), 502);
 		}
 	}
 
@@ -185,16 +186,16 @@ export abstract class DeskMarket extends DeskRisk {
 			return chart;
 		} catch (e) {
 			if (hit) return hit.chart; // lieber ein älterer Chart als keiner
-			throw new DeskError(`Chart für ${symbol} nicht verfügbar: ${(e as Error).message}`, 502);
+			throw new DeskError(de.quotes.chartFailed(symbol, (e as Error).message), 502);
 		}
 	}
 
 	addAlert(body: { symbol?: unknown; op?: unknown; price?: unknown }, actor: string): WatchItem[] {
 		const symbol = this.normalizeSymbol(body.symbol);
-		if (body.op !== "above" && body.op !== "below") throw new DeskError("Alarm: über oder unter?");
-		const price = parsePrice(body.price, "Alarm: Kurs");
+		if (body.op !== "above" && body.op !== "below") throw new DeskError(de.quotes.alertOp);
+		const price = parsePrice(body.price, de.quotes.alertPrice);
 		this.db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES (?,?,?,?)", symbol, body.op, price, this.now());
-		this.event("alert.add", actor, `Alarm ${symbol} ${body.op === "above" ? "über" : "unter"} ${num(price)}`);
+		this.event("alert.add", actor, de.quotes.alertAdded(symbol, body.op === "above", num(price)));
 		return this.watchlist();
 	}
 
@@ -349,7 +350,7 @@ export abstract class DeskMarket extends DeskRisk {
 			return items;
 		} catch (e) {
 			if (hit) return hit.items;
-			throw new DeskError(`News für ${symbol} nicht verfügbar: ${(e as Error).message}`, 502);
+			throw new DeskError(de.quotes.newsFailed(symbol, (e as Error).message), 502);
 		}
 	}
 
@@ -365,7 +366,7 @@ export abstract class DeskMarket extends DeskRisk {
 			const q = this.quoteRow(al.symbol);
 			if (!q || !(al.op === "above" ? q.price >= al.price : q.price <= al.price)) continue;
 			this.db.run("UPDATE alert SET triggered_at = ? WHERE id = ?", this.now(), al.id);
-			this.event("alert", "Desk", `Alarm ${al.symbol} ${al.op === "above" ? "über" : "unter"} ${num(al.price)} – jetzt ${num(q.price)}`, { ref: al.symbol });
+			this.event("alert", "Desk", de.quotes.alertHit(al.symbol, al.op === "above", num(al.price), num(q.price)), { ref: al.symbol });
 		}
 	}
 }

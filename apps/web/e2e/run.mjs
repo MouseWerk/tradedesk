@@ -28,7 +28,7 @@ function startServer() {
 		const t = setTimeout(() => reject(new Error(`server did not start:\n${log}`)), 60_000);
 		p.stdout.on("data", (d) => {
 			log += d;
-			if (log.includes("Tradedesk on")) {
+			if (log.includes("Tradedesk läuft auf")) {
 				clearTimeout(t);
 				resolve(p);
 			}

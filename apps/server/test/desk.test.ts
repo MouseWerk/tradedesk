@@ -321,7 +321,7 @@ describe("broker (IBKR, fake gateway)", () => {
 		fx.cfg.liveTrading = true;
 		const r2 = await proposeIb();
 		const mismatch = await fx.desk.approve(r2.proposal!.id, {});
-		expect(mismatch.reason).toContain("Papierkonto angemeldet"); // echtes Depot, aber Papier-Sitzung im Gateway
+		expect(mismatch.reason).toBe("Interactive Brokers: das Gateway ist mit einem Papierkonto angemeldet, das Depot ist aber für echtes Geld eingetragen"); // echtes Depot, aber Papier-Sitzung im Gateway
 		fx.broker.paper = false;
 		const r3 = await proposeIb();
 		expect((await fx.desk.approve(r3.proposal!.id, {})).status).toBe("placed");

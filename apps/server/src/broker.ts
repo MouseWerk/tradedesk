@@ -2,6 +2,7 @@
 // (https://localhost:5000, Anmeldung macht der Besitzer dort selbst – der Desk sieht nie Zugangsdaten) und ein
 // Fake-Broker für Tests und Fixture. Felder und Pfade nach der IBKR-Web-API-Dokumentation (docs/web-api).
 import { HttpError, localJson } from "./http.ts";
+import { de } from "./i18n/de.ts";
 
 export interface BrokerSession {
 	connected: boolean;
@@ -110,14 +111,14 @@ export function sendFailure(e: unknown): PlaceResult {
 /** Antwort auf eine Order oder Bestätigung: Bestätigung der Order, Rückfrage, Fehler – oder nichts Verlässliches. */
 export function parsePlace(r: unknown): PlaceResult {
 	const first = (Array.isArray(r) ? r[0] : r) as Record<string, unknown> | undefined;
-	if (!first) return { kind: "unknown", message: "leere Antwort des Brokers" };
+	if (!first) return { kind: "unknown", message: de.broker.emptyAnswer };
 	if (typeof first.error === "string") return { kind: "rejected", message: first.error };
 	if (first.order_id !== undefined) return { kind: "submitted", orderId: String(first.order_id), status: String(first.order_status ?? "") };
 	if (typeof first.id === "string") {
 		const msg = Array.isArray(first.message) ? first.message.join(" ") : String(first.message ?? "");
 		return { kind: "reply", replyId: first.id, message: msg.replace(/\s+/g, " ").trim() };
 	}
-	return { kind: "unknown", message: `unbekannte Antwort: ${JSON.stringify(first).slice(0, 200)}` };
+	return { kind: "unknown", message: de.broker.unknownAnswer(JSON.stringify(first).slice(0, 200)) };
 }
 
 export class IbkrBroker implements Broker {
@@ -149,7 +150,7 @@ export class IbkrBroker implements Broker {
 			const s = await this.call<{ authenticated?: boolean; connected?: boolean; message?: string; fail?: string }>("POST", "/iserver/auth/status");
 			if (!s?.authenticated) {
 				this.ready = false;
-				return { connected: !!s?.connected, authenticated: false, account: null, paper: null, message: s?.fail || s?.message || "Im Gateway nicht angemeldet." };
+				return { connected: !!s?.connected, authenticated: false, account: null, paper: null, message: s?.fail || s?.message || de.broker.notLoggedIn };
 			}
 			const a = await this.call<{ accounts?: string[]; isPaper?: boolean }>("GET", "/iserver/accounts");
 			const pa = await this.call<{ id?: string; accountId?: string; currency?: string }[]>("GET", "/portfolio/accounts");
@@ -157,11 +158,11 @@ export class IbkrBroker implements Broker {
 			this.baseCurrency = typeof mine?.currency === "string" && /^[A-Z]{3}$/.test(mine.currency) ? mine.currency : null;
 			const has = (a.accounts ?? []).includes(this.account);
 			this.ready = has;
-			return { connected: true, authenticated: true, account: has ? this.account : null, paper: typeof a.isPaper === "boolean" ? a.isPaper : null, message: has ? "" : `Konto ${this.account} ist in dieser Sitzung nicht handelbar (gefunden: ${(a.accounts ?? []).join(", ") || "keins"}).` };
+			return { connected: true, authenticated: true, account: has ? this.account : null, paper: typeof a.isPaper === "boolean" ? a.isPaper : null, message: has ? "" : de.broker.accountNotTradable(this.account, (a.accounts ?? []).join(", ")) };
 		} catch (e) {
 			this.ready = false;
 			const status = e instanceof HttpError ? e.status : 0;
-			return { connected: status !== 0, authenticated: false, account: null, paper: null, message: status === 401 ? "Im Gateway nicht angemeldet." : `Gateway: ${(e as Error).message}` };
+			return { connected: status !== 0, authenticated: false, account: null, paper: null, message: status === 401 ? de.broker.notLoggedIn : de.broker.gateway((e as Error).message) };
 		}
 	}
 
@@ -172,20 +173,20 @@ export class IbkrBroker implements Broker {
 	private async ensure() {
 		if (this.ready) return;
 		const s = await this.session();
-		if (!s.account) throw new Error(s.message || "IBKR-Sitzung nicht bereit.");
+		if (!s.account) throw new Error(s.message || de.broker.sessionNotReady);
 	}
 
 	async resolve(symbol: string) {
-		if (this.conids[symbol]) return { conid: this.conids[symbol], description: `${symbol} (conid aus config.json)` };
-		if (/-[A-Z]{3}$/.test(symbol) || symbol.endsWith("=X")) throw new Error(`${symbol}: Krypto und Devisen handelt der Desk nicht über IBKR.`);
+		if (this.conids[symbol]) return { conid: this.conids[symbol], description: de.broker.conidFromConfig(symbol) };
+		if (/-[A-Z]{3}$/.test(symbol) || symbol.endsWith("=X")) throw new Error(de.broker.noCryptoFx(symbol));
 		const [base, suffix] = symbol.split(".");
 		const r = await this.call<Record<string, { name: string; assetClass: string; contracts: { conid: number; exchange: string; isUS: boolean }[] }[]>>("GET", `/trsrv/stocks?symbols=${encodeURIComponent(base)}`);
 		const wanted = suffix ? EXCHANGES[suffix] : null;
-		if (suffix && !wanted) throw new Error(`${symbol}: Börse „.${suffix}“ ist nicht zugeordnet – conid in config.json unter "conids" eintragen.`);
+		if (suffix && !wanted) throw new Error(de.broker.exchangeUnmapped(symbol, suffix));
 		const hits = (r[base] ?? []).flatMap((s) => s.contracts.filter((c) => (wanted ? wanted.includes(c.exchange) : c.isUS)).map((c) => ({ conid: c.conid, description: `${s.name} ${c.exchange}` })));
 		const unique = [...new Map(hits.map((h) => [h.conid, h])).values()];
-		if (unique.length === 0) throw new Error(`${symbol}: kein passender Kontrakt bei IBKR gefunden.`);
-		if (unique.length > 1) throw new Error(`${symbol}: mehrere Kontrakte (${unique.map((u) => `${u.conid} ${u.description}`).join(", ")}) – eindeutige conid in config.json unter "conids" eintragen.`);
+		if (unique.length === 0) throw new Error(de.broker.noContract(symbol));
+		if (unique.length > 1) throw new Error(de.broker.manyContracts(symbol, unique.map((u) => `${u.conid} ${u.description}`).join(", ")));
 		return unique[0];
 	}
 
@@ -318,14 +319,14 @@ export class FakeBroker implements Broker {
 	}
 
 	async session(): Promise<BrokerSession> {
-		return this.authenticated ? { connected: true, authenticated: true, account: "DU0000001", paper: this.paper, message: "" } : { connected: true, authenticated: false, account: null, paper: null, message: "Im Gateway nicht angemeldet." };
+		return this.authenticated ? { connected: true, authenticated: true, account: "DU0000001", paper: this.paper, message: "" } : { connected: true, authenticated: false, account: null, paper: null, message: de.broker.notLoggedIn };
 	}
 	async keepAlive() {
 		this.keepAlives++;
 	}
 	async resolve(symbol: string) {
-		if (symbol.includes("-")) throw new Error(`${symbol}: Krypto und Devisen handelt der Desk nicht über IBKR.`);
-		return { conid: FakeBroker.conid(symbol), description: `${symbol} (Fake)` };
+		if (symbol.includes("-")) throw new Error(de.broker.noCryptoFx(symbol));
+		return { conid: FakeBroker.conid(symbol), description: de.broker.fakeContract(symbol) };
 	}
 	private submit(t: OrderTicket): PlaceResult {
 		const id = String(this.next++);
@@ -335,10 +336,10 @@ export class FakeBroker implements Broker {
 	private answer(r: PlaceResult): PlaceResult {
 		if (!this.loseNextAnswer) return r;
 		this.loseNextAnswer = false;
-		return { kind: "unknown", message: "keine Antwort nach 10 s" };
+		return { kind: "unknown", message: de.http.noAnswer("10") };
 	}
 	async place(t: OrderTicket): Promise<PlaceResult> {
-		if (!this.authenticated) return { kind: "rejected", message: "nicht angemeldet" };
+		if (!this.authenticated) return { kind: "rejected", message: de.broker.notLoggedInShort };
 		this.placed.push(t);
 		if (t.qty > this.replyAbove) {
 			const id = `reply-${this.next++}`;
@@ -349,7 +350,7 @@ export class FakeBroker implements Broker {
 	}
 	async confirm(replyId: string): Promise<PlaceResult> {
 		const t = this.replies.get(replyId);
-		if (!t) return { kind: "rejected", message: "unbekannte Rückfrage" };
+		if (!t) return { kind: "rejected", message: de.broker.unknownReply };
 		this.replies.delete(replyId);
 		return this.submit(t);
 	}

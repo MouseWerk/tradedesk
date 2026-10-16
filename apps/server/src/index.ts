@@ -10,6 +10,7 @@ import { createApp } from "./app.ts";
 import { IbkrBroker } from "./broker.ts";
 import { IbkrQuoteFeed, MarketFeed, type QuoteFeed } from "./feed.ts";
 import { OwnerAuth } from "./auth.ts";
+import { de } from "./i18n/de.ts";
 
 if (process.argv.includes("--selftest")) {
 	const { selftest } = await import("./selftest.ts");
@@ -21,7 +22,7 @@ if (process.argv.includes("--reset-pin")) {
 	const db = openDatabase(base.dbFile);
 	new OwnerAuth(db, Date.now).reset();
 	db.close();
-	console.log(`PIN und Sitzungen gelöscht (${base.dbFile}). Beim nächsten Start zeigt der Desk hier einen neuen Einrichtungscode.`);
+	console.log(de.startup.pinReset(base.dbFile));
 	process.exit(0);
 }
 let desk: Desk;
@@ -40,7 +41,7 @@ if (process.argv.includes("--fixture")) {
 	const ib = Object.entries(base.brokers)[0];
 	if (base.quotes === "ibkr" && base.market !== "off") {
 		if (ib) feed = new IbkrQuoteFeed({ gateway: ib[1].gateway, broker: brokers.get(ib[0])!, fallback: feed });
-		else console.warn('quotes: "ibkr" braucht ein IBKR-Depot (kind "broker") – Kurse weiter von Yahoo.');
+		else console.warn(de.startup.ibkrQuotesWithoutDepot);
 	}
 	desk = new Desk(base, openDatabase(base.dbFile), market, Date.now, brokers, feed);
 	cleanup = () => {
@@ -49,7 +50,7 @@ if (process.argv.includes("--fixture")) {
 	};
 }
 const cfg = desk.cfg;
-await desk.tick().catch((e) => console.error("erster Kursabruf:", (e as Error).message));
+await desk.tick().catch((e) => console.error(de.startup.firstQuotes, (e as Error).message));
 desk.start();
 const app = createApp(desk);
 // zusätzlich auf Tailscale-Adressen (Handy) – erst wenn die PIN gesetzt ist, sonst wäre der Desk dort ohne Schutz;
@@ -58,28 +59,28 @@ const extra: ReturnType<typeof serve>[] = [];
 const bindExtra = () => {
 	if (extra.length || !desk.auth.pinSet) return;
 	for (const addr of cfg.listen) {
-		const s = serve({ fetch: app.fetch, port: cfg.port, hostname: addr }, () => console.log(`Tradedesk auch auf http://${addr}:${cfg.port} (nur deine Tailscale-Geräte, Anmeldung mit PIN)`));
-		s.on("error", (e: NodeJS.ErrnoException) => console.error(`listen ${addr}: ${e.code === "EADDRNOTAVAIL" ? "Adresse gibt es auf diesem Computer nicht – läuft Tailscale?" : e.message}`));
+		const s = serve({ fetch: app.fetch, port: cfg.port, hostname: addr }, () => console.log(de.startup.alsoOn(`http://${addr}:${cfg.port}`)));
+		s.on("error", (e: NodeJS.ErrnoException) => console.error(de.startup.listenFailed(addr, e.code === "EADDRNOTAVAIL" ? de.startup.addrNotAvailable : e.message)));
 		extra.push(s);
 	}
 };
 if (cfg.listen.length) {
 	bindExtra();
 	if (!extra.length) {
-		console.log(`listen: ${cfg.listen.join(", ")} erst nach dem Festlegen der PIN.`);
+		console.log(de.startup.listenAfterPin(cfg.listen.join(", ")));
 		desk.on("event", (e: { kind: string }) => e.kind === "auth.setup" && bindExtra());
 	}
 }
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "127.0.0.1" }, (info) => {
 	const live = cfg.accounts.filter((a) => a.live);
-	console.log(`Tradedesk on http://127.0.0.1:${info.port}  (${cfg.accounts.length} Depots, ${cfg.agents.length} Agenten, Markt ${desk.market.kind}, Kurse ${desk.feed.source}, Daten ${cfg.home})`);
+	console.log(de.startup.running(`http://127.0.0.1:${info.port}`, cfg.accounts.length, cfg.agents.length, desk.market.kind, desk.feed.source, cfg.home));
 	// der Einrichtungscode erscheint nur hier, in deiner Konsole – nie in Datenbank, Logdatei, API oder Chat
 	const code = desk.auth.startSetup();
-	if (code) console.log(`PIN festlegen: Einrichtungscode ${code} – im Browser eingeben und eine PIN (4–12 Ziffern) wählen.`);
-	if (desk.brokers.size) console.log(`Broker: ${[...desk.brokers.keys()].join(", ")} – Live-Handel ${cfg.liveTrading ? "AN" : "aus"}${live.length ? ` (echte Konten: ${live.map((a) => a.id).join(", ")})` : ""}`);
+	if (code) console.log(de.startup.setupCode(code));
+	if (desk.brokers.size) console.log(de.startup.brokers([...desk.brokers.keys()].join(", "), cfg.liveTrading, live.map((a) => a.id).join(", ")));
 });
 server.on("error", (e: NodeJS.ErrnoException) => {
-	console.error(e.code === "EADDRINUSE" ? `Port ${cfg.port} ist belegt – läuft schon ein Tradedesk?` : e);
+	console.error(e.code === "EADDRINUSE" ? de.startup.portInUse(cfg.port) : e);
 	process.exit(1);
 });
 const shutdown = () => {

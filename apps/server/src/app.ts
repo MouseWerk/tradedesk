@@ -11,6 +11,7 @@ import type { ChartRange } from "@desk/shared";
 import { ChartRangeSchema } from "@desk/shared";
 import { AuthError, SESSION_HEADER } from "./auth.ts";
 import { DeskError, type Desk, type Origin } from "./desk.ts";
+import { de } from "./i18n/de.ts";
 
 export const VERSION = 1;
 const DEV_WEB_PORT = 5175; // Vite im Entwicklungsmodus (npm run dev:web), leitet /api weiter
@@ -42,7 +43,7 @@ export function inside(base: string, rel: string): string | null {
 }
 
 function sendFile(c: Context, file: string | null, cache = "no-cache") {
-	if (!file) return c.text("not found", 404);
+	if (!file) return c.text(de.api.notFound, 404);
 	return c.body(readFileSync(file), 200, { "Content-Type": MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream", "Cache-Control": cache, "X-Content-Type-Options": "nosniff", "Content-Security-Policy": CSP });
 }
 
@@ -77,12 +78,12 @@ export function createApp(desk: Desk) {
 	// jede Anfrage, auch die Web-App: nur mit dem Host des Desks – eine fremde Seite, deren Name auf 127.0.0.1 zeigt, liest nichts
 	app.use("*", async (c, next) => {
 		const host = (c.req.header("Host") ?? new URL(c.req.url).host).toLowerCase();
-		if (!hosts.has(host)) return c.text("forbidden host", 403);
+		if (!hosts.has(host)) return c.text(de.api.forbiddenHost, 403);
 		await next();
 	});
 
 	// Größe begrenzen, bevor gelesen wird: der CSV-Import darf 2,5 MB, alles andere 64 KB
-	const tooLarge = (c: Context) => c.json({ ok: false, msg: "Anfrage zu groß." }, 413);
+	const tooLarge = (c: Context) => c.json({ ok: false, msg: de.api.tooLarge }, 413);
 	const importLimit = bodyLimit({ maxSize: 2_600_000, onError: tooLarge });
 	const apiLimit = bodyLimit({ maxSize: 64 * 1024, onError: tooLarge });
 	app.use("/api/*", (c, next) => (/^\/api\/accounts\/[^/]+\/import$/.test(c.req.path) ? importLimit(c, next) : apiLimit(c, next)));
@@ -93,7 +94,7 @@ export function createApp(desk: Desk) {
 		if (write) {
 			// jede Webseite darf an 127.0.0.1 posten: nur JSON (erzwingt den Preflight) und nur der Origin des Desks
 			const json = (c.req.header("Content-Type") ?? "").startsWith("application/json");
-			if (!json || (origin && !origins.has(origin))) return c.json({ ok: false, msg: "forbidden" }, 403);
+			if (!json || (origin && !origins.has(origin))) return c.json({ ok: false, msg: de.api.forbidden }, 403);
 		}
 		// EventSource kann keine Header setzen: nur für den Live-Stream (nur lesen) darf das Token in der Adresse stehen
 		const token = c.req.header(SESSION_HEADER) ?? (c.req.path === "/api/stream" ? c.req.query("session") : undefined);
@@ -102,11 +103,11 @@ export function createApp(desk: Desk) {
 		// von einem anderen Gerät (Tailscale, z. B. dein Handy): ohne Sitzung gar nichts, auch nicht lesen – die CLI der
 		// Agenten läuft nur auf diesem Computer
 		if (!LOOPBACK.has(remoteAddress(c)) && !session && !c.req.path.startsWith("/api/auth"))
-			return c.json({ ok: false, msg: "Nicht angemeldet – mit deiner PIN anmelden.", code: "auth" }, 401);
+			return c.json({ ok: false, msg: de.api.notLoggedIn, code: "auth" }, 401);
 		// du: gültige Sitzung, bei Änderungen zusätzlich ein Origin des Desks; ein Abruf von einer fremden Seite zählt nie
 		const site = c.req.header("Sec-Fetch-Site");
 		const owner = !!session && (write ? !!origin : !site || site === "same-origin" || site === "none");
-		if (write && origin && !session && !c.req.path.startsWith("/api/auth")) return c.json({ ok: false, msg: "Nicht angemeldet – im Browser mit deiner PIN anmelden.", code: "auth" }, 401);
+		if (write && origin && !session && !c.req.path.startsWith("/api/auth")) return c.json({ ok: false, msg: de.api.notLoggedInBrowser, code: "auth" }, 401);
 		c.set("origin", owner ? "web" : "cli");
 		await next();
 	});
@@ -118,11 +119,11 @@ export function createApp(desk: Desk) {
 			return c.json({ ok: false, msg: e.message, code: "auth" }, e.status as 400);
 		}
 		console.error(e);
-		return c.json({ ok: false, msg: `Serverfehler: ${e.message}` }, 500);
+		return c.json({ ok: false, msg: de.api.serverError(e.message) }, 500);
 	});
 
 	const userOnly = (c: Context<Env>) => {
-		if (c.get("origin") !== "web") throw new DeskError("Nur im Browser mit deiner Anmeldung – das entscheidet der Mensch, nicht ein Agent.", 403);
+		if (c.get("origin") !== "web") throw new DeskError(de.api.ownerOnly, 403);
 	};
 	/** JSON-Objekt aus dem Body; leer ist {}, kaputtes JSON ein 400 (nicht still {}). */
 	const body = async (c: Context) => {
@@ -132,13 +133,13 @@ export function createApp(desk: Desk) {
 		try {
 			v = JSON.parse(text);
 		} catch {
-			throw new DeskError("Ungültiges JSON.");
+			throw new DeskError(de.api.invalidJson);
 		}
-		if (!v || typeof v !== "object" || Array.isArray(v)) throw new DeskError("JSON-Objekt erwartet.");
+		if (!v || typeof v !== "object" || Array.isArray(v)) throw new DeskError(de.api.jsonObject);
 		return v as Record<string, unknown>;
 	};
 	const browser = (c: Context) => {
-		if (!c.req.header("Origin")) throw new AuthError("Anmelden nur im Browser.", 403);
+		if (!c.req.header("Origin")) throw new AuthError(de.api.loginBrowserOnly, 403);
 	};
 
 	/* Anmeldung: PIN einmal mit dem Einrichtungscode aus der Konsole setzen, dann mit der PIN anmelden */
@@ -147,7 +148,7 @@ export function createApp(desk: Desk) {
 		browser(c);
 		const b = await body(c);
 		const token = auth.setup(b.code, b.pin);
-		desk.event("auth.setup", cfg.user, "PIN eingerichtet");
+		desk.event("auth.setup", cfg.user, de.api.pinSetUp);
 		return c.json({ ok: true, pinSet: true, authenticated: true, token });
 	});
 	app.post("/api/auth/login", async (c) => {
@@ -160,7 +161,7 @@ export function createApp(desk: Desk) {
 	});
 	const id = (c: Context) => {
 		const n = Number(c.req.param("id"));
-		if (!Number.isInteger(n) || n <= 0) throw new DeskError("Ungültige ID.");
+		if (!Number.isInteger(n) || n <= 0) throw new DeskError(de.api.invalidId);
 		return n;
 	};
 
@@ -205,14 +206,14 @@ export function createApp(desk: Desk) {
 	app.get("/api/market/search", async (c) => c.json(await desk.search(c.req.query("q") ?? "")));
 	app.get("/api/market/chart/:symbol", async (c) => {
 		const r = ChartRangeSchema.safeParse(c.req.query("range") ?? "6mo");
-		if (!r.success) throw new DeskError("range: 1d, 1mo, 3mo, 6mo, 1y oder 5y");
+		if (!r.success) throw new DeskError(de.api.chartRange);
 		return c.json(await desk.chart(c.req.param("symbol"), r.data as ChartRange));
 	});
 	app.get("/api/market/quote/:symbol", async (c) => {
 		const symbol = desk.normalizeSymbol(c.req.param("symbol"));
 		if (!desk.priced(symbol)) await desk.refresh([symbol]);
 		const p = desk.priced(symbol);
-		if (!p) throw new DeskError(`Kein Kurs für ${symbol}.`, 404);
+		if (!p) throw new DeskError(de.api.noQuote(symbol), 404);
 		const i = desk.instrument(symbol)!;
 		return c.json({ symbol, name: i.name, currency: p.currency, price: p.price, fx: p.fx, priceEur: p.price * p.fx, prevClose: p.prevClose, marketTime: p.marketTime, watched: desk.watchlist().some((w) => w.symbol === symbol && w.watched), quote: desk.quoteInfo(symbol) });
 	});
@@ -278,7 +279,7 @@ export function createApp(desk: Desk) {
 	app.put("/api/risk/kill", async (c) => {
 		userOnly(c);
 		const b = await body(c);
-		if (typeof b.on !== "boolean") throw new DeskError("on: true oder false");
+		if (typeof b.on !== "boolean") throw new DeskError(de.api.killOnOff);
 		return c.json(desk.setKill(b.on));
 	});
 	app.put("/api/risk/:account", async (c) => {
@@ -336,9 +337,9 @@ export function createApp(desk: Desk) {
 
 	/* Web-App (SPA) */
 	app.get("*", (c) => {
-		if (c.req.path.startsWith("/api/")) return c.json({ ok: false, msg: "not found" }, 404);
+		if (c.req.path.startsWith("/api/")) return c.json({ ok: false, msg: de.api.notFound }, 404);
 		const index = path.join(cfg.webDist, "index.html");
-		if (!existsSync(index)) return c.text("Web-App nicht gebaut: npm run build", 503);
+		if (!existsSync(index)) return c.text(de.api.webNotBuilt, 503);
 		const asset = c.req.path === "/" ? null : inside(cfg.webDist, c.req.path.slice(1));
 		if (asset) return sendFile(c, asset, c.req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
 		return sendFile(c, index);

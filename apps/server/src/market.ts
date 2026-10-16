@@ -2,6 +2,7 @@
 // eine deterministische Fake-Börse für Tests und Fixture, "off" ohne Netz. Wechselkurse sind Symbole wie USDEUR=X.
 import type { Candle, ChartRange, NewsItem, SearchHit } from "@desk/shared";
 import { httpJson } from "./http.ts";
+import { de } from "./i18n/de.ts";
 
 export interface Session {
 	preStart: number | null;
@@ -109,10 +110,10 @@ export class YahooMarket implements Market {
 	}
 
 	private async fetchChart(symbol: string, query: string) {
-		if (!SYMBOL.test(symbol)) throw new Error(`ungültiges Symbol ${symbol}`);
+		if (!SYMBOL.test(symbol)) throw new Error(de.market.invalidSymbol(symbol));
 		const j = await httpJson<YahooChart>(`${this.base}/v8/finance/chart/${encodeURIComponent(symbol)}?${query}`);
 		const r = j.chart?.result?.[0];
-		if (!r || typeof r.meta?.regularMarketPrice !== "number") throw new Error(j.chart?.error?.description ?? `keine Kurse für ${symbol}`);
+		if (!r || typeof r.meta?.regularMarketPrice !== "number") throw new Error(j.chart?.error?.description ?? de.market.noQuotes(symbol));
 		const m = r.meta;
 		const n = normalizeCurrency(m.currency ?? "EUR", m.regularMarketPrice!);
 		const scale = n.price / m.regularMarketPrice!;
@@ -192,7 +193,7 @@ export class OffMarket implements Market {
 		return { quotes: [], error: null };
 	}
 	async chart(symbol: string): Promise<{ meta: QuoteData; candles: Candle[] }> {
-		throw new Error(`Marktdaten sind ausgeschaltet ("market": "off") – kein Chart für ${symbol}`);
+		throw new Error(de.market.off(symbol));
 	}
 	async search() {
 		return [];
@@ -252,7 +253,7 @@ export class FakeMarket implements Market {
 
 	set(symbol: string, price: number) {
 		const i = this.items.get(symbol);
-		if (!i) throw new Error(`unbekannt: ${symbol}`);
+		if (!i) throw new Error(de.market.fakeUnknown(symbol));
 		i.price = price;
 	}
 
@@ -278,15 +279,15 @@ export class FakeMarket implements Market {
 
 	async quotes(symbols: string[]) {
 		this.calls++;
-		if (this.failing) return { quotes: [], error: "Fake-Börse: nicht erreichbar", failed: symbols.map((symbol) => ({ symbol, message: "nicht erreichbar" })) };
-		const failed = symbols.filter((s) => this.failSymbols.has(s)).map((symbol) => ({ symbol, message: "HTTP 429" }));
+		if (this.failing) return { quotes: [], error: de.market.fakeUnreachable, failed: symbols.map((symbol) => ({ symbol, message: de.market.unreachable })) };
+		const failed = symbols.filter((s) => this.failSymbols.has(s)).map((symbol) => ({ symbol, message: de.http.status(429) }));
 		const quotes = symbols.flatMap((s) => (this.items.has(s) && !this.failSymbols.has(s) ? [this.meta(this.items.get(s)!)] : []));
-		return { quotes, error: quotes.length || !symbols.length ? null : "Fake-Börse: keine Kurse", failed };
+		return { quotes, error: quotes.length || !symbols.length ? null : de.market.fakeNoQuotes, failed };
 	}
 
 	async chart(symbol: string, range: ChartRange) {
 		const i = this.items.get(symbol);
-		if (!i) throw new Error(`keine Kurse für ${symbol}`);
+		if (!i) throw new Error(de.market.noQuotes(symbol));
 		const [n, step, vol] = ({ "1d": [390, 60_000, 0.0015], "5d": [400, 5 * 60_000, 0.003], "1mo": [160, 3_600_000, 0.006], "3mo": [64, 86_400_000, 0.03], "6mo": [128, 86_400_000, 0.03], "1y": [252, 86_400_000, 0.03], "5y": [260, 7 * 86_400_000, 0.05] } as const)[range];
 		let seed = hash(symbol + range);
 		const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 2 ** 32);
@@ -310,8 +311,8 @@ export class FakeMarket implements Market {
 		const i = this.items.get(symbol);
 		if (!i) return [];
 		return [
-			{ title: `${i.name}: Quartalszahlen über den Erwartungen`, publisher: "Fake-Nachrichten", time: this.now() - 40 * 60_000, link: "https://example.com/a" },
-			{ title: `Analyst hebt Kursziel für ${i.name} an`, publisher: "Fake-Nachrichten", time: this.now() - 5 * 3_600_000, link: "https://example.com/b" },
+			{ title: de.market.fakeNewsEarnings(i.name), publisher: de.market.fakeNewsPublisher, time: this.now() - 40 * 60_000, link: "https://example.com/a" },
+			{ title: de.market.fakeNewsAnalyst(i.name), publisher: de.market.fakeNewsPublisher, time: this.now() - 5 * 3_600_000, link: "https://example.com/b" },
 		];
 	}
 }

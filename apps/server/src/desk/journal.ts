@@ -2,6 +2,7 @@
 import type { AgentsData, ChatMessage, JournalEntry } from "@desk/shared";
 import { DeskError, type Origin } from "./core.ts";
 import { DeskManual } from "./manual.ts";
+import { de } from "../i18n/de.ts";
 
 export abstract class DeskJournal extends DeskManual {
 	journal(opts: { author?: string; symbol?: string; limit?: number } = {}): JournalEntry[] {
@@ -20,10 +21,10 @@ export abstract class DeskJournal extends DeskManual {
 
 	addJournal(body: Record<string, unknown>, origin: Origin): JournalEntry {
 		const author = origin === "web" ? this.cfg.user : this.agentName(typeof body.author === "string" ? body.author : "");
-		if (!author) throw new DeskError(`Unbekannter Agent „${String(body.author ?? "")}“ – in config.json unter "agents" eintragen.`, 403);
+		if (!author) throw new DeskError(de.core.unknownAgent(String(body.author ?? "")), 403);
 		const kind = body.kind === "thesis" || body.kind === "review" ? body.kind : "note";
 		const text = typeof body.text === "string" ? body.text.trim() : "";
-		if (!text || text.length > 4000) throw new DeskError("Text fehlt oder ist länger als 4000 Zeichen.");
+		if (!text || text.length > 4000) throw new DeskError(de.journal.textInvalid);
 		const symbol = body.symbol ? this.normalizeSymbol(body.symbol) : null;
 		const time = this.now();
 		const { lastId } = this.db.run("INSERT INTO journal (author, kind, symbol, text, time) VALUES (?,?,?,?,?)", author, kind, symbol, text, time);
@@ -75,10 +76,10 @@ export abstract class DeskJournal extends DeskManual {
 	/** Nachricht von dir (Browser) oder einem Agenten (CLI). Erwähnungen @Name nur für bekannte Namen. Der Chat genehmigt nie eine Order. */
 	say(body: Record<string, unknown>, origin: Origin): ChatMessage {
 		const author = origin === "web" ? this.cfg.user : this.agentName(typeof body.author === "string" ? body.author : "");
-		if (!author) throw new DeskError(`Unbekannter Agent „${String(body.author ?? "")}“ – in config.json unter "agents" eintragen.`, 403);
+		if (!author) throw new DeskError(de.core.unknownAgent(String(body.author ?? "")), 403);
 		const text = typeof body.text === "string" ? body.text.trim() : "";
-		if (!text) throw new DeskError("Leere Nachricht.");
-		if (text.length > 4000) throw new DeskError("Nachricht länger als 4000 Zeichen.");
+		if (!text) throw new DeskError(de.journal.emptyMessage);
+		if (text.length > 4000) throw new DeskError(de.journal.messageTooLong);
 		const names = [this.cfg.user, ...this.cfg.agents];
 		const canon = (n: string) => names.find((x) => x.toLowerCase() === n.toLowerCase()) ?? null;
 		const to = new Set<string>();

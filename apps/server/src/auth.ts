@@ -6,6 +6,7 @@
 // einer Prompt-Injection in News oder Chat) die API selbst aufruft – nicht vor einem Programm, das die Datenbank ändert.
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Database } from "./db.ts";
+import { de } from "./i18n/de.ts";
 
 // Sitzung als Header, nicht als Cookie: Browser trennen Cookies nicht nach Port – ein Agent mit eigenem Server auf
 // 127.0.0.1:<anderer Port> bekäme ein Cookie geschenkt, sobald du seinen Link öffnest (Review q1 M1). Das Token liegt
@@ -78,7 +79,7 @@ export class OwnerAuth {
 
 	/** PIN direkt setzen – nur für Fixture und Tests (bekannte Test-PIN), nie über die API. */
 	presetPin(pin: string) {
-		if (!PIN.test(pin)) throw new AuthError("PIN: 4 bis 12 Ziffern.", 400);
+		if (!PIN.test(pin)) throw new AuthError(de.auth.pinFormat, 400);
 		this.db.run("INSERT INTO setting (key, value) VALUES ('owner_pin', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", hashPin(pin));
 		this.setupCode = null;
 	}
@@ -91,7 +92,7 @@ export class OwnerAuth {
 
 	private guard() {
 		const wait = this.lockedUntil - this.now();
-		if (wait > 0) throw new AuthError(`Zu viele Fehlversuche – in ${Math.ceil(wait / 1000)} s erneut versuchen.`, 429, Math.ceil(wait / 1000));
+		if (wait > 0) throw new AuthError(de.auth.tooManyFails(Math.ceil(wait / 1000)), 429, Math.ceil(wait / 1000));
 	}
 
 	private failed(message: string, status: number): never {
@@ -112,11 +113,11 @@ export class OwnerAuth {
 	/** Erste PIN mit dem Einrichtungscode setzen; gibt gleich eine Sitzung zurück. */
 	setup(code: unknown, pin: unknown): string {
 		this.guard();
-		if (this.pinSet) throw new AuthError("Die PIN ist schon gesetzt – mit der PIN anmelden.", 409);
-		if (!this.setupCode) throw new AuthError("Kein Einrichtungscode aktiv – den Desk neu starten, der Code steht dann in seiner Konsole.", 409);
+		if (this.pinSet) throw new AuthError(de.auth.pinAlreadySet, 409);
+		if (!this.setupCode) throw new AuthError(de.auth.noSetupCode, 409);
 		const given = typeof code === "string" ? code.trim().toUpperCase() : "";
-		if (!same(given, this.setupCode)) this.failed("Einrichtungscode stimmt nicht – er steht in der Konsole, in der der Desk läuft.", 403);
-		if (typeof pin !== "string" || !PIN.test(pin)) throw new AuthError("PIN: 4 bis 12 Ziffern.", 400);
+		if (!same(given, this.setupCode)) this.failed(de.auth.setupCodeWrong, 403);
+		if (typeof pin !== "string" || !PIN.test(pin)) throw new AuthError(de.auth.pinFormat, 400);
 		this.presetPin(pin);
 		this.succeeded();
 		return this.createSession();
@@ -125,8 +126,8 @@ export class OwnerAuth {
 	login(pin: unknown): string {
 		this.guard();
 		const stored = this.db.get<{ value: string }>("SELECT value FROM setting WHERE key = 'owner_pin'")?.value;
-		if (!stored) throw new AuthError("Noch keine PIN gesetzt – zuerst mit dem Einrichtungscode aus der Konsole einrichten.", 409);
-		if (typeof pin !== "string" || !PIN.test(pin) || !checkPin(pin, stored)) this.failed("PIN falsch.", 401);
+		if (!stored) throw new AuthError(de.auth.noPinYet, 409);
+		if (typeof pin !== "string" || !PIN.test(pin) || !checkPin(pin, stored)) this.failed(de.auth.pinWrong, 401);
 		this.succeeded();
 		return this.createSession();
 	}

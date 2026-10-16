@@ -2,6 +2,7 @@
 import type { Account, AccountDetail, AccountSummary, Allocation, AssetClass, CashMove, CurvePoint, Overview, Position, QuoteInfo, RiskLimits, Side, Trade, DayStats } from "@desk/shared";
 import { assetClassOf, combineCurves, equityChanges, oversold, buildBook, dayKey, dayStats, orderValueCents, returnPct, roundQty, valueHoldings } from "@desk/shared";
 import { DeskCore, DeskError, MIN_TRADE_TIME, type TradeRow } from "./core.ts";
+import { de } from "../i18n/de.ts";
 
 export abstract class DeskBook extends DeskCore {
 	/** Grenzen eines Depots (risk.ts). */
@@ -61,7 +62,7 @@ export abstract class DeskBook extends DeskCore {
 	/** Zeitpunkt aus einer Eingabe: fehlt er, gilt jetzt; sonst ab 1990 und höchstens eine Minute in der Zukunft. */
 	protected tradeTime(v: unknown): number {
 		if (v === undefined || v === null) return this.now();
-		if (typeof v !== "number" || !Number.isFinite(v) || v < MIN_TRADE_TIME || v > this.now() + 60_000) throw new DeskError("Zeitpunkt: ab 1990 und nicht in der Zukunft.");
+		if (typeof v !== "number" || !Number.isFinite(v) || v < MIN_TRADE_TIME || v > this.now() + 60_000) throw new DeskError(de.book.tradeTime);
 		return Math.trunc(v);
 	}
 
