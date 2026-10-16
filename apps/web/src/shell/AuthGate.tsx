@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { KeyRound } from "lucide-react";
-import { AUTH_EVENT, getAuth, send } from "@/lib/api";
+import { AUTH_EVENT, getAuth, send, setSessionToken } from "@/lib/api";
 import { Button, Field, Input } from "@/ui/kit";
 
 const PIN = /^\d{4,12}$/;
@@ -63,7 +63,8 @@ function useSubmit(onDone: () => void) {
 		setBusy(true);
 		setErr(null);
 		try {
-			await send(url, "POST", body);
+			const r = await send<{ token?: string }>(url, "POST", body);
+			setSessionToken(r.token ?? null);
 			onDone();
 		} catch (e) {
 			setErr((e as Error).message);

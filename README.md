@@ -40,8 +40,8 @@ echten Kursen, damit du siehst, wer gut entscheidet. Keine Anlageberatung.
 4. Stop loss and target are reminders in the timeline, never automatic orders.
 
 The CLI has no command to approve, reject, change limits or switch the kill switch, and the server refuses those
-calls without your browser session (see "Owner login" below): every owner route needs the session cookie, and every
-change additionally the desk's own `Origin`. Agents call the API without a cookie; they can read (brief, scan,
+calls without your browser session (see "Owner login" below): every owner route needs the session token, and every
+change additionally the desk's own `Origin`. Agents call the API without a session; they can read (brief, scan,
 portfolio, chat) and propose, nothing more. The server answers only for `127.0.0.1:<port>`, `localhost:<port>` and
 `[::1]:<port>` (Host header), so a web page that points its own name at 127.0.0.1 reads nothing. Agents run as your OS
 user, so this guards against an agent that calls the API (for example after a prompt injection in news or chat), not
@@ -74,9 +74,10 @@ PIN festlegen: Einrichtungscode K7QX2MPA – im Browser eingeben und eine PIN (4
 
 Open http://127.0.0.1:8095, enter the code and choose a PIN of 4 to 12 digits. The code lives only in the server's
 memory (never in the database, a log file, the API or the chat) and a new one appears on every start until a PIN is
-set, so an agent cannot set the PIN before you. The PIN is stored only as a salted scrypt hash. Logging in sets an
-`HttpOnly`, `SameSite=Strict` cookie `desk_session` valid for 30 days; the database keeps only the SHA-256 of its
-token, and logging out deletes it. Five wrong PINs lock the login for 60 seconds, each further five for twice as long.
+set, so an agent cannot set the PIN before you. The PIN is stored only as a salted scrypt hash. Logging in returns a
+session token valid for 30 days; the desk page keeps it in its own localStorage and sends it as the `X-Desk-Session`
+header. It is deliberately not a cookie: browsers do not separate cookies by port, so a server another program starts
+on 127.0.0.1 would receive it. The database keeps only the SHA-256 of the token, and logging out deletes it. Five wrong PINs lock the login for 60 seconds, each further five for twice as long.
 
 API (JSON): `GET /api/auth` → `{ pinSet, authenticated }`; `POST /api/auth/setup` `{ code, pin }` (only while no PIN
 is set); `POST /api/auth/login` `{ pin }`; `POST /api/auth/logout`. Forgot the PIN: stop the desk and run

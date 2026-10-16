@@ -1,4 +1,5 @@
 // node apps/server/src/index.ts --selftest – ohne Port, ohne Netz, ohne echte Daten (Fixture mit Fake-Börse).
+import { SESSION_HEADER } from "./auth.ts";
 import type { AgentsData, Overview, Proposal, RiskData, WatchItem } from "@desk/shared";
 import { AgentsDataSchema, OverviewSchema, ProposalSchema, RiskDataSchema, WatchItemSchema } from "@desk/shared";
 import { createApp } from "./app.ts";
@@ -22,9 +23,9 @@ export async function selftest(): Promise<number> {
 		const wrong = await post("/api/auth/login", "POST", { pin: "0000" }, { Origin: base });
 		check("a wrong PIN is refused", wrong.status === 401);
 		const login = await post("/api/auth/login", "POST", { pin: FIXTURE_PIN }, { Origin: base });
-		const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-		check("login sets an HttpOnly, SameSite=Strict session cookie", login.status === 200 && /HttpOnly/i.test(login.headers.get("set-cookie") ?? "") && /SameSite=Strict/i.test(login.headers.get("set-cookie") ?? ""));
-		const web = (p: string, method: string, body: unknown) => post(p, method, body, { Origin: base, Cookie: cookie });
+		const token = ((await login.clone().json()) as { token?: string }).token ?? "";
+		check("login returns a session token and sets no cookie", login.status === 200 && token.length >= 43 && login.headers.get("set-cookie") === null);
+		const web = (p: string, method: string, body: unknown) => post(p, method, body, { Origin: base, [SESSION_HEADER]: token });
 		const rebind = await app.request("http://evil.example:8097/api/overview");
 		check("a foreign Host header is refused (DNS rebinding)", rebind.status === 403);
 
@@ -65,7 +66,7 @@ export async function selftest(): Promise<number> {
 		check("kill switch blocks your own orders too", blocked.status === 422);
 		await web("/api/risk/kill", "PUT", { on: false });
 
-		const foreign = await post("/api/risk/kill", "PUT", { on: true }, { Origin: "https://evil.example", Cookie: cookie });
+		const foreign = await post("/api/risk/kill", "PUT", { on: true }, { Origin: "https://evil.example", [SESSION_HEADER]: token });
 		check("foreign origin is refused", foreign.status === 403);
 	} catch (e) {
 		check("selftest ran through", false, String((e as Error).stack ?? e));

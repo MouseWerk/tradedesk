@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Check, Cockpit, Proposal, ProposalStatus } from "@desk/shared";
 import { riskToStopCents, statusLabel } from "@desk/shared";
+import { request } from "./api";
 
 export interface OrderBody {
 	accountId: string;
@@ -27,7 +28,7 @@ export function useDryRun(body: OrderBody | null, delay = 250): { check: Check |
 		if (!key) return;
 		const ctl = new AbortController();
 		const t = setTimeout(() => {
-			fetch("/api/proposals?dryRun=1", { method: "POST", headers: { "Content-Type": "application/json" }, body: key, signal: ctl.signal })
+			request("/api/proposals?dryRun=1", { method: "POST", headers: { "Content-Type": "application/json" }, body: key, signal: ctl.signal })
 				.then(async (r) => {
 					const j = (await r.json().catch(() => ({}))) as { check?: Check; msg?: string };
 					setRes({ key, check: j.check ?? null, failed: j.check ? null : (j.msg ?? `Prüfung nicht möglich (${r.status}).`) });

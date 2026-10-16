@@ -1082,9 +1082,13 @@ export class Desk extends EventEmitter {
 		if (missing.size) await this.refresh([...missing]).catch(() => undefined); // beim nächsten Abruf wird gebucht
 	}
 
-	/** Orderstatus des Brokers auf die Vorschläge übertragen; Ausführungen (Trades) sind die Wahrheit über die Stückzahl. */
+	/**
+	 * Orderstatus des Brokers auf die Vorschläge übertragen; Ausführungen (Trades) sind die Wahrheit über die Stückzahl.
+	 * Auch Vorschläge ohne Order-ID, die gesendet wurden (Kontrakt bekannt) – die Wiederfindung kann sie als
+	 * „unterbrochen“ abgelehnt haben, bevor doch noch eine Ausführung kommt (Review q1 m2).
+	 */
 	private syncOrders(a: Account, orders: BrokerOrder[], now: number) {
-		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND broker_order_id IS NOT NULL AND status IN ('placed','filled','cancelled','rejected','expired')", a.id);
+		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND (broker_order_id IS NOT NULL OR broker_conid IS NOT NULL) AND status IN ('placed','filled','cancelled','rejected','expired')", a.id);
 		for (const r of rows) {
 			const o = orders.find((x) => x.orderId === r.broker_order_id || x.cOID === this.coidOf(r));
 			const want = r.approved_qty ?? r.qty;

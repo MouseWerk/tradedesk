@@ -5,6 +5,7 @@ import { createApp } from "../src/app.ts";
 import { cleanListen, isTailscaleV4 } from "../src/config.ts";
 import { makeFixture, type Fixture } from "../src/fixture.ts";
 import { deskHttp } from "./owner.ts";
+import { SESSION_HEADER } from "../src/auth.ts";
 
 const PC = "100.121.124.65";
 const PHONE = "100.65.110.55";
@@ -41,9 +42,9 @@ describe("requests from another device", () => {
 		const origin = `http://${PC}:${fx.cfg.port}`;
 		const login = await fromPhone("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json", Origin: origin }, body: JSON.stringify({ pin: "2468" }) });
 		expect(login.status).toBe(200);
-		const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-		expect((await fromPhone("/api/overview", { headers: { Cookie: cookie } })).status).toBe(200);
-		const kill = await fromPhone("/api/risk/kill", { method: "PUT", headers: { "Content-Type": "application/json", Origin: origin, Cookie: cookie }, body: JSON.stringify({ on: true }) });
+		const { token } = (await login.json()) as { token: string };
+		expect((await fromPhone("/api/overview", { headers: { [SESSION_HEADER]: token } })).status).toBe(200);
+		const kill = await fromPhone("/api/risk/kill", { method: "PUT", headers: { "Content-Type": "application/json", Origin: origin, [SESSION_HEADER]: token }, body: JSON.stringify({ on: true }) });
 		expect(kill.status).toBe(200);
 	});
 

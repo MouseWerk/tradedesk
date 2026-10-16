@@ -45,10 +45,16 @@ const check = (name, ok, detail = "") => {
 
 async function open(browser, { w = 1440, h = 900, theme = "dark", chat, login = true } = {}) {
 	const ctx = await browser.newContext({ viewport: { width: w, height: h }, reducedMotion: "reduce", locale: "de-DE", timezoneId: "Europe/Berlin" });
-	// Fixture-PIN 2468: anmelden wie der Browser (Origin des Desks), das Cookie gilt dann für alle Seiten dieses Kontexts
+	// Fixture-PIN 2468: anmelden wie der Browser (Origin des Desks); das Token legt die Seite in ihren localStorage
 	if (login) {
 		const r = await ctx.request.post(`${BASE}/api/auth/login`, { data: { pin: "2468" }, headers: { Origin: BASE } });
 		if (!r.ok()) throw new Error(`Login fehlgeschlagen: ${r.status()} ${await r.text()}`);
+		const { token } = await r.json();
+		await ctx.addInitScript((t) => {
+			try {
+				localStorage.setItem("desk.session", t);
+			} catch {}
+		}, token);
 	}
 	await ctx.addInitScript(
 		([t, c]) => {
@@ -381,12 +387,12 @@ async function dataChecks(browser) {
 
 	// Stream: HTTP-Fehler → Offline, danach von selbst wieder live; was in der Lücke kam, erscheint (F7)
 	pg = await open(browser);
-	await pg.route("**/api/stream", (route) => route.fulfill({ status: 503, body: "" }));
+	await pg.route(/\/api\/stream(\?|$)/, (route) => route.fulfill({ status: 503, body: "" }));
 	await pg.goto(`${BASE}/agents`);
 	await settle(pg);
 	check("stream refused: status says offline", await until(pg, () => /Offline|Verbinde/.test(document.querySelector('[data-testid="live-status"]')?.textContent ?? "")));
 	await agentSays("Nachricht während der Lücke");
-	await pg.unroute("**/api/stream");
+	await pg.unroute(/\/api\/stream(\?|$)/);
 	check("stream comes back by itself after an HTTP error", await until(pg, () => /Kurse/.test(document.querySelector('[data-testid="live-status"]')?.textContent ?? ""), null, 20_000));
 	check("message sent during the gap appears after reconnecting", await until(pg, () => document.querySelector('[data-testid="chat"]')?.innerText.includes("Nachricht während der Lücke"), null, 10_000));
 	// Chat senden: ein POST, kein Neuladen aller Daten (F19). Der Kurstakt des Desks lädt regelmäßig neu – fällt ein
@@ -539,7 +545,7 @@ try {
 		check("right PIN logs in and shows the desk", (await pg.locator("#main h1").count()) === 1);
 		const stranger = await browser.newContext();
 		const forged = await stranger.request.put(`${BASE}/api/risk/kill`, { data: { on: true }, headers: { Origin: BASE } });
-		check("a faked Origin without the session cookie changes nothing", forged.status() === 401, String(forged.status()));
+		check("a faked Origin without the session token changes nothing", forged.status() === 401, String(forged.status()));
 		await stranger.close();
 		await pg.getByRole("button", { name: "Abmelden" }).click();
 		await pg.getByRole("heading", { name: "Anmelden" }).waitFor({ timeout: 10_000 });

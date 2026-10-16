@@ -11,10 +11,37 @@ export const queryClient = new QueryClient({
 	defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false, retry: 1 } },
 });
 
-/** fetch mit deutscher Meldung, wenn der Server gar nicht antwortet (statt „Failed to fetch“). */
-async function request(url: string, init?: RequestInit): Promise<Response> {
+/*
+ * Sitzung: das Token liegt im localStorage dieser Seite und geht als Header mit. Kein Cookie – Browser trennen Cookies
+ * nicht nach Port, ein fremder Server auf 127.0.0.1:<anderer Port> bekäme es sonst geschenkt (Review q1 M1).
+ */
+const SESSION_KEY = "desk.session";
+export const SESSION_HEADER = "X-Desk-Session";
+
+export function sessionToken(): string | null {
 	try {
-		return await fetch(url, init);
+		return localStorage.getItem(SESSION_KEY);
+	} catch {
+		return null;
+	}
+}
+
+export function setSessionToken(token: string | null) {
+	try {
+		if (token) localStorage.setItem(SESSION_KEY, token);
+		else localStorage.removeItem(SESSION_KEY);
+	} catch {
+		// privater Modus: dann gilt die Anmeldung nur bis zum Neuladen nicht – der Desk fragt erneut
+	}
+}
+
+/** fetch mit Sitzungs-Header und deutscher Meldung, wenn der Server gar nicht antwortet (statt „Failed to fetch“). */
+export async function request(url: string, init: RequestInit = {}): Promise<Response> {
+	const token = sessionToken();
+	const headers = new Headers(init.headers);
+	if (token) headers.set(SESSION_HEADER, token);
+	try {
+		return await fetch(url, { ...init, headers });
 	} catch (e) {
 		if ((e as Error).name === "AbortError") throw e;
 		throw new Error("Desk nicht erreichbar – läuft der Server noch?");
@@ -25,7 +52,10 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
 export const AUTH_EVENT = "desk:auth";
 
 function authRequired(url: string, status: number, body: unknown) {
-	if (status === 401 && (body as { code?: string } | null)?.code === "auth" && !url.startsWith("/api/auth")) window.dispatchEvent(new Event(AUTH_EVENT));
+	if (status === 401 && (body as { code?: string } | null)?.code === "auth" && !url.startsWith("/api/auth")) {
+		setSessionToken(null);
+		window.dispatchEvent(new Event(AUTH_EVENT));
+	}
 }
 
 export async function getAuth(): Promise<{ pinSet: boolean; authenticated: boolean }> {
@@ -193,7 +223,9 @@ export function useLive(): LiveState {
 		};
 		const connect = () => {
 			if (stopped) return;
-			es = new EventSource("/api/stream");
+			// EventSource kann keine Header: das Token für den (nur lesenden) Stream in der Adresse
+			const token = sessionToken();
+			es = new EventSource(token ? `/api/stream?session=${encodeURIComponent(token)}` : "/api/stream");
 			es.addEventListener("open", onOpen);
 			es.addEventListener("hello", () => set("live"));
 			es.addEventListener("error", () => {

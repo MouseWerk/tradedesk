@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanConfig } from "../src/config.ts";
 import { makeFixture, type Fixture } from "../src/fixture.ts";
+import { FakeBroker } from "../src/broker.ts";
 import { deskHttp } from "./owner.ts";
 
 let fx: Fixture;
@@ -395,5 +396,21 @@ describe("broker: interrupted send", () => {
 		expect(fx.desk.proposal(id).status).toBe("rejected");
 		expect(fx.desk.proposal(id).reason).toContain("nicht erneut");
 		expect(fx.broker.placed).toHaveLength(0);
+	});
+
+	it("turns a proposal rejected by the recovery into filled when its execution still arrives (Review q1 m2)", async () => {
+		const r = await fx.desk.submit({ author: "Atlas", accountId: "ibkr", symbol: "SAP.DE", side: "buy", qty: 2, stopLoss: 195, confidence: 0.7, thesis: "x" }, "cli");
+		const id = r.proposal!.id;
+		const conid = FakeBroker.conid("SAP.DE");
+		// so hinterlässt sendToBroker den Vorschlag, wenn die Antwort des Brokers verloren geht: Kontrakt und Order-ID gemerkt
+		fx.db.run("UPDATE proposal SET status = 'sending', decided_at = ?, approved_qty = 2, broker_conid = ?, broker_coid = ? WHERE id = ?", clock, conid, `desk-${fx.desk.installId}-${id}`, id);
+		fx.db.run("INSERT OR REPLACE INTO broker_conid (account_id, conid, symbol) VALUES ('ibkr', ?, 'SAP.DE')", conid);
+		clock += 6 * 60_000;
+		await fx.desk.pollBroker("ibkr");
+		expect(fx.desk.proposal(id).status).toBe("rejected");
+		fx.broker.execs.push({ id: "late-after-reject", cOID: `desk-${fx.desk.installId}-${id}`, conid, side: "buy", qty: 2, price: 201.25, time: clock, commission: 1, commissionCurrency: "EUR" });
+		await fx.desk.pollBroker("ibkr");
+		expect(fx.desk.proposal(id).status).toBe("filled");
+		expect(fx.desk.detail("ibkr").trades.filter((t) => t.proposalId === id)).toHaveLength(1);
 	});
 });

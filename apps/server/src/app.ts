@@ -4,13 +4,12 @@
 // Trades, Cash, Import, Abgleich, Watchlist und Alarme gehen nur mit deiner Sitzung. Lesen dürfen auch die Agenten.
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { ChartRange } from "@desk/shared";
 import { ChartRangeSchema } from "@desk/shared";
-import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_SEC } from "./auth.ts";
+import { AuthError, SESSION_HEADER } from "./auth.ts";
 import { DeskError, type Desk, type Origin } from "./desk.ts";
 
 export const VERSION = 1;
@@ -96,7 +95,8 @@ export function createApp(desk: Desk) {
 			const json = (c.req.header("Content-Type") ?? "").startsWith("application/json");
 			if (!json || (origin && !origins.has(origin))) return c.json({ ok: false, msg: "forbidden" }, 403);
 		}
-		const token = getCookie(c, SESSION_COOKIE);
+		// EventSource kann keine Header setzen: nur für den Live-Stream (nur lesen) darf das Token in der Adresse stehen
+		const token = c.req.header(SESSION_HEADER) ?? (c.req.path === "/api/stream" ? c.req.query("session") : undefined);
 		const session = auth.verify(token) ? token! : null;
 		c.set("session", session);
 		// von einem anderen Gerät (Tailscale, z. B. dein Handy): ohne Sitzung gar nichts, auch nicht lesen – die CLI der
@@ -140,25 +140,22 @@ export function createApp(desk: Desk) {
 	const browser = (c: Context) => {
 		if (!c.req.header("Origin")) throw new AuthError("Anmelden nur im Browser.", 403);
 	};
-	const startSession = (c: Context, token: string) => setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: "Strict", path: "/", maxAge: SESSION_MAX_AGE_SEC });
 
 	/* Anmeldung: PIN einmal mit dem Einrichtungscode aus der Konsole setzen, dann mit der PIN anmelden */
 	app.get("/api/auth", (c) => c.json({ pinSet: auth.pinSet, authenticated: c.get("session") !== null }));
 	app.post("/api/auth/setup", async (c) => {
 		browser(c);
 		const b = await body(c);
-		startSession(c, auth.setup(b.code, b.pin));
+		const token = auth.setup(b.code, b.pin);
 		desk.event("auth.setup", cfg.user, "PIN eingerichtet");
-		return c.json({ ok: true, pinSet: true, authenticated: true });
+		return c.json({ ok: true, pinSet: true, authenticated: true, token });
 	});
 	app.post("/api/auth/login", async (c) => {
 		browser(c);
-		startSession(c, auth.login((await body(c)).pin));
-		return c.json({ ok: true, pinSet: true, authenticated: true });
+		return c.json({ ok: true, pinSet: true, authenticated: true, token: auth.login((await body(c)).pin) });
 	});
 	app.post("/api/auth/logout", (c) => {
 		auth.logout(c.get("session") ?? undefined);
-		deleteCookie(c, SESSION_COOKIE, { path: "/" });
 		return c.json({ ok: true, pinSet: auth.pinSet, authenticated: false });
 	});
 	const id = (c: Context) => {

@@ -71,3 +71,14 @@ describe("index.html", () => {
 		expect(html).not.toMatch(/<style/);
 	});
 });
+
+describe("network", () => {
+	it("every request goes through lib/api.ts (session header, error texts)", () => {
+		const offenders = tsxAndTs().filter((x) => !x.f.split(path.sep).join("/").endsWith("lib/api.ts") && /\bfetch\(/.test(x.src)).map((x) => x.f);
+		expect(offenders).toEqual([]);
+	});
+});
+
+function tsxAndTs() {
+	return files(SRC, /\.(tsx|ts)$/).map((f) => ({ f: path.relative(SRC, f), src: readFileSync(f, "utf8") }));
+}

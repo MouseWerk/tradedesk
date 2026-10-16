@@ -7,7 +7,7 @@ import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-route
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bell, BellOff, ChevronRight, ListChecks, LogOut, MessageSquare, Moon, OctagonX, Radio, Sun } from "lucide-react";
 import { MODULES, moduleForPath } from "@/modules/registry";
-import { AUTH_EVENT, notifyEnabled, send, setNotify, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
+import { AUTH_EVENT, notifyEnabled, send, setNotify, setSessionToken, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
 import { ago, eur, hhmm, pct, tone } from "@/lib/format";
 import { Badge, Button, Kbd, cn } from "@/ui/kit";
 import { Boundary } from "@/ui/boundary";
@@ -281,6 +281,7 @@ function KillBanner() {
 function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread }: { dark: boolean; toggleTheme: () => void; chatOpen: boolean; toggleChat: () => void; unread: number }) {
 	const logout = async () => {
 		await send("/api/auth/logout", "POST").catch(() => undefined);
+		setSessionToken(null);
 		window.dispatchEvent(new Event(AUTH_EVENT));
 	};
 	const path = useRouterState({ select: (s) => s.location.pathname });

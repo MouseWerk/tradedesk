@@ -114,7 +114,7 @@ export function Positions({ cockpit, onSelect }: { cockpit: Cockpit; onSelect: (
 		const acc = owner(p.accountId)!;
 		const live = liveIds.has(acc.accountId);
 		const broker = ov?.accounts.find((a) => a.id === acc.accountId)?.broker;
-		if (!(await confirm({ title: `${p.symbol} schließen?`, body: `Verkauf ${qty(p.qty)} Stück zum Marktkurs in „${acc.name}“${acc.kind === "broker" ? (live ? " – echtes Geld, geht an den Broker" : " – geht an den Broker (Papierkonto)") : ""}.`, confirm: live ? "Mit echtem Geld verkaufen" : "Verkaufen", danger: live }))) return;
+		if (!(await confirm({ title: `${p.symbol} schließen?`, body: `Verkauf ${qty(p.qty)} Stück zum Marktkurs in „${acc.name}“${p.price !== null ? `, geschätzt ${eur(Math.round(p.qty * p.price * 100))} vor Gebühr` : ""}${acc.kind === "broker" ? (live ? " – echtes Geld, geht an den Broker" : " – geht an den Broker (Papierkonto)") : ""}.`, confirm: live ? "Mit echtem Geld verkaufen" : "Verkaufen", danger: live }))) return;
 		await run<{ proposal: Proposal }>("/api/proposals", "POST", { accountId: p.accountId, symbol: p.symbol, side: "sell", qty: p.qty }, (res) =>
 			orderResultText(res.proposal, { label: `Verkauf ${qty(p.qty)} ${p.symbol}`, broker, kind: acc.kind, filled: `${p.symbol} geschlossen.` }),
 		);

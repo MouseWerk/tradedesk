@@ -7,7 +7,10 @@
 import { createHash, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Database } from "./db.ts";
 
-export const SESSION_COOKIE = "desk_session";
+// Sitzung als Header, nicht als Cookie: Browser trennen Cookies nicht nach Port – ein Agent mit eigenem Server auf
+// 127.0.0.1:<anderer Port> bekäme ein Cookie geschenkt, sobald du seinen Link öffnest (Review q1 M1). Das Token liegt
+// im localStorage der Desk-Seite, und der gehört nur zu genau diesem Origin (inklusive Port).
+export const SESSION_HEADER = "X-Desk-Session";
 export const SESSION_MAX_AGE_SEC = 30 * 86_400;
 const PIN = /^\d{4,12}$/;
 const SCRYPT = { N: 16_384, r: 8, p: 1, keylen: 32 };

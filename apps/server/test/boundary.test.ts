@@ -64,25 +64,32 @@ describe("owner login (B1)", () => {
 	it("your session without the desk's Origin, or with another port, changes nothing", async () => {
 		await http.login();
 		const id = pendingId();
-		const noOrigin = await http.request(`/api/proposals/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: http.cookie }, body: "{}" });
+		const noOrigin = await http.request(`/api/proposals/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json", ...http.session }, body: "{}" });
 		expect(noOrigin.status).toBe(403);
-		const otherPort = await http.request("/api/risk/kill", { method: "PUT", headers: { "Content-Type": "application/json", Cookie: http.cookie, Origin: "http://localhost:1" }, body: JSON.stringify({ on: true }) });
+		const otherPort = await http.request("/api/risk/kill", { method: "PUT", headers: { "Content-Type": "application/json", ...http.session, Origin: "http://localhost:1" }, body: JSON.stringify({ on: true }) });
 		expect(otherPort.status).toBe(403);
 		expect(fx.desk.proposal(id).status).toBe("pending");
 		expect(fx.desk.killSwitch).toBe(false);
 	});
 
+	it("a token sent as a cookie counts for nothing (another localhost port would receive cookies, Review q1 M1)", async () => {
+		await http.login();
+		const id = pendingId();
+		const asCookie = await http.request(`/api/proposals/${id}/approve`, { method: "POST", headers: { "Content-Type": "application/json", Origin: http.base, Cookie: `desk_session=${http.token}` }, body: "{}" });
+		expect(asCookie.status).toBe(401);
+		expect(fx.desk.proposal(id).status).toBe("pending");
+		// der Live-Stream nimmt das Token in der Adresse, alles andere nicht
+		const inQuery = await http.request(`/api/accounts/ibkr/reconcile?session=${http.token}`);
+		expect(inQuery.status).toBe(403);
+	});
+
 	it("logs in with the PIN, keeps only a hash of the token and logs out", async () => {
 		expect(await (await http.get("/api/auth")).json()).toEqual({ pinSet: true, authenticated: false });
 		const r = await http.login();
-		const set = r.headers.get("set-cookie")!;
-		expect(set).toMatch(/^desk_session=[A-Za-z0-9_-]{43};/);
-		expect(set).toMatch(/HttpOnly/);
-		expect(set).toMatch(/SameSite=Strict/);
-		expect(set).toMatch(/Path=\//);
-		expect(set).toMatch(/Max-Age=2592000/);
+		expect(r.headers.get("set-cookie")).toBeNull(); // nie ein Cookie (Browser trennen Cookies nicht nach Port)
+		expect(http.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect(await (await http.webGet("/api/auth")).json()).toEqual({ pinSet: true, authenticated: true });
-		const token = http.cookie.split("=")[1];
+		const token = http.token;
 		const rows = fx.db.all<{ token_hash: string }>("SELECT token_hash FROM owner_session");
 		expect(rows).toHaveLength(1);
 		expect(rows[0].token_hash).toMatch(/^[0-9a-f]{64}$/);
@@ -128,7 +135,7 @@ describe("owner login (B1)", () => {
 		expect((await post({ code, pin: "12" })).status).toBe(400);
 		const ok = await post({ code: code.toLowerCase(), pin: "975310" });
 		expect(ok.status).toBe(200);
-		expect(ok.headers.get("set-cookie")).toMatch(/desk_session=/);
+		expect(((await ok.clone().json()) as { token: string }).token).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect((await post({ code, pin: "1234" })).status).toBe(409); // einmalig
 		expect(JSON.stringify(fx.db.all("SELECT * FROM setting")) + JSON.stringify(fx.db.all("SELECT * FROM event")) + JSON.stringify(fx.desk.chat())).not.toContain(code);
 		await http.login("975310");
@@ -151,7 +158,7 @@ describe("reconcile preview in the browser (B15)", () => {
 		expect(get.status).toBe(200);
 		expect(((await get.json()) as { status: { brokerAccount: string } }).status.brokerAccount).toBe("DU0000001");
 		expect((await http.web("/api/accounts/ibkr/reconcile/preview")).status).toBe(200);
-		const crossSite = await http.request("/api/accounts/ibkr/reconcile", { headers: { Cookie: http.cookie, "Sec-Fetch-Site": "cross-site" } });
+		const crossSite = await http.request("/api/accounts/ibkr/reconcile", { headers: { ...http.session, "Sec-Fetch-Site": "cross-site" } });
 		expect(crossSite.status).toBe(403);
 	});
 });
