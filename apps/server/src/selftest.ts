@@ -2,10 +2,10 @@
 import type { AgentsData, Overview, Proposal, RiskData, WatchItem } from "@desk/shared";
 import { AgentsDataSchema, OverviewSchema, ProposalSchema, RiskDataSchema, WatchItemSchema } from "@desk/shared";
 import { createApp } from "./app.ts";
-import { FIXTURE_PIN, makeFixture } from "./fixture.ts";
+import { FIXTURE_PIN, makeFixture, tradingDayClock } from "./fixture.ts";
 
 export async function selftest(): Promise<number> {
-	const fx = await makeFixture();
+	const fx = await makeFixture({ now: tradingDayClock() });
 	const results: { name: string; ok: boolean; detail?: string }[] = [];
 	const check = (name: string, ok: boolean, detail = "") => results.push({ name, ok, detail });
 	try {

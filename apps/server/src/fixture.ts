@@ -10,6 +10,18 @@ import { Desk } from "./desk.ts";
 import { FAKE_CATALOG, FakeMarket } from "./market.ts";
 import { FakeBroker } from "./broker.ts";
 
+/**
+ * Uhr für Selbsttest und Fixture-Server: läuft in Echtzeit, beginnt aber am letzten Werktag um 16:00 Ortszeit – dann
+ * sind XETRA und Nasdaq der Fake-Börse offen und Papier-Orders werden ausgeführt, egal wann der Test läuft.
+ */
+export function tradingDayClock(real: () => number = Date.now): () => number {
+	const d = new Date(real());
+	while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+	const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 16, 0).getTime();
+	const t0 = real();
+	return () => start + (real() - t0);
+}
+
 export interface Fixture {
 	dir: string;
 	cfg: Config;

@@ -49,6 +49,7 @@ export const DEFAULT_LIMITS: Omit<RiskLimits, "accountId"> = { maxOrderCents: 50
 const SYMBOL = /^[A-Z0-9.=^-]{1,24}$/;
 const QUOTE_FRESH_MS = 60_000;
 const OPEN_LIMIT_DAYS = 30;
+const MARKET_WAIT_DAYS = 4; // eine Papier-Market-Order nach Börsenschluss wartet höchstens bis dahin auf die Eröffnung
 const PLACED_DAYS = 7;
 const CONFIRM_TTL_MS = 15 * 60_000; // eine Rückfrage des Brokers gilt so lange; danach neu freigeben
 const UNLISTED_MS = 24 * 3_600_000; // so lange darf eine Broker-Order aus der Orderliste fehlen, dann gilt sie als abgelaufen
@@ -76,12 +77,17 @@ function parseFeeCents(v: unknown, fallback: number): number {
 	return cents(v);
 }
 
+const RESERVING = "'open','placed','sending','confirm'"; // freigegeben, aber noch nicht (ganz) ausgeführt
+const eurText = (c: number) => `${(c / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+
 const pct = (n: number) => `${n.toFixed(1).replace(".", ",")} %`;
 const num = (n: number) => n.toLocaleString("de-DE", { maximumFractionDigits: 6 });
 
 export class Desk extends EventEmitter {
 	marketState: "live" | "off" | "error";
 	marketError: string | null = null;
+	/** Symbol → Fehler des letzten Abrufs (auch wenn andere Symbole Kurse bekamen). */
+	readonly quoteErrors = new Map<string, string>();
 	quotesAt: number | null = null;
 	ticks = 0;
 	private timer: NodeJS.Timeout | null = null;
@@ -191,7 +197,7 @@ export class Desk extends EventEmitter {
 	async refresh(symbols: string[]): Promise<void> {
 		if (this.market.kind === "off" || !symbols.length) return;
 		const unique = [...new Set(symbols)];
-		const { quotes, error } = await this.market.quotes(unique);
+		const { quotes, error, failed } = await this.market.quotes(unique);
 		this.storeQuotes(quotes);
 		const currencies = new Set<string>();
 		for (const s of unique) {
@@ -199,12 +205,36 @@ export class Desk extends EventEmitter {
 			if (c && c !== "EUR") currencies.add(c);
 		}
 		const fxSyms = [...currencies].map(fxSymbol).filter((s) => !unique.includes(s));
-		const fxRes = fxSyms.length ? await this.market.quotes(fxSyms) : { quotes: [], error: null };
+		const fxRes = fxSyms.length ? await this.market.quotes(fxSyms) : { quotes: [], error: null, failed: [] };
 		this.storeQuotes(fxRes.quotes);
+		for (const q of [...quotes, ...fxRes.quotes]) this.quoteErrors.delete(q.symbol);
+		for (const f of [...(failed ?? []), ...(fxRes.failed ?? [])]) this.quoteErrors.set(f.symbol, f.message);
 		const err = error ?? fxRes.error;
 		this.marketState = err ? "error" : "live";
-		this.marketError = err;
+		// einzelne Ausfälle sichtbar machen: der Markt ist "live", aber diese Symbole haben keinen neuen Kurs
+		const some = [...this.quoteErrors.keys()];
+		this.marketError = err ?? (some.length ? `Kein neuer Kurs für ${some.slice(0, 6).join(", ")}${some.length > 6 ? ` und ${some.length - 6} weitere` : ""}` : null);
 		if (quotes.length) this.quotesAt = this.now();
+	}
+
+	/**
+	 * Warum ein Kurs für eine Entscheidung nicht reicht: während der Handelszeit älter als maxQuoteAgeSec (der Wechselkurs
+	 * ebenso). Außerhalb der Handelszeit ist der letzte Kurs der aktuelle. Ohne Handelszeiten gilt: wie offen.
+	 */
+	quoteProblem(symbol: string): string | null {
+		if (this.market.kind === "off") return null;
+		const q = this.quoteRow(symbol);
+		if (!q) return null; // ohne Kurs meldet die Risikoprüfung selbst "Kein aktueller Kurs"
+		if (q.reg_start !== null && this.sessionOf(q) !== "open") return null;
+		const max = this.cfg.maxQuoteAgeSec * 1000;
+		const age = (fetched: number) => `${Math.round((this.now() - fetched) / 60_000)} min`;
+		if (this.now() - q.fetched_at > max) return `Kein aktueller Kurs für ${symbol} – der letzte ist ${age(q.fetched_at)} alt (Grenze ${this.cfg.maxQuoteAgeSec} s während der Handelszeit).`;
+		const currency = this.instrument(symbol)?.currency;
+		if (currency && currency !== "EUR") {
+			const f = this.quoteRow(fxSymbol(currency));
+			if (!f || this.now() - f.fetched_at > max) return `Kein aktueller Wechselkurs ${currency}/EUR${f ? ` – der letzte ist ${age(f.fetched_at)} alt` : ""}.`;
+		}
+		return null;
 	}
 
 	private async ensureFresh(symbol: string) {
@@ -362,6 +392,7 @@ export class Desk extends EventEmitter {
 			curve,
 			pending: this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE status = 'pending'")!.n,
 			events: this.events(30),
+			failedQuotes: [...this.quoteErrors.keys()].sort(),
 		};
 	}
 
@@ -515,26 +546,68 @@ export class Desk extends EventEmitter {
 		return rows.map((r) => this.toProposal(r));
 	}
 
-	private check(a: Account, o: { side: Side; qty: number; orderType: "market" | "limit"; limitPrice?: number | null; stopLoss?: number | null; takeProfit?: number | null; symbol: string }, openByAuthor?: number, byAgent = false): Check {
+	/**
+	 * Was freigegebene, noch nicht (ganz) ausgeführte Orders eines Depots binden: Cash und Positionswert der Käufe, Stück
+	 * der Verkäufe. Ohne Kurs oder Wechselkurs einer Kauf-Order lässt sich das Cash nicht prüfen (unpriced).
+	 */
+	private reserved(accountId: string, exclude?: number): { cashCents: number; buyValue: Map<string, number>; sellQty: Map<string, number>; unpriced: number[]; riskCents: number } {
+		const a = this.account(accountId);
+		const out = { cashCents: 0, buyValue: new Map<string, number>(), sellQty: new Map<string, number>(), unpriced: [] as number[], riskCents: 0 };
+		for (const r of this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE account_id = ? AND status IN (${RESERVING}) AND id != ?`, accountId, exclude ?? 0)) {
+			const qty = roundQty((r.approved_qty ?? r.qty) - (r.filled_qty ?? 0)); // der ausgeführte Teil steckt schon im Buch
+			if (qty <= 0) continue;
+			if (r.side === "sell") {
+				out.sellQty.set(r.symbol, (out.sellQty.get(r.symbol) ?? 0) + qty);
+				continue;
+			}
+			const p = this.priced(r.symbol);
+			const fx = p?.fx ?? this.fx(this.instrument(r.symbol)?.currency ?? "");
+			const unit = r.limit_price ?? p?.price ?? r.quote_price;
+			if (fx === null || !(unit > 0)) {
+				out.unpriced.push(r.id);
+				continue;
+			}
+			const value = orderValueCents(qty, unit, fx);
+			out.cashCents += value + a.feeCents;
+			out.buyValue.set(r.symbol, (out.buyValue.get(r.symbol) ?? 0) + value);
+			if (r.stop_loss && r.stop_loss < unit) out.riskCents += orderValueCents(qty, unit - r.stop_loss, fx) + 2 * a.feeCents;
+		}
+		return out;
+	}
+
+	/**
+	 * Risikoprüfung gegen Bestand, Cash und alle schon freigegebenen offenen Orders des Depots (exclude: die Order selbst).
+	 * Während der Handelszeit nur mit frischem Kurs.
+	 */
+	private check(a: Account, o: { side: Side; qty: number; orderType: "market" | "limit"; limitPrice?: number | null; stopLoss?: number | null; takeProfit?: number | null; symbol: string }, opts: { openByAuthor?: number; byAgent?: boolean; exclude?: number } = {}): Check {
 		const s = this.summary(a);
 		const p = this.priced(o.symbol);
 		const book = this.book(a.id);
 		const held = book.holdings.get(o.symbol);
-		return checkOrder({
+		const res = this.reserved(a.id, opts.exclude);
+		const c = checkOrder({
 			...o,
 			price: p?.price ?? null,
 			fx: p?.fx ?? null,
-			cashCents: s.cashCents,
+			cashCents: s.cashCents - res.cashCents,
 			equityCents: s.equityCents,
 			feeCents: a.feeCents,
-			heldQty: held?.qty ?? 0,
-			positionValueCents: held ? (p ? orderValueCents(held.qty, p.price, p.fx) : held.costCents) : 0,
+			heldQty: Math.max(0, roundQty((held?.qty ?? 0) - (res.sellQty.get(o.symbol) ?? 0))),
+			positionValueCents: (held ? (p ? orderValueCents(held.qty, p.price, p.fx) : held.costCents) : 0) + (res.buyValue.get(o.symbol) ?? 0),
 			limits: this.limits(a.id),
 			killSwitch: this.killSwitch,
 			dayLossPct: this.dayLossPct(a, s),
-			openByAuthor,
-			byAgent,
+			openByAuthor: opts.openByAuthor,
+			byAgent: opts.byAgent ?? false,
 		});
+		const violations = [...c.violations];
+		const warnings = [...c.warnings];
+		const stale = this.quoteProblem(o.symbol);
+		if (stale) violations.unshift(stale);
+		if (o.side === "buy" && res.unpriced.length) violations.push(`Freigegebene Order ${res.unpriced.map((id) => `#${id}`).join(", ")} ohne Kurs oder Wechselkurs – das gebundene Cash ist nicht prüfbar.`);
+		if (o.side === "buy" && res.cashCents > 0) warnings.push(`Freigegebene, noch offene Orders binden ${eurText(res.cashCents)} – im verfügbaren Cash schon abgezogen.`);
+		if (o.side === "sell" && res.sellQty.get(o.symbol)) warnings.push(`${num(res.sellQty.get(o.symbol)!)} Stück ${o.symbol} sind schon in offenen Verkaufsorders gebunden.`);
+		return { ...c, ok: violations.length === 0, violations, warnings };
 	}
 
 	/**
@@ -566,8 +639,13 @@ export class Desk extends EventEmitter {
 		if (!isUser && input.confidence < this.cfg.minConfidence) extra.push(`Zuversicht ${Math.round(input.confidence * 100)} % liegt unter dem Mindestwert von ${Math.round(this.cfg.minConfidence * 100)} %.`);
 		if (input.orderType === "market" && input.limitPrice) extra.push("Market-Order mit Limitkurs – orderType \"limit\" verwenden oder den Limitkurs weglassen.");
 		if (!extra.length) await this.ensureFresh(symbol);
-		const openByAuthor = isUser ? undefined : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE account_id = ? AND author = ? AND status = 'pending'", a.id, author)!.n;
-		const c = this.check(a, { ...input, symbol }, openByAuthor, !isUser);
+		// "je Autor": über alle Depots gezählt, sonst hielte ein Agent mit vier Depots viermal so viele offen
+		const openByAuthor = isUser ? undefined : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND status = 'pending'", author)!.n;
+		const c = this.check(a, { ...input, symbol }, { openByAuthor, byAgent: !isUser });
+		const waiting = input.side === "buy" ? this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND side = 'buy' AND status = 'pending'", a.id) : [];
+		const waitingCents = waiting.reduce((sum, w) => sum + orderValueCents(w.qty, w.limit_price ?? w.quote_price, this.priced(w.symbol)?.fx ?? 1) + a.feeCents, 0);
+		if (waiting.length && c.ok && waitingCents + c.estimateCents + c.feeCents > this.summary(a).cashCents - this.reserved(a.id).cashCents)
+			c.warnings.push(`Zusammen mit ${waiting.length} wartenden Kaufvorschlägen reicht das Cash nicht für alle – bei der Freigabe wird neu geprüft.`);
 		const check: Check = { ...c, ok: c.ok && !extra.length, violations: [...extra, ...c.violations] };
 		if (!check.ok && !dryRun && !isUser) this.event("proposal.blocked", author, `Vorschlag ${sideLabel[input.side]} ${num(input.qty)} ${symbol} nicht angelegt: ${check.violations[0]}`);
 		if (dryRun || !check.ok) return { ok: check.ok, check, proposal: null };
@@ -597,7 +675,7 @@ export class Desk extends EventEmitter {
 		const p = this.priced(r.symbol);
 		if (r.author !== this.cfg.user && p && movePct(r.quote_price, p.price) > this.cfg.staleMovePct)
 			return { status: "stale", reason: `Kurs hat sich um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt. Agent soll neu vorschlagen.` };
-		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, undefined, r.author !== this.cfg.user);
+		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, { byAgent: r.author !== this.cfg.user, exclude: r.id });
 		if (!check.ok) return { status: "rejected", reason: `Risikoprüfung vor dem Senden: ${check.violations.join(" ")}` };
 		return null;
 	}
@@ -640,9 +718,15 @@ export class Desk extends EventEmitter {
 			this.event("proposal.placed", by, `${label} freigegeben – jetzt in ${a.broker} ausführen und die Ausführung eintragen.`, notify);
 			return this.proposal(id);
 		}
-		if (r.order_type === "limit" && r.limit_price && !crossed(r.side, p!.price, r.limit_price)) {
+		if (r.order_type === "limit" && r.limit_price && (!crossed(r.side, p!.price, r.limit_price) || !this.inSession(r.symbol))) {
 			set("open", { expires_at: now + OPEN_LIMIT_DAYS * 86_400_000 });
 			this.event("proposal.open", by, `${label} freigegeben – Limit ${num(r.limit_price)} ${p!.currency} offen.`, notify);
+			return this.proposal(id);
+		}
+		if (!this.inSession(r.symbol)) {
+			// Papier füllt nur zur Handelszeit – sonst zum letzten Schlusskurs, mit dem Wissen von heute
+			set("open", { expires_at: now + MARKET_WAIT_DAYS * 86_400_000, reason: "wartet auf den Handelsbeginn" });
+			this.event("proposal.open", by, `${label} freigegeben – wartet auf den Handelsbeginn.`, notify);
 			return this.proposal(id);
 		}
 		set("filled", { fill_price: p!.price });
@@ -661,6 +745,9 @@ export class Desk extends EventEmitter {
 			if (qty > r.qty + 1e-9) throw new DeskError(`Freigeben darfst du höchstens ${num(r.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
 		}
 		await this.refresh([r.symbol]); // direkt vor dem Schreiben neu lesen
+		// ein alter Kurs entscheidet nichts – der Vorschlag bleibt offen, du gibst später frei
+		const stale = this.quoteProblem(r.symbol);
+		if (stale) throw new DeskError(`${stale} Nichts ausgeführt, der Vorschlag wartet weiter.`, 409, this.toProposal(r));
 		const out = this.db.tx(() => this.execute(id, qty, this.cfg.user));
 		if (out.status === "sending") await this.sendToBroker(id);
 		this.emit("tick", { at: this.now() });
@@ -874,6 +961,8 @@ export class Desk extends EventEmitter {
 		};
 		if (this.now() - (r.status_at ?? r.decided_at ?? r.created_at) > CONFIRM_TTL_MS) return end("expired", "Rückfrage des Brokers nicht innerhalb von 15 Minuten bestätigt – nichts gesendet.", "proposal.expired");
 		await this.refresh([r.symbol]);
+		const stale = this.quoteProblem(r.symbol);
+		if (stale) throw new DeskError(`${stale} Nichts gesendet, die Rückfrage wartet weiter.`, 409, this.toProposal(r));
 		const verdict = this.verdict(r, r.approved_qty ?? r.qty);
 		if (verdict) return end(verdict.status, verdict.reason, verdict.status === "stale" ? "proposal.stale" : "proposal.rejected");
 		const broker = this.brokerOf(a.id);
@@ -1337,6 +1426,7 @@ export class Desk extends EventEmitter {
 				marketTime: q?.market_time ?? null,
 				held: held.has(symbol),
 				alerts: alerts.find((a) => a.symbol === symbol)?.n ?? 0,
+				quoteStale: this.quoteErrors.has(symbol) || this.quoteProblem(symbol) !== null,
 			};
 		});
 	}
@@ -1423,6 +1513,7 @@ export class Desk extends EventEmitter {
 			marketError: this.marketError,
 			quotesAt: this.quotesAt,
 			liveIntervalSec: this.cfg.liveIntervalSec,
+			failedQuotes: [...this.quoteErrors.keys()].sort(),
 			sessions: this.sessions(),
 			scan: this.scan(),
 			days,
@@ -1512,23 +1603,40 @@ export class Desk extends EventEmitter {
 		return this.ticking;
 	}
 
+	/** Börse des Symbols offen und der Kurs aus der laufenden Sitzung? */
+	private inSession(symbol: string): boolean {
+		const q = this.quoteRow(symbol);
+		if (!q || this.sessionOf(q) !== "open") return false;
+		return q.market_time === null || q.reg_start === null || q.market_time >= q.reg_start;
+	}
+
+	/** Offene Papier-Orders: Limits, sobald der Kurs sie erreicht, Market-Orders zur Eröffnung – nur zur Handelszeit. */
 	private fillLimits() {
 		if (this.killSwitch) return;
 		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'open' ORDER BY id")) {
+			if (!this.inSession(r.symbol) || this.quoteProblem(r.symbol)) continue; // warten statt auf altem Kurs ausführen
 			const p = this.priced(r.symbol);
-			if (!p || !r.limit_price || !crossed(r.side, p.price, r.limit_price)) continue;
+			if (!p || (r.limit_price && !crossed(r.side, p.price, r.limit_price))) continue;
 			const a = this.account(r.account_id);
 			const qty = r.approved_qty ?? r.qty;
-			const c = this.check(a, { side: r.side, qty, orderType: "market", symbol: r.symbol });
+			const byAgent = r.author !== this.cfg.user;
 			const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol}`;
-			if (!c.ok) {
-				this.db.run("UPDATE proposal SET status = 'cancelled', reason = ? WHERE id = ? AND status = 'open'", `Limit erreicht, aber Risikoprüfung: ${c.violations.join(" ")}`, r.id);
-				this.event("proposal.cancelled", "Desk", `${label}: Limit erreicht, nicht ausgeführt – ${c.violations[0]}`);
+			if (!r.limit_price && byAgent && movePct(r.quote_price, p.price) > this.cfg.staleMovePct) {
+				const reason = `Kurs hat sich bis zur Eröffnung um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt.`;
+				if (this.db.run("UPDATE proposal SET status = 'stale', reason = ? WHERE id = ? AND status = 'open'", reason, r.id).changes) this.event("proposal.stale", "Desk", `${label} #${r.id}: ${reason}`, { to: [r.author], ref: `#${r.id}` });
 				continue;
 			}
-			if (!this.db.run("UPDATE proposal SET status = 'filled', fill_price = ? WHERE id = ? AND status = 'open'", p.price, r.id).changes) continue;
-			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: "Limit" });
-			this.event("trade.fill", "Desk", `${label} #${r.id} zu ${num(p.price)} ${p.currency} ausgeführt (Limit ${num(r.limit_price)}, ${a.name})`, { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
+			// dieselbe Prüfung wie bei der Freigabe, mit Stop, Risiko je Trade und Stop-Pflicht – ohne sich selbst als Reservierung
+			const c = this.check(a, { side: r.side, qty, orderType: "market", stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, { byAgent, exclude: r.id });
+			if (!c.ok) {
+				const what = r.limit_price ? "Limit erreicht" : "Börse offen";
+				this.db.run("UPDATE proposal SET status = 'cancelled', reason = ? WHERE id = ? AND status = 'open'", `${what}, aber Risikoprüfung: ${c.violations.join(" ")}`, r.id);
+				this.event("proposal.cancelled", "Desk", `${label}: ${what}, nicht ausgeführt – ${c.violations[0]}`, byAgent ? { to: [r.author], ref: `#${r.id}` } : undefined);
+				continue;
+			}
+			if (!this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, reason = '' WHERE id = ? AND status = 'open'", p.price, r.id).changes) continue;
+			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: r.limit_price ? "Limit" : "Eröffnung" });
+			this.event("trade.fill", "Desk", `${label} #${r.id} zu ${num(p.price)} ${p.currency} ausgeführt (${r.limit_price ? `Limit ${num(r.limit_price)}` : "zur Eröffnung"}, ${a.name})`, { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
 		}
 	}
 

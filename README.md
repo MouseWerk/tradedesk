@@ -98,6 +98,7 @@ The fixture server (`--fixture`, self-test, tests) uses the test PIN `2468`.
 | `proposalTtlHours` | Undecided proposals expire after this |
 | `quoteIntervalSec` | Quote refresh without a browser open, default 60 |
 | `liveIntervalSec` | Quote and 1-minute chart refresh while a browser is open, default 15 (Yahoo may throttle much faster polling) |
+| `maxQuoteAgeSec` | During trading hours no proposal, approval, broker confirmation or limit fill uses a quote (or exchange rate) older than this, default 120 |
 
 Day trading with these quotes: Yahoo is free but unofficial and not a professional real-time feed; quotes for some
 exchanges are delayed, and the dashboard shows the time of every quote. Trade Republic orders are entered by hand in

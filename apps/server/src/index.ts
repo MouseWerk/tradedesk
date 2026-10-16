@@ -26,7 +26,8 @@ if (process.argv.includes("--reset-pin")) {
 let desk: Desk;
 let cleanup = () => {};
 if (process.argv.includes("--fixture")) {
-	const fx = await (await import("./fixture.ts")).makeFixture();
+	const { makeFixture, tradingDayClock } = await import("./fixture.ts");
+	const fx = await makeFixture({ now: tradingDayClock() }); // Uhr an einem Handelstag: Papier-Orders werden ausgeführt
 	fx.cfg.port = base.port;
 	desk = fx.desk;
 	cleanup = fx.cleanup;

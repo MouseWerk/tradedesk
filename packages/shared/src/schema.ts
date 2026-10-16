@@ -138,6 +138,7 @@ export const OverviewSchema = z.object({
 	curve: z.array(CurvePointSchema), // Summe deiner Depots
 	pending: z.number().int(),
 	events: z.array(EventSchema),
+	failedQuotes: z.array(z.string()), // Symbole, deren letzter Kursabruf fehlschlug, während andere ankamen
 });
 export type Overview = z.infer<typeof OverviewSchema>;
 
@@ -313,6 +314,7 @@ export const ScanRowSchema = z.object({
 	marketTime: z.number().nullable(),
 	held: z.boolean(),
 	alerts: z.number().int(),
+	quoteStale: z.boolean(), // Kurs während der Handelszeit älter als maxQuoteAgeSec oder letzter Abruf fehlgeschlagen
 });
 export type ScanRow = z.infer<typeof ScanRowSchema>;
 
@@ -381,6 +383,7 @@ export const CockpitSchema = z.object({
 	marketError: z.string().nullable(),
 	quotesAt: z.number().nullable(),
 	liveIntervalSec: z.number(),
+	failedQuotes: z.array(z.string()),
 	sessions: z.array(SessionInfoSchema),
 	scan: z.array(ScanRowSchema),
 	days: z.array(
