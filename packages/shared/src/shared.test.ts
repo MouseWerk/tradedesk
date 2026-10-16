@@ -8,7 +8,7 @@ describe("cents", () => {
 		expect(cents(1.005)).toBe(101);
 		expect(cents(-1.005)).toBe(-101);
 		expect(cents(0.1 + 0.2)).toBe(30);
-		expect(cents(Number.NaN)).toBe(0);
+		expect(() => cents(Number.NaN)).toThrow(); // nie still 0 (Q1 B2)
 	});
 });
 

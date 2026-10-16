@@ -1,6 +1,14 @@
 // API-Verträge: ein zod-Schema je Antwort, die Typen werden daraus abgeleitet (eine Quelle, kein Auseinanderlaufen).
 // Geld in Cent (Basiswährung EUR) als ganze Zahl; Kurse in der Währung des Wertpapiers; Stückzahlen bis 6 Nachkommastellen.
 import { z } from "zod";
+import { decimals } from "./portfolio.ts";
+
+/** Obergrenzen an der API-Grenze: was darüber liegt, ist ein Tippfehler oder ein Angriff, nie eine Order. */
+export const MAX_QTY = 10_000_000;
+export const MAX_PRICE = 10_000_000; // in Wertpapierwährung
+export const MAX_EUR = 100_000_000; // Ein- und Auszahlungen, Gebühren, Grenzen
+export const QtySchema = z.number().positive().max(MAX_QTY).refine((n) => decimals(n) <= 6, "höchstens 6 Nachkommastellen");
+export const PriceSchema = z.number().positive().max(MAX_PRICE).refine((n) => decimals(n) <= 8, "höchstens 8 Nachkommastellen");
 
 export const SideSchema = z.enum(["buy", "sell"]);
 export type Side = z.infer<typeof SideSchema>;
@@ -97,7 +105,7 @@ export type CurvePoint = z.infer<typeof CurvePointSchema>;
 
 export const RiskLimitsSchema = z.object({
 	accountId: z.string(),
-	maxOrderCents: z.number().int().min(0), // 0 = keine Grenze
+	maxOrderCents: z.number().int().min(0).max(MAX_EUR * 100), // 0 = keine Grenze
 	maxPositionPct: z.number().min(0).max(100), // Anteil am Depotwert nach der Order; 0 = keine Grenze
 	dailyLossPct: z.number().min(0).max(100), // ab diesem Tagesverlust keine Käufe mehr; 0 = keine Grenze
 	maxOpenProposals: z.number().int().min(0), // je Autor; 0 = keine Grenze
@@ -204,11 +212,11 @@ export const ProposalInputSchema = z.object({
 	accountId: z.string().trim().min(1).max(40),
 	symbol: z.string().trim().min(1).max(24),
 	side: SideSchema,
-	qty: z.number().positive().finite(),
+	qty: QtySchema,
 	orderType: OrderTypeSchema.default("market"),
-	limitPrice: z.number().positive().finite().nullish(),
-	stopLoss: z.number().positive().finite().nullish(),
-	takeProfit: z.number().positive().finite().nullish(),
+	limitPrice: PriceSchema.nullish(),
+	stopLoss: PriceSchema.nullish(),
+	takeProfit: PriceSchema.nullish(),
 	confidence: z.number().min(0).max(1),
 	thesis: z.string().trim().min(1).max(2000),
 });

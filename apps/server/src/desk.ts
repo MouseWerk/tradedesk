@@ -8,7 +8,7 @@ import type {
 	NewsItem, Overview, Position, Proposal, ProposalStatus, RiskData, RiskLimits, ScanRow, SearchHit, SessionInfo, Side, Trade, WatchItem,
 } from "@desk/shared";
 import {
-	ProposalInputSchema, RiskLimitsSchema, atr, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
+	MAX_EUR, PriceSchema, ProposalInputSchema, QtySchema, RiskLimitsSchema, atr, cents, decimals, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
 	type DayStats, type SessionState,
 } from "@desk/shared";
 import type { Config } from "./config.ts";
@@ -47,6 +47,28 @@ const SYMBOL = /^[A-Z0-9.=^-]{1,24}$/;
 const QUOTE_FRESH_MS = 60_000;
 const OPEN_LIMIT_DAYS = 30;
 const PLACED_DAYS = 7;
+
+const MAX_FEE_EUR = 10_000;
+
+/** Stückzahl aus einer Eingabe: endlich, > 0, höchstens MAX_QTY und 6 Nachkommastellen – sonst 400. */
+function parseQty(v: unknown, what = "Stückzahl"): number {
+	const r = QtySchema.safeParse(v);
+	if (!r.success || roundQty(r.data) <= 0) throw new DeskError(`${what}: größer als 0, höchstens 10 Mio. und höchstens 6 Nachkommastellen.`);
+	return roundQty(r.data);
+}
+
+function parsePrice(v: unknown, what = "Kurs"): number {
+	const r = PriceSchema.safeParse(v);
+	if (!r.success) throw new DeskError(`${what}: größer als 0, höchstens 10 Mio. und höchstens 8 Nachkommastellen.`);
+	return r.data;
+}
+
+/** Betrag in EUR mit höchstens zwei Nachkommastellen → Cent; fehlt er, gilt fallback. */
+function parseFeeCents(v: unknown, fallback: number): number {
+	if (v === undefined || v === null) return fallback;
+	if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > MAX_FEE_EUR || decimals(v) > 2) throw new DeskError(`Gebühr in EUR zwischen 0 und ${MAX_FEE_EUR.toLocaleString("de-DE")}, höchstens 2 Nachkommastellen.`);
+	return cents(v);
+}
 
 const pct = (n: number) => `${n.toFixed(1).replace(".", ",")} %`;
 const num = (n: number) => n.toLocaleString("de-DE", { maximumFractionDigits: 6 });
@@ -432,9 +454,9 @@ export class Desk extends EventEmitter {
 	addAlert(body: { symbol?: unknown; op?: unknown; price?: unknown }, actor: string): WatchItem[] {
 		const symbol = this.normalizeSymbol(body.symbol);
 		if (body.op !== "above" && body.op !== "below") throw new DeskError("Alarm: über oder unter?");
-		if (typeof body.price !== "number" || !(body.price > 0)) throw new DeskError("Alarm: Kurs muss größer als 0 sein.");
-		this.db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES (?,?,?,?)", symbol, body.op, body.price, this.now());
-		this.event("alert.add", actor, `Alarm ${symbol} ${body.op === "above" ? "über" : "unter"} ${num(body.price)}`);
+		const price = parsePrice(body.price, "Alarm: Kurs");
+		this.db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES (?,?,?,?)", symbol, body.op, price, this.now());
+		this.event("alert.add", actor, `Alarm ${symbol} ${body.op === "above" ? "über" : "unter"} ${num(price)}`);
 		return this.watchlist();
 	}
 
@@ -617,8 +639,8 @@ export class Desk extends EventEmitter {
 		if (r.status !== "pending") throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.toProposal(r));
 		let qty = r.qty;
 		if (body.qty !== undefined) {
-			if (typeof body.qty !== "number" || !(body.qty > 0) || body.qty > r.qty + 1e-9) throw new DeskError(`Freigeben darfst du höchstens ${num(r.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
-			qty = roundQty(body.qty);
+			qty = parseQty(body.qty); // 0,0000001 wird nicht zu 0 gerundet und abgelehnt, sondern ist eine falsche Eingabe
+			if (qty > r.qty + 1e-9) throw new DeskError(`Freigeben darfst du höchstens ${num(r.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
 		}
 		await this.refresh([r.symbol]); // direkt vor dem Schreiben neu lesen
 		const out = this.db.tx(() => this.execute(id, qty, this.cfg.user));
@@ -664,17 +686,17 @@ export class Desk extends EventEmitter {
 		const a = this.account(r.account_id);
 		if (a.kind !== "manual") throw new DeskError(`Ausführungen von ${a.broker} kommen automatisch über die API.`, 409, this.toProposal(r));
 		const max = r.approved_qty ?? r.qty;
-		const qty = typeof body.qty === "number" ? roundQty(body.qty) : max;
-		if (!(qty > 0) || qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
-		if (typeof body.price !== "number" || !(body.price > 0)) throw new DeskError("Ausführungskurs in EUR fehlt.");
-		const feeCents = typeof body.feeEur === "number" && body.feeEur >= 0 ? Math.round(body.feeEur * 100) : a.feeCents;
+		const qty = body.qty === undefined || body.qty === null ? max : parseQty(body.qty);
+		if (qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
+		const price = parsePrice(body.price, "Ausführungskurs in EUR");
+		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
 		const time = typeof body.time === "number" && body.time > 0 && body.time <= this.now() + 60_000 ? body.time : this.now();
 		if (r.side === "sell" && (this.book(a.id).holdings.get(r.symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${r.symbol}.`);
 		this.db.tx(() => {
-			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", body.price, qty, id);
+			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", price, qty, id);
 			if (!changes) throw new DeskError("Schon eingetragen.", 409);
-			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: body.price as number, currency: "EUR", fx: 1, feeCents, time, source: "proposal", proposalId: id, note: "" });
-			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id} zu ${num(body.price as number)} € in ${a.broker} ausgeführt`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
+			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "proposal", proposalId: id, note: "" });
+			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id} zu ${num(price)} € in ${a.broker} ausgeführt`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
 		});
 		this.emit("tick", { at: this.now() });
 		return this.proposal(id);
@@ -906,17 +928,16 @@ export class Desk extends EventEmitter {
 		const symbol = this.normalizeSymbol(body.symbol);
 		const side = body.side === "sell" ? "sell" : body.side === "buy" ? "buy" : null;
 		if (!side) throw new DeskError("Kauf oder Verkauf?");
-		if (typeof body.qty !== "number" || !(body.qty > 0)) throw new DeskError("Stückzahl muss größer als 0 sein.");
-		if (typeof body.price !== "number" || !(body.price > 0)) throw new DeskError("Kurs muss größer als 0 sein.");
-		const feeCents = typeof body.feeEur === "number" && body.feeEur >= 0 ? Math.round(body.feeEur * 100) : a.feeCents;
+		const qty = parseQty(body.qty);
+		const price = parsePrice(body.price);
+		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
 		const time = typeof body.time === "number" && body.time > 0 && body.time <= this.now() + 60_000 ? body.time : this.now();
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		if (!this.instrument(symbol) && this.market.kind !== "off") await this.refresh([symbol]); // Name und Kurs, wenn Yahoo das Symbol kennt
-		const qty = roundQty(body.qty);
 		const id = this.db.tx(() => {
 			if (side === "sell" && (this.book(a.id).holdings.get(symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${symbol}.`);
-			const id = this.insertTrade(a, { symbol, side, qty, price: body.price as number, currency: "EUR", fx: 1, feeCents, time, source: "manual", proposalId: null, note });
-			this.event("trade.manual", this.cfg.user, `${sideLabel[side]} ${num(qty)} ${symbol} zu ${num(body.price as number)} € erfasst (${a.name})`);
+			const id = this.insertTrade(a, { symbol, side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "manual", proposalId: null, note });
+			this.event("trade.manual", this.cfg.user, `${sideLabel[side]} ${num(qty)} ${symbol} zu ${num(price)} € erfasst (${a.name})`);
 			return id;
 		});
 		this.emit("tick", { at: this.now() });
@@ -937,8 +958,11 @@ export class Desk extends EventEmitter {
 
 	cashMove(accountId: string, body: { amountEur?: unknown; note?: unknown }): CashMove {
 		const a = this.account(accountId);
-		if (typeof body.amountEur !== "number" || !Number.isFinite(body.amountEur) || body.amountEur === 0) throw new DeskError("Betrag in EUR, positiv für Einzahlung, negativ für Auszahlung.");
-		const amount = Math.round(body.amountEur * 100);
+		const v = body.amountEur;
+		// endlich, nicht 0, höchstens 100 Mio. € und ganze Cent: -0,004 € ist keine Auszahlung, 1e308 € kein Kontostand
+		if (typeof v !== "number" || !Number.isFinite(v) || v === 0 || Math.abs(v) > MAX_EUR || decimals(v) > 2)
+			throw new DeskError("Betrag in EUR mit höchstens 2 Nachkommastellen (bis 100 Mio.), positiv für Einzahlung, negativ für Auszahlung.");
+		const amount = cents(v);
 		if (amount < 0 && this.summary(a).cashCents + amount < 0) throw new DeskError("Auszahlung größer als das Cash im Depot.");
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		const time = this.now();

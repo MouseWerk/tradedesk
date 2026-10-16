@@ -3,7 +3,8 @@
 //   datum;symbol;seite;stueck;kurs;gebuehr;waehrung;notiz
 //   2026-03-02;SAP.DE;kauf;3;181,40;1,00;EUR;Sparplan
 // Trennzeichen ; , oder Tab; bei ; gilt das Dezimalkomma. Datum YYYY-MM-DD oder TT.MM.JJJJ, optional mit HH:MM.
-import type { Side } from "./schema.ts";
+import { MAX_PRICE, MAX_QTY, type Side } from "./schema.ts";
+import { QTY_DECIMALS, cents, decimals } from "./portfolio.ts";
 
 export interface CsvTrade {
 	line: number;
@@ -103,16 +104,16 @@ export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string
 			Number.isNaN(time) && "Datum",
 			!/^[A-Z0-9.=^-]{1,24}$/.test(symbol) && "Symbol",
 			!side && "Seite (kauf/verkauf)",
-			!(qty > 0) && "Stück",
-			!(price > 0) && "Kurs",
-			!(fee >= 0) && "Gebühr",
+			!(qty > 0 && qty <= MAX_QTY && decimals(qty) <= QTY_DECIMALS) && "Stück",
+			!(price > 0 && price <= MAX_PRICE) && "Kurs",
+			!(fee >= 0 && fee <= 10_000 && decimals(fee) <= 2) && "Gebühr",
 			!/^[A-Z]{3}$/.test(currency) && "Währung",
 		].filter(Boolean);
 		if (problems.length) {
 			errors.push(`Zeile ${n + 1}: ${problems.join(", ")} ungültig.`);
 			continue;
 		}
-		rows.push({ line: n + 1, time, symbol, side: side!, qty, price, feeCents: Math.round(fee * 100), currency, note: get("note").slice(0, 200), key: `${time}|${symbol}|${side}|${qty}|${price}|${Math.round(fee * 100)}` });
+		rows.push({ line: n + 1, time, symbol, side: side!, qty, price, feeCents: cents(fee), currency, note: get("note").slice(0, 200), key: `${time}|${symbol}|${side}|${qty}|${price}|${cents(fee)}` });
 	}
 	return { rows, errors };
 }
