@@ -71,9 +71,11 @@ export interface Book {
 	buysCents: number; // Summe Kaufwert + Gebühr
 	sellsCents: number; // Summe Verkaufswert − Gebühr
 	oversold: Map<number, number>; // Verkauf → Stück über den Bestand zu seinem Zeitpunkt (sollte leer sein)
+	openLots: Map<string, { tradeId: number; qty: number }[]>; // noch gehaltene Lose je Symbol, ältestes zuerst
 }
 
 interface Lot {
+	tradeId: number;
 	qty: number;
 	price: number;
 	costCents: number;
@@ -96,7 +98,7 @@ export function buildBook(trades: TradeLike[]): Book {
 		if (t.side === "buy") {
 			buysCents += t.valueCents + t.feeCents;
 			// Preis je Stück in EUR aus dem gebuchten Wert: bei Trade Republic kauft man AAPL in EUR, notiert ist sie in USD
-			list.push({ qty: t.qty, price: t.valueCents / 100 / t.qty, costCents: t.valueCents + t.feeCents });
+			list.push({ tradeId: t.id, qty: t.qty, price: t.valueCents / 100 / t.qty, costCents: t.valueCents + t.feeCents });
 			continue;
 		}
 		sellsCents += t.valueCents - t.feeCents;
@@ -121,14 +123,16 @@ export function buildBook(trades: TradeLike[]): Book {
 		realizedCents += realized;
 	}
 	const holdings = new Map<string, Holding>();
+	const openLots = new Map<string, { tradeId: number; qty: number }[]>();
 	for (const [symbol, list] of lots) {
+		if (list.length) openLots.set(symbol, list.map((l) => ({ tradeId: l.tradeId, qty: l.qty })));
 		const qty = roundQty(list.reduce((s, l) => s + l.qty, 0));
 		if (qty <= 1e-9) continue;
 		const costCents = list.reduce((s, l) => s + l.costCents, 0);
 		const avgPrice = list.reduce((s, l) => s + l.qty * l.price, 0) / qty;
 		holdings.set(symbol, { symbol, qty, costCents, avgPrice });
 	}
-	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents, oversold };
+	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents, oversold, openLots };
 }
 
 /** Verkäufe, die zu ihrem Zeitpunkt mehr Stück verkaufen, als im Bestand waren (Trade-ID → Stück zu viel). Wie buildBook sortiert. */

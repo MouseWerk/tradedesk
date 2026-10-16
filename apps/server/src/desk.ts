@@ -97,6 +97,7 @@ export class Desk extends EventEmitter {
 	private charts = new Map<string, { at: number; chart: Chart }>();
 	readonly brokers: Map<string, Broker>;
 	private brokerState = new Map<string, BrokerStatus>();
+	private ledgers = new Map<string, { key: string; rows: TradeRow[]; book: ReturnType<typeof buildBook> }>();
 
 	readonly cfg: Config;
 	readonly db: Database;
@@ -246,8 +247,40 @@ export class Desk extends EventEmitter {
 
 	/* ------------------------------------------------------------------ Depots */
 
+	/**
+	 * Trades und FIFO-Buch je Depot, zwischengespeichert, bis sich die Trades des Depots ändern (Anzahl, höchste ID, Summe
+	 * der aktiven IDs – fängt auch Löschen und Wiederherstellen). Ein Takt oder eine Abfrage baut das Buch so einmal statt
+	 * einmal je Position, Vorschlag oder Stop-Hinweis.
+	 */
+	private ledger(accountId: string): { rows: TradeRow[]; book: ReturnType<typeof buildBook> } {
+		const k = this.db.get<{ n: number; m: number | null; s: number | null }>("SELECT COUNT(*) AS n, MAX(id) AS m, SUM(CASE WHEN deleted_at IS NULL THEN id ELSE 0 END) AS s FROM trade WHERE account_id = ?", accountId)!;
+		const key = `${k.n}|${k.m ?? 0}|${k.s ?? 0}`;
+		const hit = this.ledgers.get(accountId);
+		if (hit && hit.key === key) return hit;
+		const rows = this.db.all<TradeRow>("SELECT * FROM trade WHERE account_id = ? AND deleted_at IS NULL ORDER BY time, id", accountId);
+		const book = buildBook(rows.map((t) => ({ id: t.id, symbol: t.symbol, side: t.side, qty: t.qty, price: t.price, valueCents: t.value_cents, feeCents: t.fee_cents, time: t.time })));
+		const entry = { key, rows, book };
+		this.ledgers.set(accountId, entry);
+		return entry;
+	}
+
 	private tradeRows(accountId: string): TradeRow[] {
-		return this.db.all<TradeRow>("SELECT * FROM trade WHERE account_id = ? AND deleted_at IS NULL ORDER BY time, id", accountId);
+		return this.ledger(accountId).rows;
+	}
+
+	/**
+	 * Vorschläge, deren Kauf-Lose noch im Bestand sind (FIFO), jüngstes Los zuerst. Ein Stop gilt nur für die Position, die
+	 * sein Vorschlag eröffnet hat – nicht für einen späteren Kauf von Hand desselben Symbols.
+	 */
+	private heldProposals(accountId: string): Map<string, number[]> {
+		const { rows, book } = this.ledger(accountId);
+		const byTrade = new Map(rows.map((t) => [t.id, t.proposal_id]));
+		const out = new Map<string, number[]>();
+		for (const [symbol, lots] of book.openLots) {
+			const ids = [...new Set(lots.map((l) => byTrade.get(l.tradeId)).filter((x): x is number => typeof x === "number"))].reverse();
+			if (ids.length) out.set(symbol, ids);
+		}
+		return out;
 	}
 
 	/**
@@ -269,7 +302,7 @@ export class Desk extends EventEmitter {
 	}
 
 	private book(accountId: string) {
-		return buildBook(this.tradeRows(accountId).map((t) => ({ id: t.id, symbol: t.symbol, side: t.side, qty: t.qty, price: t.price, valueCents: t.value_cents, feeCents: t.fee_cents, time: t.time })));
+		return this.ledger(accountId).book;
 	}
 
 	private depositsCents(a: Account): number {
@@ -313,15 +346,17 @@ export class Desk extends EventEmitter {
 
 	private positions(a: Account, s: AccountSummary): Position[] {
 		const book = this.book(a.id);
+		const held = this.heldProposals(a.id);
 		const out: Position[] = [];
 		for (const h of book.holdings.values()) {
 			const i = this.instrument(h.symbol);
 			const p = this.priced(h.symbol);
 			const value = p ? orderValueCents(h.qty, p.price, p.fx) : h.costCents;
-			const last = this.db.get<{ stop_loss: number | null; take_profit: number | null }>(
-				"SELECT stop_loss, take_profit FROM proposal WHERE account_id = ? AND symbol = ? AND side = 'buy' AND status = 'filled' ORDER BY decided_at DESC LIMIT 1",
-				a.id, h.symbol,
-			);
+			// Stop und Ziel des jüngsten Vorschlags, dessen Kauf noch im Bestand ist; ein Kauf von Hand hat keinen
+			const ids = held.get(h.symbol) ?? [];
+			const last = ids.length
+				? this.db.get<{ stop_loss: number | null; take_profit: number | null }>(`SELECT stop_loss, take_profit FROM proposal WHERE id IN (${ids.map(() => "?").join(",")}) AND side = 'buy' ORDER BY (stop_loss IS NULL), decided_at DESC LIMIT 1`, ...ids)
+				: undefined;
 			out.push({
 				symbol: h.symbol,
 				name: i?.name ?? h.symbol,
@@ -1730,9 +1765,16 @@ export class Desk extends EventEmitter {
 
 	/** Stop-Loss und Kursziel sind Hinweise an dich, keine automatischen Orders. */
 	private checkStops() {
-		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'filled' AND side = 'buy' AND ((stop_loss IS NOT NULL AND stop_hit_at IS NULL) OR (take_profit IS NOT NULL AND target_hit_at IS NULL))");
+		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'filled' AND side = 'buy' AND closed_at IS NULL AND ((stop_loss IS NOT NULL AND stop_hit_at IS NULL) OR (take_profit IS NOT NULL AND target_hit_at IS NULL))");
+		const held = new Map<string, Set<number>>(); // Depot → Vorschläge mit gehaltenen Losen
+		const booked = new Set(rows.length ? this.db.all<{ p: number }>(`SELECT DISTINCT proposal_id AS p FROM trade WHERE deleted_at IS NULL AND proposal_id IN (${rows.map((r) => r.id).join(",")})`).map((x) => x.p) : []);
 		for (const r of rows) {
-			if (!this.book(r.account_id).holdings.has(r.symbol)) continue;
+			if (!held.has(r.account_id)) held.set(r.account_id, new Set([...this.heldProposals(r.account_id).values()].flat()));
+			if (!held.get(r.account_id)!.has(r.id)) {
+				// gebucht, aber verkauft: der Hinweis ist erledigt und kommt nie wieder (auch nicht für einen späteren Kauf)
+				if (booked.has(r.id)) this.db.run("UPDATE proposal SET closed_at = ? WHERE id = ?", this.now(), r.id);
+				continue; // ohne gebuchte Ausführung (Broker meldet sie noch) wartet der Hinweis
+			}
 			const q = this.quoteRow(r.symbol);
 			if (!q) continue;
 			const a = this.account(r.account_id);

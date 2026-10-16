@@ -1,6 +1,7 @@
 // Die HTTP-Grenze (Q1 B1, B15, B16, B25, B30): nur du mit Sitzung erreichst die Routen des Besitzers, nur der eigene
 // Host wird bedient, Größe und JSON werden geprüft. Agenten (ohne Cookie) lesen und schlagen weiter vor.
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -194,7 +195,13 @@ describe("body size and JSON (B25, B30)", () => {
 describe("setup code at startup (B1)", () => {
 	it("is printed only to the server console and nowhere else", async () => {
 		const home = mkdtempSync(path.join(tmpdir(), "tradedesk-auth-"));
-		const port = 18_000 + Math.floor(Math.random() * 2_000);
+		// freien Port vom System holen (nie 8095, nie ein fest gewählter, der belegt sein könnte)
+		const port = await new Promise<number>((resolve) => {
+			const s = createServer().listen(0, "127.0.0.1", () => {
+				const p = (s.address() as { port: number }).port;
+				s.close(() => resolve(p));
+			});
+		});
 		writeFileSync(path.join(home, "config.json"), JSON.stringify({ user: "Maurice", port, market: "off" }));
 		const server = path.resolve(import.meta.dirname, "../src/index.ts");
 		const p = spawn(process.execPath, [server, "--home", home], { windowsHide: true, env: { ...process.env, TRADEDESK_HOME: home } });
