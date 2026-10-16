@@ -9,6 +9,7 @@ const BROKER_KEEPALIVE_MS = 60_000; // IBKR empfiehlt etwa einmal je Minute /tic
 export class Desk extends DeskAnalytics {
 	private timer: NodeJS.Timeout | null = null;
 	private ticking: Promise<void> | null = null;
+	private unfeed: (() => void) | null = null;
 
 	cockpit(): Cockpit {
 		const from = this.startOfDay();
@@ -46,6 +47,7 @@ export class Desk extends DeskAnalytics {
 			marketError: this.marketError,
 			quotesAt: this.quotesAt,
 			liveIntervalSec: this.cfg.liveIntervalSec,
+			quoteFeed: this.feed.source,
 			failedQuotes: [...this.quoteErrors.keys()].sort(),
 			sessions: this.sessions(),
 			scan: this.scan(),
@@ -74,6 +76,7 @@ export class Desk extends DeskAnalytics {
 		this.ticking = (async () => {
 			try {
 				const tracked = this.trackedSymbols();
+				this.feed.subscribe(tracked); // eine Push-Quelle liefert diese Symbole auch zwischen den Takten
 				// Fehler von Symbolen, die niemand mehr verfolgt, nicht ewig melden (Wechselkurse bleiben, die hängen an Beständen)
 				for (const s of this.quoteErrors.keys()) if (!s.endsWith("=X") && !tracked.includes(s)) this.quoteErrors.delete(s);
 				await this.refresh(tracked);
@@ -99,6 +102,7 @@ export class Desk extends DeskAnalytics {
 	/** Takt: schnell, solange ein Browser zusieht (liveIntervalSec), sonst ruhig; bei Störung der Börse dreifach langsamer. */
 	start() {
 		this.stop();
+		this.unfeed = this.feed.onQuotes((quotes) => this.storePushed(quotes));
 		let last = 0;
 		let lastKeepAlive = this.now();
 		this.timer = setInterval(() => {
@@ -117,5 +121,7 @@ export class Desk extends DeskAnalytics {
 	stop() {
 		if (this.timer) clearInterval(this.timer);
 		this.timer = null;
+		this.unfeed?.();
+		this.unfeed = null;
 	}
 }

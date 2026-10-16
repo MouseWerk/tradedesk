@@ -9,6 +9,7 @@ import type { Database } from "../db.ts";
 import { fxSymbol, type Market } from "../market.ts";
 import type { Broker } from "../broker.ts";
 import { OwnerAuth } from "../auth.ts";
+import { MarketFeed, type QuoteFeed } from "../feed.ts";
 
 export class DeskError extends Error {
 	readonly status: number;
@@ -34,6 +35,7 @@ export interface ProposalRow {
 export interface QuoteRow {
 	symbol: string; price: number; prev_close: number | null; market_time: number | null; fetched_at: number; day_open: number | null; day_high: number | null; day_low: number | null; volume: number | null;
 	pre_start: number | null; reg_start: number | null; reg_end: number | null; post_end: number | null; timezone: string;
+	source: string; bid: number | null; ask: number | null; delayed: number | null;
 }
 export interface InstrumentRow { symbol: string; name: string; currency: string; exchange: string; type: string }
 
@@ -73,6 +75,7 @@ export abstract class DeskCore extends EventEmitter {
 	quotesAt: number | null = null;
 	ticks = 0;
 	readonly brokers: Map<string, Broker>;
+	readonly feed: QuoteFeed; // Kursquelle (src/feed.ts); ohne Angabe die Market-Schnittstelle wie bisher
 
 	readonly cfg: Config;
 	readonly db: Database;
@@ -80,9 +83,10 @@ export abstract class DeskCore extends EventEmitter {
 	readonly now: () => number;
 	readonly auth: OwnerAuth; // deine PIN und Sitzungen (ein Objekt je Desk: Sperre nach Fehlversuchen gilt prozessweit)
 
-	constructor(cfg: Config, db: Database, market: Market, now: () => number = Date.now, brokers: Map<string, Broker> = new Map()) {
+	constructor(cfg: Config, db: Database, market: Market, now: () => number = Date.now, brokers: Map<string, Broker> = new Map(), feed: QuoteFeed = new MarketFeed(market)) {
 		super();
 		this.brokers = brokers;
+		this.feed = feed;
 		this.cfg = cfg;
 		this.db = db;
 		this.market = market;

@@ -214,7 +214,7 @@ export function createApp(desk: Desk) {
 		const p = desk.priced(symbol);
 		if (!p) throw new DeskError(`Kein Kurs für ${symbol}.`, 404);
 		const i = desk.instrument(symbol)!;
-		return c.json({ symbol, name: i.name, currency: p.currency, price: p.price, fx: p.fx, priceEur: p.price * p.fx, prevClose: p.prevClose, marketTime: p.marketTime, watched: desk.watchlist().some((w) => w.symbol === symbol && w.watched) });
+		return c.json({ symbol, name: i.name, currency: p.currency, price: p.price, fx: p.fx, priceEur: p.price * p.fx, prevClose: p.prevClose, marketTime: p.marketTime, watched: desk.watchlist().some((w) => w.symbol === symbol && w.watched), quote: desk.quoteInfo(symbol) });
 	});
 	app.post("/api/market/alerts", async (c) => {
 		userOnly(c);

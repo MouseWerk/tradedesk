@@ -9,6 +9,7 @@ import { openDatabase, type Database } from "./db.ts";
 import { Desk } from "./desk.ts";
 import { FAKE_CATALOG, FakeMarket } from "./market.ts";
 import { FakeBroker } from "./broker.ts";
+import type { QuoteFeed } from "./feed.ts";
 
 /**
  * Uhr für Selbsttest und Fixture-Server: läuft in Echtzeit, beginnt aber am letzten Werktag um 16:00 Ortszeit – dann
@@ -46,7 +47,7 @@ export const FIXTURE_CONFIG = {
 	agents: [{ name: "Atlas", startCashEur: 10000 }, { name: "Nova", startCashEur: 10000 }],
 };
 
-export async function makeFixture({ seed = true, now }: { seed?: boolean; now?: () => number } = {}): Promise<Fixture> {
+export async function makeFixture({ seed = true, now, feed }: { seed?: boolean; now?: () => number; feed?: (market: FakeMarket) => QuoteFeed } = {}): Promise<Fixture> {
 	const dir = mkdtempSync(path.join(tmpdir(), "tradedesk-fx-"));
 	const cfg = cleanConfig(FIXTURE_CONFIG, { home: dir, dbFile: path.join(dir, "desk.sqlite"), webDist: path.resolve(import.meta.dirname, "../../web/dist"), dev: false });
 	const db = openDatabase(cfg.dbFile);
@@ -54,7 +55,7 @@ export async function makeFixture({ seed = true, now }: { seed?: boolean; now?: 
 	const market = new FakeMarket(clock);
 	const bySymbol = new Map(FAKE_CATALOG.map((i) => [FakeBroker.conid(i.symbol), i.symbol]));
 	const broker = new FakeBroker((conid) => market.items.get(bySymbol.get(conid) ?? "")?.price ?? 0, clock);
-	const desk = new Desk(cfg, db, market, clock, new Map([["ibkr", broker]]));
+	const desk = new Desk(cfg, db, market, clock, new Map([["ibkr", broker]]), feed?.(market));
 	desk.auth.presetPin(FIXTURE_PIN);
 	const fx: Fixture = {
 		dir, cfg, db, desk, market, broker,

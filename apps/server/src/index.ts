@@ -8,6 +8,7 @@ import { Desk } from "./desk.ts";
 import { OffMarket, YahooMarket } from "./market.ts";
 import { createApp } from "./app.ts";
 import { IbkrBroker } from "./broker.ts";
+import { IbkrQuoteFeed, MarketFeed, type QuoteFeed } from "./feed.ts";
 import { OwnerAuth } from "./auth.ts";
 
 if (process.argv.includes("--selftest")) {
@@ -33,7 +34,15 @@ if (process.argv.includes("--fixture")) {
 	cleanup = fx.cleanup;
 } else {
 	const brokers = new Map(Object.entries(base.brokers).map(([id, b]) => [id, new IbkrBroker({ gateway: b.gateway, account: b.account, conids: b.conids })] as const));
-	desk = new Desk(base, openDatabase(base.dbFile), base.market === "off" ? new OffMarket() : new YahooMarket(), Date.now, brokers);
+	const market = base.market === "off" ? new OffMarket() : new YahooMarket();
+	// Kursquelle: Yahoo; mit "quotes": "ibkr" Momentaufnahmen über das Gateway des ersten IBKR-Depots, Yahoo als Rückfall
+	let feed: QuoteFeed = new MarketFeed(market);
+	const ib = Object.entries(base.brokers)[0];
+	if (base.quotes === "ibkr" && base.market !== "off") {
+		if (ib) feed = new IbkrQuoteFeed({ gateway: ib[1].gateway, broker: brokers.get(ib[0])!, fallback: feed });
+		else console.warn('quotes: "ibkr" braucht ein IBKR-Depot (kind "broker") – Kurse weiter von Yahoo.');
+	}
+	desk = new Desk(base, openDatabase(base.dbFile), market, Date.now, brokers, feed);
 	cleanup = () => {
 		desk.stop();
 		desk.db.close();
@@ -63,7 +72,7 @@ if (cfg.listen.length) {
 }
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "127.0.0.1" }, (info) => {
 	const live = cfg.accounts.filter((a) => a.live);
-	console.log(`Tradedesk on http://127.0.0.1:${info.port}  (${cfg.accounts.length} Depots, ${cfg.agents.length} Agenten, Markt ${desk.market.kind}, Daten ${cfg.home})`);
+	console.log(`Tradedesk on http://127.0.0.1:${info.port}  (${cfg.accounts.length} Depots, ${cfg.agents.length} Agenten, Markt ${desk.market.kind}, Kurse ${desk.feed.source}, Daten ${cfg.home})`);
 	// der Einrichtungscode erscheint nur hier, in deiner Konsole – nie in Datenbank, Logdatei, API oder Chat
 	const code = desk.auth.startSetup();
 	if (code) console.log(`PIN festlegen: Einrichtungscode ${code} – im Browser eingeben und eine PIN (4–12 Ziffern) wählen.`);

@@ -1,11 +1,13 @@
 // Depots: FIFO-Buch je Depot (zwischengespeichert), Kennzahlen, Positionen, Trades, Kurve, Tagesstände, Übersicht.
-import type { Account, AccountDetail, AccountSummary, Allocation, AssetClass, CashMove, CurvePoint, Overview, Position, RiskLimits, Side, Trade, DayStats } from "@desk/shared";
+import type { Account, AccountDetail, AccountSummary, Allocation, AssetClass, CashMove, CurvePoint, Overview, Position, QuoteInfo, RiskLimits, Side, Trade, DayStats } from "@desk/shared";
 import { assetClassOf, combineCurves, equityChanges, oversold, buildBook, dayKey, dayStats, orderValueCents, returnPct, roundQty, valueHoldings } from "@desk/shared";
 import { DeskCore, DeskError, MIN_TRADE_TIME, type TradeRow } from "./core.ts";
 
 export abstract class DeskBook extends DeskCore {
 	/** Grenzen eines Depots (risk.ts). */
 	abstract limits(accountId: string): RiskLimits;
+	/** Herkunft und Alter eines Kurses (market.ts). */
+	abstract quoteInfo(symbol: string): QuoteInfo | null;
 
 	private ledgers = new Map<string, { key: string; rows: TradeRow[]; book: ReturnType<typeof buildBook> }>();
 
@@ -130,6 +132,7 @@ export abstract class DeskBook extends DeskCore {
 				quoteTime: p?.marketTime ?? null,
 				stopLoss: last?.stop_loss ?? null,
 				takeProfit: last?.take_profit ?? null,
+				quote: this.quoteInfo(h.symbol),
 			});
 		}
 		return out.sort((x, y) => y.valueCents - x.valueCents);
@@ -185,6 +188,7 @@ export abstract class DeskBook extends DeskCore {
 			pending: this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE status = 'pending'")!.n,
 			events: this.events(30),
 			failedQuotes: [...this.quoteErrors.keys()].sort(),
+			quoteFeed: this.feed.source,
 			allocation: this.allocation(mine, summaries),
 			changes: equityChanges(curve),
 		};

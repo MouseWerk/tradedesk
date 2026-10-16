@@ -2,6 +2,7 @@
   "user": "Maurice",
   "port": 8095,
   "market": "yahoo",
+  "quotes": "yahoo",
   "accounts": [
     { "id": "tr", "name": "Trade Republic", "kind": "manual", "broker": "Trade Republic", "feeEur": 1, "startCashEur": 0 },
     { "id": "papier", "name": "Mein Papierdepot", "kind": "paper", "feeEur": 1, "startCashEur": 10000 },

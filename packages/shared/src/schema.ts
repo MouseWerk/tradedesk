@@ -59,6 +59,26 @@ export const AccountSummarySchema = AccountSchema.extend({
 });
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 
+/**
+ * Herkunft und Alter eines Kurses, damit die Oberfläche verzögert und Echtzeit unterscheiden kann. source: "yahoo",
+ * "ibkr", "fake" (Fixture) oder "" (vor dem ersten Abruf mit dieser Version gespeichert). ageSec: Sekunden seit der
+ * Kurszeit der Quelle (marketTime), ohne sie seit dem Abruf. delayed: laut Quelle verzögert; null = unbekannt (Yahoo
+ * sagt es nicht – dort zeigt das Alter, wie alt der Kurs ist).
+ */
+export const QuoteInfoSchema = z.object({
+	source: z.string(),
+	fetchedAt: z.number(),
+	marketTime: z.number().nullable(),
+	ageSec: z.number().int(),
+	delayed: z.boolean().nullable(),
+	bid: z.number().nullable(),
+	ask: z.number().nullable(),
+});
+export type QuoteInfo = z.infer<typeof QuoteInfoSchema>;
+
+/** Kursquelle des Desks (config.json "quotes"; "fake" in der Fixture, "off" ohne Marktdaten). */
+export const QuoteFeedSchema = z.enum(["yahoo", "ibkr", "fake", "off"]);
+
 export const PositionSchema = z.object({
 	symbol: z.string(),
 	name: z.string(),
@@ -76,6 +96,7 @@ export const PositionSchema = z.object({
 	quoteTime: z.number().nullable(),
 	stopLoss: z.number().nullable(), // aus dem letzten ausgeführten Vorschlag – nur Hinweis, keine automatische Order
 	takeProfit: z.number().nullable(),
+	quote: QuoteInfoSchema.nullable(), // null ohne Kurs
 });
 export type Position = z.infer<typeof PositionSchema>;
 
@@ -174,6 +195,7 @@ export const OverviewSchema = z.object({
 	pending: z.number().int(),
 	events: z.array(EventSchema),
 	failedQuotes: z.array(z.string()), // Symbole, deren letzter Kursabruf fehlschlug, während andere ankamen
+	quoteFeed: QuoteFeedSchema,
 	allocation: AllocationSchema, // deine Depots nach Symbol und Anlageklasse
 	changes: z.array(EquityChangeSchema), // 1W, 1M, 3M, YTD, 1Y, all – immer alle sechs
 });
@@ -194,6 +216,7 @@ export const WatchItemSchema = z.object({
 	held: z.boolean(),
 	watched: z.boolean(), // false: nur im Bestand, nicht auf der Watchlist
 	alerts: z.array(AlertSchema),
+	quote: QuoteInfoSchema.nullable(),
 });
 export type WatchItem = z.infer<typeof WatchItemSchema>;
 
@@ -355,6 +378,7 @@ export const ScanRowSchema = z.object({
 	held: z.boolean(),
 	alerts: z.number().int(),
 	quoteStale: z.boolean(), // Kurs während der Handelszeit älter als maxQuoteAgeSec oder letzter Abruf fehlgeschlagen
+	quote: QuoteInfoSchema.nullable(),
 });
 export type ScanRow = z.infer<typeof ScanRowSchema>;
 
@@ -423,6 +447,7 @@ export const CockpitSchema = z.object({
 	marketError: z.string().nullable(),
 	quotesAt: z.number().nullable(),
 	liveIntervalSec: z.number(),
+	quoteFeed: QuoteFeedSchema,
 	failedQuotes: z.array(z.string()),
 	sessions: z.array(SessionInfoSchema),
 	scan: z.array(ScanRowSchema),

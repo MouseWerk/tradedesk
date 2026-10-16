@@ -14,6 +14,7 @@ export interface Config {
 	port: number;
 	baseCurrency: "EUR";
 	market: "yahoo" | "off";
+	quotes: "yahoo" | "ibkr"; // Kursquelle: Yahoo (Standard) oder IBKR-Momentaufnahmen über das Gateway, Yahoo als Rückfall
 	accounts: Account[]; // deine Depots + je Agent ein Papierdepot
 	agents: string[];
 	minConfidence: number; // darunter wird ein Agenten-Vorschlag gar nicht erst angelegt
@@ -102,6 +103,7 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		port: Math.trunc(clampNum(raw.port, 8095, 1024, 65535)),
 		baseCurrency: "EUR",
 		market: raw.market === "off" ? "off" : "yahoo",
+		quotes: raw.quotes === "ibkr" ? "ibkr" : "yahoo",
 		accounts,
 		agents,
 		minConfidence: clampNum(raw.minConfidence, 0.5, 0, 1),

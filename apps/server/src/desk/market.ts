@@ -1,5 +1,5 @@
 // Markt: Kurse holen und speichern, Kursalter, Watchlist, Suche, Charts, Alarme, Handelszeiten, Scanner, Analyse, News.
-import type { Alert, Analysis, Chart, ChartRange, NewsItem, ScanRow, SearchHit, SessionInfo, WatchItem, SessionState } from "@desk/shared";
+import type { Alert, Analysis, Chart, ChartRange, NewsItem, QuoteInfo, ScanRow, SearchHit, SessionInfo, WatchItem, SessionState } from "@desk/shared";
 import { atr, dayKey, ema, last, rsi, sessionState, vwap } from "@desk/shared";
 import { fxSymbol, type QuoteData } from "../market.ts";
 import { DeskError, parsePrice, num, type QuoteRow } from "./core.ts";
@@ -20,10 +20,12 @@ export abstract class DeskMarket extends DeskRisk {
 					q.symbol, q.name, q.currency, q.exchange, q.type,
 				);
 				this.db.run(
-					`INSERT INTO quote (symbol, price, prev_close, market_time, fetched_at, day_open, day_high, day_low, volume, pre_start, reg_start, reg_end, post_end, timezone) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+					`INSERT INTO quote (symbol, price, prev_close, market_time, fetched_at, day_open, day_high, day_low, volume, pre_start, reg_start, reg_end, post_end, timezone, source, bid, ask, delayed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 					 ON CONFLICT (symbol) DO UPDATE SET price = excluded.price, prev_close = excluded.prev_close, market_time = excluded.market_time, fetched_at = excluded.fetched_at, day_open = excluded.day_open,
-					 day_high = excluded.day_high, day_low = excluded.day_low, volume = excluded.volume, pre_start = excluded.pre_start, reg_start = excluded.reg_start, reg_end = excluded.reg_end, post_end = excluded.post_end, timezone = excluded.timezone`,
+					 day_high = excluded.day_high, day_low = excluded.day_low, volume = excluded.volume, pre_start = excluded.pre_start, reg_start = excluded.reg_start, reg_end = excluded.reg_end, post_end = excluded.post_end, timezone = excluded.timezone,
+					 source = excluded.source, bid = excluded.bid, ask = excluded.ask, delayed = excluded.delayed`,
 					q.symbol, q.price, q.prevClose, q.marketTime, at, q.dayOpen, q.dayHigh, q.dayLow, q.volume, q.session?.preStart ?? null, q.session?.regStart ?? null, q.session?.regEnd ?? null, q.session?.postEnd ?? null, q.timezone,
+					q.source ?? "", q.bid ?? null, q.ask ?? null, q.delayed ?? null,
 				);
 			}
 		});
@@ -33,7 +35,7 @@ export abstract class DeskMarket extends DeskRisk {
 	async refresh(symbols: string[]): Promise<void> {
 		if (this.market.kind === "off" || !symbols.length) return;
 		const unique = [...new Set(symbols)];
-		const { quotes, error, failed } = await this.market.quotes(unique);
+		const { quotes, error, failed } = await this.feed.snapshot(unique);
 		this.storeQuotes(quotes);
 		const currencies = new Set<string>();
 		for (const s of unique) {
@@ -41,7 +43,7 @@ export abstract class DeskMarket extends DeskRisk {
 			if (c && c !== "EUR") currencies.add(c);
 		}
 		const fxSyms = [...currencies].map(fxSymbol).filter((s) => !unique.includes(s));
-		const fxRes = fxSyms.length ? await this.market.quotes(fxSyms) : { quotes: [], error: null, failed: [] };
+		const fxRes = fxSyms.length ? await this.feed.snapshot(fxSyms) : { quotes: [], error: null, failed: [] };
 		this.storeQuotes(fxRes.quotes);
 		for (const q of [...quotes, ...fxRes.quotes]) this.quoteErrors.delete(q.symbol);
 		for (const f of [...(failed ?? []), ...(fxRes.failed ?? [])]) this.quoteErrors.set(f.symbol, f.message);
@@ -51,6 +53,22 @@ export abstract class DeskMarket extends DeskRisk {
 		const some = [...this.quoteErrors.keys()];
 		this.marketError = err ?? (some.length ? `Kein neuer Kurs für ${some.slice(0, 6).join(", ")}${some.length > 6 ? ` und ${some.length - 6} weitere` : ""}` : null);
 		if (quotes.length) this.quotesAt = this.now();
+	}
+
+	/** Kurse, die eine Push-Quelle zwischen zwei Takten meldet (src/feed.ts): speichern wie einen Abruf. */
+	protected storePushed(quotes: QuoteData[]) {
+		if (!quotes.length) return;
+		this.storeQuotes(quotes);
+		for (const q of quotes) this.quoteErrors.delete(q.symbol);
+		this.quotesAt = this.now();
+		this.emit("tick", { at: this.now() });
+	}
+
+	/** Herkunft und Alter des gespeicherten Kurses (siehe QuoteInfoSchema). */
+	quoteInfo(symbol: string, q = this.quoteRow(symbol)): QuoteInfo | null {
+		if (!q) return null;
+		const since = q.market_time ?? q.fetched_at;
+		return { source: q.source, fetchedAt: q.fetched_at, marketTime: q.market_time, ageSec: Math.max(0, Math.round((this.now() - since) / 1000)), delayed: q.delayed === null ? null : !!q.delayed, bid: q.bid, ask: q.ask };
 	}
 
 	/**
@@ -113,6 +131,7 @@ export abstract class DeskMarket extends DeskRisk {
 				held: held.includes(symbol),
 				watched: watched.includes(symbol),
 				alerts: alerts.filter((a) => a.symbol === symbol).map((a): Alert => ({ id: a.id, symbol: a.symbol, op: a.op, price: a.price, createdAt: a.created_at, triggeredAt: a.triggered_at })),
+				quote: this.quoteInfo(symbol, q),
 			};
 		});
 	}
@@ -282,6 +301,7 @@ export abstract class DeskMarket extends DeskRisk {
 				held: held.has(symbol),
 				alerts: alerts.find((a) => a.symbol === symbol)?.n ?? 0,
 				quoteStale: this.quoteErrors.has(symbol) || this.quoteProblem(symbol) !== null,
+				quote: this.quoteInfo(symbol, q),
 			};
 		});
 	}
