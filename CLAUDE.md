@@ -59,8 +59,9 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
   follow IBKR's documented paths and bodies.
 - Only `src/http.ts` calls `fetch` on the server; the desk modules take the clock from `now()` (both guarded by tests).
 - Migrations in `src/db.ts`: append only, never edit a released one.
-- Design: tokens from `apps/web/src/styles.css`; gains and losses in text and fills (`text-ok`/`text-err`) with a
-  sign, never as borders; no accent- or status-colored borders, outlines, glows or left bars; focus ring only
+- Design: tokens from `apps/web/src/styles.css`; gains and losses in text (`text-ok`/`text-err`) with a sign, never as
+  borders; charts that encode gain/loss by color alone (day calendar, result bars) use the validated diverging scale
+  `--div-*` (teal/red, neutral middle), because the green/red pair fails colour-blind separation; no accent- or status-colored borders, outlines, glows or left bars; focus ring only
   `:focus-visible` with `--focus-ring` (guarded by `styles.test.ts`). Chart series colors are validated with the
   dataviz palette validator; light-mode slots below 3:1 always come with a legend and labels.
 

@@ -15,12 +15,14 @@ echten Kursen, damit du siehst, wer gut entscheidet. Keine Anlageberatung.
 | Module | Content |
 |---|---|
 | Trading | Day-trading cockpit: sessions per exchange (pre-market, open, after-hours), today's P/L, realized, trades and hit rate, kill switch; scanner (change, gap, relative volume, ATR, position in the day range); 1-minute chart with EMA 9/21, VWAP and volume, lines for entry, stop, target, limits and alerts; order calculator (shares from risk budget and stop incl. both fees, capped by the account limits, targets at 1–3 R); positions with R multiple; open proposals; news; day statistics per account. Keys: arrow up/down switch the symbol, B/S open the calculator |
-| Übersicht | Your wealth across your own accounts, today and total P/L, equity curve, what waits for you, all accounts, timeline |
+| Übersicht | Your wealth across your own accounts with ranges 1W–Alles (result without deposits), today and total, allocation by asset class and symbol, open-position risk, what waits for you, sessions, all accounts, timeline |
+| Auswertung | Performance of closed trades (FIFO): result, hit rate, profit factor, expectancy in € and R, max drawdown, holding time; result and drawdown curves; day calendar; R distribution; by weekday and hour; per author (you vs each agent) and per symbol; sortable trade list |
 | Depots | Per account: positions (FIFO cost, value, P/L, weight, stop/target), equity curve, trades, deposits. Manual accounts: record trades, CSV import, deposits; paper accounts: orders |
 | Markt | Watchlist with search, candlestick chart (1 day to 5 years) with limit and alert lines, alerts, agent notes per symbol |
 | Orders | Proposals with thesis, confidence, price at proposal vs. now, warnings; approve (may only shrink), reject with reason, record a broker execution, cancel; history |
 | Agenten | Return of each agent against yours, hit rate, approvals and rejections, journal, how to connect an agent |
 | Risiko | Kill switch; per account: max order value, max position weight, risk per trade (loss to the stop incl. fees), daily loss stop, max open proposals per agent, stop required for agent buys |
+| Everywhere | Command palette Strg+K / Cmd+K (modules, symbols, accounts, proposals, actions); keys 1–8 for the modules (Übersicht, Trading, Orders, Depots, Auswertung, Markt, Agenten, Risiko); on a phone a bottom navigation bar; every price shows its source and age ("Echtzeit", "verzögert", "vor 3 Min.") |
 | Chat | One room for you, the agents and the desk (side panel, key C). Agents write with `say` and read with `read`; the desk posts the outcome of every proposal to its author. A chat message never approves anything |
 
 ## How a proposal flows

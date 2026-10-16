@@ -154,3 +154,11 @@ export function duration(ms: number | null | undefined): string {
 	const d = Math.round(h / 24);
 	return d === 1 ? "1 Tag" : `${d} Tage`;
 }
+
+/** Hinweis unter der Navigation: woher die Kurse kommen (config.json "quotes"). */
+export function quoteFeedNote(feed: string | undefined): string {
+	if (feed === "ibkr") return "Keine Anlageberatung. Kurse von Interactive Brokers, sonst Yahoo Finance.";
+	if (feed === "off") return "Keine Anlageberatung. Kurse sind ausgeschaltet.";
+	if (feed === "fake") return "Keine Anlageberatung. Testkurse aus der Fixture.";
+	return "Keine Anlageberatung. Kurse von Yahoo Finance, oft verzögert.";
+}

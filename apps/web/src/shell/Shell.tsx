@@ -10,7 +10,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Bell, BellOff, ChevronRight, ListChecks, LogOut, MessageSquare, Moon, OctagonX, Radio, Search, Sun } from "lucide-react";
 import { MODULES, moduleForPath } from "@/modules/registry";
 import { AUTH_EVENT, notifyEnabled, send, setNotify, setSessionToken, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
-import { ago, eur, hhmm, pct, tone } from "@/lib/format";
+import { ago, eur, hhmm, pct, quoteFeedNote, tone } from "@/lib/format";
 import { Badge, Button, Kbd, cn } from "@/ui/kit";
 import { Boundary } from "@/ui/boundary";
 import { useToast } from "@/ui/overlay";
@@ -315,7 +315,7 @@ function Sidebar({ status, rail }: { status: ReturnType<typeof useStatus>; rail:
 				</>
 			)}
 			<div className="mt-auto flex flex-col gap-2 px-1">
-				<p className={cn("px-1 text-[10.5px] leading-snug text-fg-3", rail && "hidden")}>Keine Anlageberatung. Kurse von Yahoo Finance, oft verzögert.</p>
+				<p className={cn("px-1 text-[10.5px] leading-snug text-fg-3", rail && "hidden")}>{quoteFeedNote(data?.quoteFeed)}</p>
 				<div className={cn("flex items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-2 text-[12px] text-fg-2", rail && "justify-center border-0 bg-transparent px-0")} role="status" title={rail ? status.text : status.title} data-testid="live-status">
 					<Radio className={cn("size-3.5 shrink-0", status.icon)} aria-hidden />
 					<span className={cn("min-w-0 truncate", rail && "sr-only")}>{status.text}</span>

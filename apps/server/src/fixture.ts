@@ -124,11 +124,18 @@ async function seedFixture({ desk, db, cfg }: Fixture) {
 	db.run("INSERT INTO alert (symbol, op, price, created_at) VALUES ('NVDA','below',120,?)", t0 - 2 * day);
 	// heute: zwei Daytrades im Papierdepot von Atlas (ein Gewinn, ein Verlust) für die Tagesstatistik
 	const minute = 60_000;
-	const intraday = (side: "buy" | "sell", qty: number, price: number, minsAgo: number) =>
-		db.run("INSERT INTO trade (account_id, symbol, side, qty, price, currency, fx, value_cents, fee_cents, time, source, note) VALUES ('agent-atlas','ALV.DE',?,?,?,'EUR',1,?,100,?,'proposal','')", side, qty, price, orderValueCents(qty, price, 1), Math.max(desk.startOfDay(), t0 - minsAgo * minute));
-	intraday("buy", 5, 350, 50);
+	const at = (minsAgo: number) => Math.max(desk.startOfDay(), t0 - minsAgo * minute);
+	// die Käufe hängen an ausgeführten Vorschlägen mit Stop – so zeigt die Auswertung auch R-Vielfache
+	const filled = (qty: number, price: number, stop: number, minsAgo: number, thesis: string) =>
+		db.run(
+			"INSERT INTO proposal (account_id, author, symbol, side, qty, order_type, stop_loss, confidence, thesis, status, quote_price, created_at, expires_at, decided_at, decided_by, approved_qty, fill_price) VALUES ('agent-atlas','Atlas','ALV.DE','buy',?,'market',?,0.7,?,'filled',?,?,?,?,?,?,?)",
+			qty, stop, thesis, price, at(minsAgo + 2), at(minsAgo) + day, at(minsAgo), cfg.user, qty, price,
+		).lastId;
+	const intraday = (side: "buy" | "sell", qty: number, price: number, minsAgo: number, proposalId: number | null = null) =>
+		db.run("INSERT INTO trade (account_id, symbol, side, qty, price, currency, fx, value_cents, fee_cents, time, source, proposal_id, note) VALUES ('agent-atlas','ALV.DE',?,?,?,'EUR',1,?,100,?,'proposal',?,'')", side, qty, price, orderValueCents(qty, price, 1), at(minsAgo), proposalId);
+	intraday("buy", 5, 350, 50, filled(5, 350, 348, 50, "Rückeroberung VWAP, Stop unter dem Tief der ersten Kerze."));
 	intraday("sell", 5, 354, 40);
-	intraday("buy", 4, 353, 30);
+	intraday("buy", 4, 353, 30, filled(4, 353, 351, 30, "Zweiter Versuch über dem Tageshoch, enger Stop."));
 	intraday("sell", 4, 351.5, 20);
 	await desk.refreshDaily(desk.scanSymbols());
 	const say = (author: string, text: string, ref?: string) => desk.say({ author, text, ref }, author === cfg.user ? "web" : "cli");

@@ -7,6 +7,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { Bell, BellOff, Ellipsis, LogOut, MessageSquare, Moon, Search, Sun, X } from "lucide-react";
 import { MODULES, moduleForPath } from "@/modules/registry";
 import { useOverview } from "@/lib/api";
+import { quoteFeedNote } from "@/lib/format";
 import { Button, cn } from "@/ui/kit";
 import { restoreFocus, useOpener } from "@/ui/overlay";
 
@@ -109,7 +110,7 @@ export function PhoneNav({ menu }: { menu: PhoneMenu }) {
 								Abmelden
 							</SheetButton>
 							<div className="mt-2 px-3 text-[12px] text-fg-3">{menu.status}</div>
-							<p className="px-3 pt-1 text-[11.5px] leading-snug text-fg-3">Keine Anlageberatung. Kurse von Yahoo Finance, oft verzögert.</p>
+							<p className="px-3 pt-1 text-[11.5px] leading-snug text-fg-3">{quoteFeedNote(data?.quoteFeed)}</p>
 						</div>
 					</Dialog.Content>
 				</Dialog.Portal>
