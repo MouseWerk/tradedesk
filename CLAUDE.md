@@ -33,6 +33,9 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
   as a slow hash) and an HttpOnly, SameSite=Strict cookie valid 30 days. Setting the first PIN needs a one-time code
   that the server prints only to its own console, so an agent cannot set it first. The Origin check stays as a second
   layer; agents (CLI, no cookie) never reach owner routes.
+- Phone access (decision 2026-10-16): besides 127.0.0.1 the desk may listen only on Tailscale addresses
+  (`listen`, 100.64.0.0/10), only once a PIN is set; from another device every request needs the PIN session, reading
+  included. Never the LAN, never 0.0.0.0.
 - Orders to a broker account (decision 2026-10-16): the approve or order dialog never sends on Enter; it opens a
   second confirmation (side, quantity, type, estimate, risk, "echtes Geld" for live accounts) that starts on
   "Abbrechen". Paper accounts keep the single dialog.
@@ -48,7 +51,8 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
 - Every model-originated value is checked by code: agent names and accounts from config, symbols from the watchlist
   or holdings, the risk check in `checkOrder` before saving, again at approval and again at a limit fill. Approval
   re-reads the quote, claims atomically (`WHERE status = 'pending'`), may only shrink the quantity.
-- Owner-only routes call `userOnly` (browser `Origin`); the CLI never gets an approve command.
+- Owner-only routes call `userOnly` (PIN session cookie plus the desk's `Origin` for changes); the CLI never gets an
+  approve command.
 - Broker access only through `src/broker.ts` and `localJson` (localhost only); contract tests in `test/ibkr.test.ts`
   follow IBKR's documented paths and bodies.
 - Only `src/http.ts` calls `fetch` on the server; `desk.ts` takes the clock from `now()` (both guarded by tests).

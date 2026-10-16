@@ -21,9 +21,23 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
 	}
 }
 
+/** Ereignis, wenn der Server „nicht angemeldet“ meldet (abgelaufene Sitzung): der Anmeldebildschirm übernimmt. */
+export const AUTH_EVENT = "desk:auth";
+
+function authRequired(url: string, status: number, body: unknown) {
+	if (status === 401 && (body as { code?: string } | null)?.code === "auth" && !url.startsWith("/api/auth")) window.dispatchEvent(new Event(AUTH_EVENT));
+}
+
+export async function getAuth(): Promise<{ pinSet: boolean; authenticated: boolean }> {
+	const r = await request("/api/auth", { headers: { Accept: "application/json" } });
+	if (!r.ok) throw new Error(`Desk antwortet nicht (${r.status}).`);
+	return (await r.json()) as { pinSet: boolean; authenticated: boolean };
+}
+
 export async function getChecked<S extends z.ZodType>(url: string, schema: S): Promise<z.infer<S>> {
 	const r = await request(url, { headers: { Accept: "application/json" } });
 	const body = (await r.json().catch(() => null)) as unknown;
+	authRequired(url, r.status, body);
 	if (!r.ok) throw new Error((body as { msg?: string } | null)?.msg ?? `Server antwortet nicht wie erwartet (${r.status}). Läuft der Desk?`);
 	const parsed = schema.safeParse(body);
 	if (!parsed.success) {
@@ -38,6 +52,7 @@ export async function getChecked<S extends z.ZodType>(url: string, schema: S): P
 export async function send<T = unknown>(url: string, method: "POST" | "PUT" | "DELETE", body: unknown = {}, signal?: AbortSignal): Promise<T> {
 	const r = await request(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
 	const data = (await r.json().catch(() => ({ msg: `Server antwortet nicht (${r.status}).` }))) as T & { msg?: string };
+	authRequired(url, r.status, data);
 	if (!r.ok) throw new Error(data.msg ?? `${url}: ${r.status}`);
 	return data;
 }

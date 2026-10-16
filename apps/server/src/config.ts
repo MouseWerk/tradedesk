@@ -23,6 +23,7 @@ export interface Config {
 	liveIntervalSec: number; // solange ein Browser offen ist
 	maxQuoteAgeSec: number; // während der Handelszeit entscheidet kein älterer Kurs (Vorschlag, Freigabe, Bestätigung, Limit)
 	liveTrading: boolean; // Hauptschalter: Orders mit echtem Geld nur, wenn true (IBKR-Papierkonten gehen immer)
+	listen: string[]; // zusätzliche Adressen neben 127.0.0.1 – nur Tailscale (100.64.0.0/10), z. B. fürs Handy
 	brokers: Record<string, BrokerConfig>; // je Broker-Depot (kind "broker")
 	dbFile: string;
 	webDist: string;
@@ -110,8 +111,32 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		liveIntervalSec: Math.trunc(clampNum(raw.liveIntervalSec, 15, 5, 300)),
 		maxQuoteAgeSec: Math.trunc(clampNum(raw.maxQuoteAgeSec, 120, 30, 3600)),
 		liveTrading: raw.liveTrading === true,
+		listen: cleanListen(raw.listen),
 		brokers,
 	};
+}
+
+/** Nur Tailscale-Adressen (100.64.0.0/10, im Tailnet verschlüsselt und nur für deine Geräte) – nie WLAN, nie 0.0.0.0. */
+export function isTailscaleV4(addr: string): boolean {
+	const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+	if (!m || m.slice(1).some((x) => Number(x) > 255)) return false;
+	return Number(m[1]) === 100 && Number(m[2]) >= 64 && Number(m[2]) <= 127;
+}
+
+export function cleanListen(raw: unknown): string[] {
+	if (!Array.isArray(raw)) return [];
+	const out: string[] = [];
+	for (const a of raw) {
+		if (typeof a !== "string") continue;
+		const addr = a.trim();
+		if (addr === "127.0.0.1" || addr === "localhost") continue; // gilt immer
+		if (!isTailscaleV4(addr)) {
+			console.warn(`listen: ${addr} ignoriert – nur Tailscale-Adressen (100.64.0.0/10) sind erlaubt.`);
+			continue;
+		}
+		if (!out.includes(addr)) out.push(addr);
+	}
+	return out;
 }
 
 export function loadConfig(argv: string[] = process.argv.slice(2), env = process.env): Config {

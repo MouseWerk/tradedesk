@@ -9,6 +9,7 @@ import { queryClient } from "./lib/api";
 import { Shell } from "./shell/Shell";
 import { MODULES } from "./modules/registry";
 import { ConfirmProvider, ToastProvider } from "./ui/overlay";
+import { AuthGate } from "./shell/AuthGate";
 import { ModuleError } from "./ui/boundary";
 
 // Design vor dem ersten Zeichnen setzen (kein Inline-Skript in index.html wegen der CSP)
@@ -36,7 +37,9 @@ createRoot(document.getElementById("root")!).render(
 		<QueryClientProvider client={queryClient}>
 			<ToastProvider>
 				<ConfirmProvider>
-					<RouterProvider router={router} />
+					<AuthGate>
+						<RouterProvider router={router} />
+					</AuthGate>
 				</ConfirmProvider>
 			</ToastProvider>
 		</QueryClientProvider>

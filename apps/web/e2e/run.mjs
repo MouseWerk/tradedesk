@@ -43,8 +43,13 @@ const check = (name, ok, detail = "") => {
 	console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok || !detail ? "" : `  – ${detail}`}`);
 };
 
-async function open(browser, { w = 1440, h = 900, theme = "dark", chat } = {}) {
+async function open(browser, { w = 1440, h = 900, theme = "dark", chat, login = true } = {}) {
 	const ctx = await browser.newContext({ viewport: { width: w, height: h }, reducedMotion: "reduce", locale: "de-DE", timezoneId: "Europe/Berlin" });
+	// Fixture-PIN 2468: anmelden wie der Browser (Origin des Desks), das Cookie gilt dann für alle Seiten dieses Kontexts
+	if (login) {
+		const r = await ctx.request.post(`${BASE}/api/auth/login`, { data: { pin: "2468" }, headers: { Origin: BASE } });
+		if (!r.ok()) throw new Error(`Login fehlgeschlagen: ${r.status()} ${await r.text()}`);
+	}
 	await ctx.addInitScript(
 		([t, c]) => {
 			try {
@@ -517,6 +522,32 @@ async function inputChecks(browser) {
 const server = await startServer();
 const browser = await chromium.launch({ headless: true });
 try {
+	/* Anmeldung: ohne Sitzung nur der PIN-Bildschirm, falsche PIN gemeldet, richtige meldet an; Agenten-Header helfen nicht */
+	{
+		const pg = await open(browser, { login: false });
+		await pg.goto(`${BASE}/orders`);
+		await pg.getByRole("heading", { name: "Anmelden" }).waitFor({ timeout: 20_000 });
+		check("without a session only the PIN screen is shown", (await pg.locator("#main").count()) === 0 && (await pg.getByText("Kauf 4 MSFT").count()) === 0);
+		await pg.getByLabel("PIN").fill("1111");
+		await pg.getByRole("button", { name: "Anmelden" }).click();
+		await pg.locator('input[aria-invalid="true"]').waitFor({ timeout: 10_000 }); // Antwort abwarten, nicht nur die Beschriftung
+		await pg.getByRole("button", { name: "Anmelden" }).and(pg.locator(":not([disabled])")).waitFor({ timeout: 10_000 });
+		check("wrong PIN is refused with a message", (await pg.locator("#main").count()) === 0);
+		await pg.getByLabel("PIN").fill("2468");
+		await pg.getByRole("button", { name: "Anmelden" }).click();
+		await settle(pg);
+		check("right PIN logs in and shows the desk", (await pg.locator("#main h1").count()) === 1);
+		const stranger = await browser.newContext();
+		const forged = await stranger.request.put(`${BASE}/api/risk/kill`, { data: { on: true }, headers: { Origin: BASE } });
+		check("a faked Origin without the session cookie changes nothing", forged.status() === 401, String(forged.status()));
+		await stranger.close();
+		await pg.getByRole("button", { name: "Abmelden" }).click();
+		await pg.getByRole("heading", { name: "Anmelden" }).waitFor({ timeout: 10_000 });
+		check("logout returns to the PIN screen", true);
+		check("login flow: no console errors or warnings", pg.errors.filter((e) => !/401/.test(e)).length === 0, pg.errors.slice(0, 3).join(" | "));
+		await pg.context().close();
+	}
+
 	/* Layout und Konsole: jedes Modul, beide Designs, vier Breiten */
 	for (const theme of ["dark", "light"]) {
 		for (const w of WIDTHS) {

@@ -367,6 +367,16 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 						<dd className="tnum">{Math.round(p.confidence * 100)} %</dd>
 					</div>
 				)}
+				{p.riskCents !== null && (
+					<div data-testid="proposal-risk">
+						<dt className="text-fg-3">Risiko bis Stop</dt>
+						<dd className="tnum">
+							{eur(p.riskCents)}
+							{p.riskPct !== null ? ` · ${pct(p.riskPct, { signed: false, digits: 2 })}` : ""}
+							{p.targetR !== null ? ` · Ziel ${num(p.targetR, 1)} R` : ""}
+						</dd>
+					</div>
+				)}
 				{(p.stopLoss || p.takeProfit) && (
 					<div>
 						<dt className="text-fg-3">Stop / Ziel</dt>

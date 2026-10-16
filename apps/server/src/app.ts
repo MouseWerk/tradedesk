@@ -53,9 +53,17 @@ const int = (v: string | undefined, d: number, lo: number, hi: number) => {
 };
 
 /** Hosts, unter denen der Desk antwortet: nur die eigene Adresse mit dem eigenen Port (gegen DNS-Rebinding). */
-export function localHosts(port: number, dev = false): Set<string> {
+export function localHosts(port: number, dev = false, extra: string[] = []): Set<string> {
 	const ports = dev ? [port, DEV_WEB_PORT] : [port];
-	return new Set(ports.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]));
+	return new Set([...ports.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]), ...extra.map((a) => `${a}:${port}`)]);
+}
+
+const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/** Absender der Verbindung; im Test (app.request ohne Socket) gilt sie als lokal. */
+function remoteAddress(c: Context): string {
+	const env = c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined;
+	return env?.incoming?.socket?.remoteAddress ?? "127.0.0.1";
 }
 
 type Env = { Variables: { origin: Origin; session: string | null } };
@@ -64,7 +72,7 @@ export function createApp(desk: Desk) {
 	const app = new Hono<Env>();
 	const cfg = desk.cfg;
 	const auth = desk.auth;
-	const hosts = localHosts(cfg.port, cfg.dev);
+	const hosts = localHosts(cfg.port, cfg.dev, cfg.listen);
 	const origins = new Set([...hosts].map((h) => `http://${h}`));
 
 	// jede Anfrage, auch die Web-App: nur mit dem Host des Desks – eine fremde Seite, deren Name auf 127.0.0.1 zeigt, liest nichts
@@ -91,6 +99,10 @@ export function createApp(desk: Desk) {
 		const token = getCookie(c, SESSION_COOKIE);
 		const session = auth.verify(token) ? token! : null;
 		c.set("session", session);
+		// von einem anderen Gerät (Tailscale, z. B. dein Handy): ohne Sitzung gar nichts, auch nicht lesen – die CLI der
+		// Agenten läuft nur auf diesem Computer
+		if (!LOOPBACK.has(remoteAddress(c)) && !session && !c.req.path.startsWith("/api/auth"))
+			return c.json({ ok: false, msg: "Nicht angemeldet – mit deiner PIN anmelden.", code: "auth" }, 401);
 		// du: gültige Sitzung, bei Änderungen zusätzlich ein Origin des Desks; ein Abruf von einer fremden Seite zählt nie
 		const site = c.req.header("Sec-Fetch-Site");
 		const owner = !!session && (write ? !!origin : !site || site === "same-origin" || site === "none");

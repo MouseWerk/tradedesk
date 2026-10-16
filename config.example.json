@@ -16,5 +16,6 @@
   "proposalTtlHours": 24,
   "quoteIntervalSec": 60,
   "liveIntervalSec": 15,
-  "liveTrading": false
+  "liveTrading": false,
+  "listen": []
 }

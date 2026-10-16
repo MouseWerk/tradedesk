@@ -43,6 +43,13 @@ const cfg = desk.cfg;
 await desk.tick().catch((e) => console.error("erster Kursabruf:", (e as Error).message));
 desk.start();
 const app = createApp(desk);
+// zusätzlich auf Tailscale-Adressen (Handy) – erst wenn die PIN gesetzt ist, sonst wäre der Desk dort ohne Schutz
+const extra = cfg.listen.filter(() => desk.auth.pinSet);
+if (cfg.listen.length && !extra.length) console.log(`listen: ${cfg.listen.join(", ")} erst nach dem Festlegen der PIN – danach den Desk neu starten.`);
+for (const addr of extra) {
+	const s = serve({ fetch: app.fetch, port: cfg.port, hostname: addr }, () => console.log(`Tradedesk auch auf http://${addr}:${cfg.port} (nur deine Tailscale-Geräte, Anmeldung mit PIN)`));
+	s.on("error", (e: NodeJS.ErrnoException) => console.error(`listen ${addr}: ${e.code === "EADDRNOTAVAIL" ? "Adresse gibt es auf diesem Computer nicht – läuft Tailscale?" : e.message}`));
+}
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "127.0.0.1" }, (info) => {
 	const live = cfg.accounts.filter((a) => a.live);
 	console.log(`Tradedesk on http://127.0.0.1:${info.port}  (${cfg.accounts.length} Depots, ${cfg.agents.length} Agenten, Markt ${desk.market.kind}, Daten ${cfg.home})`);

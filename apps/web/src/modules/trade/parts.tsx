@@ -82,11 +82,12 @@ export function SessionBar({ cockpit }: { cockpit: Cockpit }) {
 					{closed > 0 && <span className="text-fg-3"> · {Math.round((wins / closed) * 100)} % Treffer</span>}
 				</span>
 				{near && (
-					<span className={near.loss > 0 && near.loss >= near.limit * 0.75 ? "font-medium text-warn" : undefined} title={`Ab ${pct(near.limit, { signed: false })} Tagesverlust keine Käufe mehr in ${near.d.name}`} data-testid="day-loss">
+					<span className={near.loss > 0 && near.loss >= near.limit * 0.75 ? "font-medium text-warn" : undefined} title={`Ab ${pct(near.limit, { signed: false })} Tagesverlust keine Käufe mehr in ${near.d.name}${near.d.dayLossHeadroomCents !== null ? ` – noch ${eur(near.d.dayLossHeadroomCents)} bis dahin` : ""}`} data-testid="day-loss">
 						<span className="text-fg-3">Tagesverlust </span>
 						{pct(near.loss, { signed: false })} <span className="text-fg-3">von {pct(near.limit, { signed: false })}</span>
 					</span>
 				)}
+
 				<Button variant="danger" size="sm" onClick={() => void kill()} disabled={cockpit.killSwitch} title="Not-Aus: alle Freigaben und Ausführungen stoppen">
 					<OctagonX className="size-3.5" aria-hidden />
 					{cockpit.killSwitch ? "Not-Aus an" : "Not-Aus…"}
@@ -106,6 +107,7 @@ export function Positions({ cockpit, onSelect }: { cockpit: Cockpit; onSelect: (
 	const { data: ov } = useOverview();
 	const liveIds = new Set((ov?.accounts ?? []).filter((a) => a.live).map((a) => a.id));
 	const list = cockpit.positions.filter((p) => who === "all" || owner(p.accountId)?.owner === "user");
+	const openRisk = cockpit.days.filter((d) => who === "all" || d.owner === "user").reduce((sum, d) => sum + d.openRiskCents, 0);
 	const { run } = useAction();
 	const confirm = useConfirm();
 	const close = async (p: (typeof list)[number]) => {
@@ -119,7 +121,18 @@ export function Positions({ cockpit, onSelect }: { cockpit: Cockpit; onSelect: (
 	};
 	const fx = (p: (typeof list)[number]) => (p.price && p.nativePrice ? p.price / p.nativePrice : null);
 	return (
-		<Card title="Positionen" pad={false} aside={<Segmented label="Positionen von" items={[{ id: "mine", label: "Deine" }, { id: "all", label: "Alle" }]} value={who} onChange={setWho} />}>
+		<Card
+			title="Positionen"
+			pad={false}
+			aside={
+				<>
+					<span className="whitespace-nowrap tnum" title="Verlust bis zu den Stops aller offenen Positionen und freigegebenen Orders, inkl. Gebühren" data-testid="open-risk">
+						Risiko offen {eur(openRisk, { short: true })}
+					</span>
+					<Segmented label="Positionen von" items={[{ id: "mine", label: "Deine" }, { id: "all", label: "Alle" }]} value={who} onChange={setWho} />
+				</>
+			}
+		>
 			{list.length ? (
 				<Table label="Offene Positionen">
 					<thead>

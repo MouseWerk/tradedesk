@@ -5,9 +5,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, BellOff, ChevronRight, ListChecks, MessageSquare, Moon, OctagonX, Radio, Sun } from "lucide-react";
+import { Bell, BellOff, ChevronRight, ListChecks, LogOut, MessageSquare, Moon, OctagonX, Radio, Sun } from "lucide-react";
 import { MODULES, moduleForPath } from "@/modules/registry";
-import { notifyEnabled, setNotify, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
+import { AUTH_EVENT, notifyEnabled, send, setNotify, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
 import { ago, eur, hhmm, pct, tone } from "@/lib/format";
 import { Badge, Button, Kbd, cn } from "@/ui/kit";
 import { Boundary } from "@/ui/boundary";
@@ -279,6 +279,10 @@ function KillBanner() {
 }
 
 function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread }: { dark: boolean; toggleTheme: () => void; chatOpen: boolean; toggleChat: () => void; unread: number }) {
+	const logout = async () => {
+		await send("/api/auth/logout", "POST").catch(() => undefined);
+		window.dispatchEvent(new Event(AUTH_EVENT));
+	};
 	const path = useRouterState({ select: (s) => s.location.pathname });
 	const mod = moduleForPath(path);
 	const { data } = useOverview();
@@ -327,6 +331,9 @@ function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread }: { dark: boo
 						{notify ? <Bell className="size-4" /> : <BellOff className="size-4" />}
 					</Button>
 				)}
+				<Button variant="ghost" size="icon" onClick={() => void logout()} aria-label="Abmelden" title="Abmelden – danach nur mit PIN wieder an Freigaben">
+					<LogOut className="size-4" />
+				</Button>
 				<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={dark ? "Helles Design" : "Dunkles Design"} title={dark ? "Helles Design" : "Dunkles Design"}>
 					{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
 				</Button>
