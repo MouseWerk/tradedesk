@@ -30,6 +30,12 @@ describe("styles.css", () => {
 		expect(css).not.toMatch(/:focus\s*\{/);
 	});
 
+	it("keeps element resets in @layer base so utilities like text-[13px] win (inputs in dialogs were 16 px)", () => {
+		const unlayered = css.replace(/@layer\s+[\w-]+\s*\{(?:[^{}]*\{[^}]*\})*[^{}]*\}/g, "");
+		expect(unlayered).not.toMatch(/(^|[\s,}])(input|select|textarea|button)\s*[,{]/);
+		expect(css).toMatch(/@layer base\s*\{[^@]*input,[^}]*font: inherit/);
+	});
+
 	it("defines every series color for both themes", () => {
 		for (let i = 1; i <= 5; i++) expect(css.match(new RegExp(`--series-${i}:`, "g"))).toHaveLength(2);
 	});

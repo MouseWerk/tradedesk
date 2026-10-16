@@ -2,7 +2,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { cva, type VariantProps } from "class-variance-authority";
-import { useId, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
@@ -32,7 +32,8 @@ const button = cva("inline-flex items-center justify-center gap-2 whitespace-now
 			primary: "bg-primary text-primary-fg hover:opacity-90",
 			outline: "border border-line bg-surface text-fg hover:bg-surface-2",
 			ghost: "text-fg-2 hover:bg-surface-3 hover:text-fg",
-			danger: "bg-err text-white hover:opacity-90",
+			// eigene Fläche statt --err: im dunklen Design ist --err für Text aufgehellt, weiße Schrift darauf war 2,7:1
+			danger: "bg-danger text-danger-fg hover:opacity-90",
 		},
 		size: { sm: "h-7 px-2.5 text-xs rounded-md", md: "h-8 px-3 text-[13px] rounded-lg", icon: "size-8 rounded-lg", iconSm: "size-7 rounded-md" },
 	},
@@ -77,12 +78,16 @@ export function Segmented<T extends string>({ items, value, onChange, className,
 	);
 }
 
-export function Empty({ children, className }: { children: ReactNode; className?: string }) {
-	return <div className={cn("px-4 py-6 text-center text-[12.5px] text-fg-3", className)}>{children}</div>;
+export function Empty({ children, className, style }: { children: ReactNode; className?: string; style?: React.CSSProperties }) {
+	return (
+		<div className={cn("px-4 py-6 text-center text-[12.5px] text-fg-3", className)} style={style}>
+			{children}
+		</div>
+	);
 }
 
-export function Skeleton({ className }: { className?: string }) {
-	return <div className={cn("animate-pulse rounded-md bg-surface-3", className)} />;
+export function Skeleton({ className, style }: { className?: string; style?: React.CSSProperties }) {
+	return <div className={cn("animate-pulse rounded-md bg-surface-3", className)} style={style} aria-hidden />;
 }
 
 export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
@@ -115,31 +120,83 @@ export function Textarea({ className, ...p }: ComponentProps<"textarea">) {
 	return <textarea className={cn(input, "h-auto min-h-24 py-2 leading-relaxed", className)} {...p} />;
 }
 
-/** Beschriftetes Feld; das Kind bekommt die ID über die Render-Funktion. */
-export function Field({ label, hint, error, children, className }: { label: string; hint?: ReactNode; error?: string | null; children: (id: string) => ReactNode; className?: string }) {
+export interface FieldAria {
+	"aria-invalid"?: true;
+	"aria-describedby"?: string;
+}
+
+/**
+ * Beschriftetes Feld; das Kind bekommt ID und aria-Attribute über die Render-Funktion. Ein Fehler steht am Feld,
+ * das Feld ist aria-invalid und nennt den Text als Beschreibung (der Dialog fokussiert das erste ungültige Feld).
+ */
+export function Field({ label, hint, error, children, className }: { label: string; hint?: ReactNode; error?: string | null; children: (id: string, aria: FieldAria) => ReactNode; className?: string }) {
 	const id = useId();
+	const note = `${id}-note`;
+	const aria: FieldAria = { ...(error ? { "aria-invalid": true as const } : {}), ...(error || hint ? { "aria-describedby": note } : {}) };
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<label htmlFor={id} className="text-[12px] font-medium text-fg-2">
 				{label}
 			</label>
-			{children(id)}
-			{error ? <p className="text-[11.5px] text-err">{error}</p> : hint ? <p className="text-[11.5px] text-fg-3">{hint}</p> : null}
+			{children(id, aria)}
+			{error ? (
+				<p id={note} className="text-[11.5px] text-err">
+					{error}
+				</p>
+			) : hint ? (
+				<p id={note} className="text-[11.5px] text-fg-3">
+					{hint}
+				</p>
+			) : null}
 		</div>
 	);
 }
 
-/** Tabelle mit horizontalem Scroll im eigenen Kasten – die Seite selbst scrollt nie seitlich. */
+/**
+ * Spalten, die in schmalen Tabellen zuerst weichen (Breite der Tabelle, nicht des Fensters): Beträge wie Wert, G/V
+ * und Heute bleiben immer sichtbar, Nebenspalten (Einstand, Anteil, Gebühr, Quelle) gehen vorher.
+ */
+export const hideBelow = {
+	sm: "@max-[560px]/table:hidden",
+	md: "@max-[720px]/table:hidden",
+	lg: "@max-[900px]/table:hidden",
+	xl: "@max-[1040px]/table:hidden",
+} as const;
+
+/**
+ * Tabelle mit horizontalem Scroll im eigenen Kasten – die Seite selbst scrollt nie seitlich. Die erste Spalte bleibt
+ * beim Scrollen stehen, ein Verlauf am rechten Rand zeigt, dass es weitergeht.
+ */
 export function Table({ children, className, label }: { children: ReactNode; className?: string; label: string }) {
+	const box = useRef<HTMLDivElement>(null);
+	const [more, setMore] = useState(false);
+	useEffect(() => {
+		const el = box.current;
+		if (!el) return;
+		const update = () => setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+		update();
+		const ro = new ResizeObserver(update);
+		ro.observe(el);
+		if (el.firstElementChild) ro.observe(el.firstElementChild);
+		el.addEventListener("scroll", update, { passive: true });
+		return () => {
+			ro.disconnect();
+			el.removeEventListener("scroll", update);
+		};
+	}, []);
 	return (
 		// relative: sonst hängt sich ein sr-only-Kopf (position: absolute) an die Seite und erzeugt seitliches Scrollen
-		<div className={cn("scroll-thin relative overflow-x-auto", className)}>
-			<table className="w-full border-collapse text-[12.5px]" aria-label={label}>
-				{children}
-			</table>
+		<div className={cn("@container/table relative", more && "table-fade", className)} data-more={more || undefined}>
+			<div ref={box} className="scroll-thin overflow-x-auto">
+				<table className="table-sticky w-full border-collapse text-[12.5px]" aria-label={label}>
+					{children}
+				</table>
+			</div>
 		</div>
 	);
 }
 
-export const th = "h-9 border-b border-line px-3 text-left text-[11.5px] font-medium whitespace-nowrap text-fg-3 first:pl-4 last:pr-4";
-export const td = "h-10 border-b border-line px-3 whitespace-nowrap first:pl-4 last:pr-4";
+// in schmalen Tabellen (Telefon) weniger Innenabstand, damit die Betragsspalten Platz haben
+const narrow = "@max-[560px]/table:px-2 @max-[560px]/table:first:pl-3 @max-[560px]/table:last:pr-3";
+export const th = `h-9 border-b border-line px-3 text-left text-[11.5px] font-medium whitespace-nowrap text-fg-3 first:pl-4 last:pr-4 ${narrow}`;
+export const td = `h-10 border-b border-line px-3 whitespace-nowrap first:pl-4 last:pr-4 ${narrow}`;

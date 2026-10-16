@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Candle } from "@desk/shared";
 import { cn } from "./kit";
+import { niceScale, tickCount } from "./scale";
 
 function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
 	const ref = useRef<T>(null);
@@ -19,16 +20,7 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
 	return [ref, w];
 }
 
-/** 4–5 runde Achsenwerte zwischen lo und hi. */
-export function niceTicks(lo: number, hi: number, count = 4): number[] {
-	if (!(hi > lo)) return [lo];
-	const raw = (hi - lo) / count;
-	const mag = 10 ** Math.floor(Math.log10(raw));
-	const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? raw;
-	const out: number[] = [];
-	for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(Number(v.toPrecision(12)));
-	return out;
-}
+export { niceTicks } from "./scale";
 
 function useCursor(n: number) {
 	const [idx, setIdx] = useState<number | null>(null);
@@ -81,14 +73,9 @@ export function LineChart({ xs, xLabel, series, format, height = 220, area = fal
 	const pad = { l: 8, r: 64, t: 10, b: 22 };
 	const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
 	if (baseline !== undefined) all.push(baseline);
-	const lo0 = Math.min(...all);
-	const hi0 = Math.max(...all);
-	const span = hi0 - lo0 || Math.abs(hi0) || 1;
-	const ticks = niceTicks(lo0 - span * 0.06, hi0 + span * 0.06);
-	const lo = Math.min(ticks[0], lo0);
-	const hi = Math.max(ticks[ticks.length - 1], hi0);
 	const iw = Math.max(1, width - pad.l - pad.r);
 	const ih = height - pad.t - pad.b;
+	const { lo, hi, ticks } = niceScale(Math.min(...all), Math.max(...all), tickCount(ih));
 	const x = (i: number) => pad.l + (xs.length < 2 ? iw / 2 : (i / (xs.length - 1)) * iw);
 	const y = (v: number) => pad.t + ih - ((v - lo) / (hi - lo || 1)) * ih;
 	const paths = series.map((s) => {
@@ -210,14 +197,10 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 	const near = (v: number) => v >= cLo - (cHi - cLo) * 0.35 && v <= cHi + (cHi - cLo) * 0.35;
 	const visibleRefs = refs.filter((r) => r.value > 0 && near(r.value));
 	const farRefs = refs.filter((r) => r.value > 0 && !near(r.value));
-	const lo0 = Math.min(cLo, ...visibleRefs.map((r) => r.value));
-	const hi0 = Math.max(cHi, ...visibleRefs.map((r) => r.value));
-	const span = hi0 - lo0 || hi0 || 1;
-	const ticks = niceTicks(lo0 - span * 0.04, hi0 + span * 0.04, 5);
-	const lo = Math.min(ticks[0], lo0);
-	const hi = Math.max(ticks[ticks.length - 1], hi0);
 	const iw = Math.max(1, width - pad.l - pad.r);
 	const ih = height - pad.t - pad.b - volH - gap;
+	// bis zum nächsten Teilstrich über dem Hoch und unter dem Tief: jeder Kurs liegt zwischen zwei beschrifteten Werten
+	const { lo, hi, ticks } = niceScale(Math.min(cLo, ...visibleRefs.map((r) => r.value)), Math.max(cHi, ...visibleRefs.map((r) => r.value)), tickCount(ih));
 	const step = iw / Math.max(1, candles.length);
 	const body = Math.max(1, Math.min(14, step - 2)); // 2 px Abstand zwischen Kerzen
 	const x = (i: number) => pad.l + step * (i + 0.5);
@@ -292,8 +275,8 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 					{overlays.map((o) => (
 						<path key={o.id} d={line(o.values)} fill="none" stroke={o.color} strokeWidth={1.75} strokeLinejoin="round" />
 					))}
-					{visibleRefs.map((r) => (
-						<g key={r.label}>
+					{visibleRefs.map((r, k) => (
+						<g key={`${r.label}-${r.value}-${k}`}>
 							<line x1={pad.l} x2={pad.l + iw} y1={y(r.value)} y2={y(r.value)} stroke="var(--fg-2)" strokeDasharray="4 3" />
 							<text x={pad.l + 4} y={y(r.value) - 4} fontSize={11} fill="var(--fg-2)">
 								{r.label} {format(r.value)}
@@ -303,8 +286,8 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 					{farRefs.map((r, k) => {
 						const above = r.value > hi;
 						return (
-							<text key={r.label} x={pad.l + iw - 4} y={above ? pad.t + 12 + k * 14 : pad.t + ih - 6 - k * 14} fontSize={11} fill="var(--fg-2)" textAnchor="end">
-								{r.label} {format(r.value)} ({above ? "darüber" : "darunter"})
+							<text key={`${r.label}-${r.value}-${k}`} x={pad.l + iw - 4} y={above ? pad.t + 12 + k * 14 : pad.t + ih - 6 - k * 14} fontSize={11} fill="var(--fg-2)" textAnchor="end">
+								{r.label} {format(r.value)} ({above ? "außerhalb, höher" : "außerhalb, tiefer"})
 							</text>
 						);
 					})}

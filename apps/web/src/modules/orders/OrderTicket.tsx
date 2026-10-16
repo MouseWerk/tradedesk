@@ -1,11 +1,14 @@
-// Deine eigene Order im Papierdepot: dieselbe Risikoprüfung wie für Agenten, vorab live als Probelauf angezeigt.
+// Deine eigene Order im Papier- oder Broker-Depot: dieselbe Risikoprüfung wie für Agenten, vorab live als Probelauf.
+// Das Depot kommt bei jedem Öffnen von der Seite (Depots, Markt), nie aus dem ersten Rendern. An einen Broker geht
+// die Order erst nach einer zweiten Bestätigung, die auf „Abbrechen“ startet – Eingabe im Dialog sendet nichts.
 import { useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
-import type { AccountSummary, Check, OrderType, Side } from "@desk/shared";
+import type { AccountSummary, OrderType, Proposal, Side } from "@desk/shared";
 import { useWatchlist } from "@/lib/api";
-import { eur, parseDe, price } from "@/lib/format";
+import { eur, numberError, parseDe, price, qty as fmtQty } from "@/lib/format";
+import { orderResultText, useDryRun } from "@/lib/orders";
 import { Field, Input, Segmented, Select } from "@/ui/kit";
-import { FormDialog } from "@/ui/overlay";
+import { FormDialog, useConfirm, useFormErrors } from "@/ui/overlay";
 import { useAction } from "../common";
 
 export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: initialSymbol, side: initialSide = "buy" }: {
@@ -16,60 +19,73 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 	symbol?: string;
 	side?: Side;
 }) {
-	const paper = accounts.filter((a) => a.owner === "user" && (a.kind === "paper" || a.kind === "broker"));
+	const tradable = accounts.filter((a) => a.owner === "user" && (a.kind === "paper" || a.kind === "broker"));
 	const { data: watch } = useWatchlist();
-	const [acc, setAcc] = useState(accountId && paper.some((a) => a.id === accountId) ? accountId : (paper[0]?.id ?? ""));
+	const [acc, setAcc] = useState("");
 	const [symbol, setSymbol] = useState(initialSymbol ?? "");
 	const [side, setSide] = useState<Side>(initialSide);
 	const [type, setType] = useState<OrderType>("market");
 	const [qtyText, setQtyText] = useState("1");
 	const [limitText, setLimitText] = useState("");
-	const [check, setCheck] = useState<Check | null>(null);
-	const [err, setErr] = useState<string | null>(null);
+	const errs = useFormErrors(open);
 	const { run, busy } = useAction();
-	const selected = paper.find((a) => a.id === acc);
+	const confirm = useConfirm();
+	const selected = tradable.find((a) => a.id === acc);
 	const sym = symbol || watch?.[0]?.symbol || "";
 	const item = watch?.find((w) => w.symbol === sym);
-	const body = { accountId: acc, symbol: sym, side, qty: parseDe(qtyText), orderType: type, limitPrice: type === "limit" ? parseDe(limitText) : undefined };
+	const qtyNum = parseDe(qtyText);
+	const limitNum = parseDe(limitText);
+	const preferred = accountId && tradable.some((a) => a.id === accountId) ? accountId : (tradable[0]?.id ?? "");
 
+	// bei jedem Öffnen: Depot, Wert und Seite von der Seite, die den Dialog öffnet
 	useEffect(() => {
-		if (open) {
-			setSymbol(initialSymbol ?? "");
-			setSide(initialSide);
-			setErr(null);
-		}
-	}, [open, initialSymbol, initialSide]);
+		if (!open) return;
+		setAcc(preferred);
+		setSymbol(initialSymbol ?? "");
+		setSide(initialSide);
+	}, [open, preferred, initialSymbol, initialSide]);
 
-	// Probelauf: der Server prüft genau so, wie er beim Absenden prüfen würde
-	useEffect(() => {
-		if (!open || !acc || !sym || !(body.qty > 0) || (type === "limit" && !(body.limitPrice! > 0))) return setCheck(null);
-		const ctl = new AbortController();
-		const t = setTimeout(() => {
-			fetch("/api/proposals?dryRun=1", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal })
-				.then((r) => r.json())
-				.then((j: { check?: Check }) => setCheck(j.check ?? null))
-				.catch(() => undefined);
-		}, 250);
-		return () => {
-			clearTimeout(t);
-			ctl.abort();
-		};
-	}, [open, acc, sym, side, type, qtyText, limitText]); // eslint-disable-line react-hooks/exhaustive-deps
+	const body = selected && sym && qtyNum > 0 && (type === "market" || limitNum > 0) ? { accountId: selected.id, symbol: sym, side, qty: qtyNum, orderType: type, limitPrice: type === "limit" ? limitNum : undefined } : null;
+	const { check, pending, failed } = useDryRun(open ? body : null);
+	const broker = selected?.kind === "broker";
+	const label = `${side === "buy" ? "Kauf" : "Verkauf"} ${Number.isFinite(qtyNum) ? fmtQty(qtyNum) : "–"} ${sym}`;
 
 	const submit = async () => {
-		if (!(body.qty > 0)) return setErr("Stückzahl größer als 0 eintragen.");
-		if (type === "limit" && !(body.limitPrice! > 0)) return setErr("Limitkurs eintragen.");
-		const r = await run<{ proposal: { status: string; reason: string } }>("/api/proposals", "POST", body, (res) =>
-			res.proposal.status === "rejected" ? null : selected?.kind === "broker" ? `${sym}: an ${selected.broker} gesendet.` : type === "limit" ? `Limit-Order ${sym} angelegt.` : `${side === "buy" ? "Kauf" : "Verkauf"} ${sym} ausgeführt.`,
-		);
-		if (r?.proposal.status === "rejected") return setErr(r.proposal.reason);
+		if (!selected) return errs.fail(null, "Kein Depot gewählt.");
+		if (!(qtyNum > 0)) return errs.fail("qty", numberError(qtyText) ?? "Stückzahl größer als 0 eintragen.");
+		if (type === "limit" && !(limitNum > 0)) return errs.fail("limit", numberError(limitText) ?? "Limitkurs eintragen.");
+		if (!body || pending || !check) return errs.fail(null, "Die Prüfung läuft noch – gleich noch einmal.");
+		if (!check.ok) return errs.fail(null, check.violations[0] ?? "Die Risikoprüfung lässt diese Order nicht zu.");
+		const sent = body;
+		if (broker) {
+			const ok = await confirm({
+				title: `${label} an ${selected.broker} senden?`,
+				body: (
+					<span className="flex flex-col gap-1.5 tnum" data-testid="broker-confirm">
+						<span>
+							{label} · {type === "limit" ? `Limit ${price(limitNum, item?.currency)}` : "Market"}-Tagesorder in „{selected.name}“
+						</span>
+						<span>
+							geschätzt {eur(check.estimateCents)} + {eur(check.feeCents)} Gebühr
+						</span>
+						{side === "buy" && <span>ohne Stop – setze ihn im Order-Rechner im Cockpit, wenn du einen willst</span>}
+						{selected.live ? <span className="font-medium text-err">Echtes Geld: Die Order geht sofort an die Börse.</span> : <span className="text-fg-3">Papierkonto bei {selected.broker}.</span>}
+					</span>
+				),
+				confirm: selected.live ? "Mit echtem Geld senden" : `An ${selected.broker} senden`,
+				danger: selected.live,
+			});
+			if (!ok) return;
+		}
+		const r = await run<{ proposal: Proposal }>("/api/proposals", "POST", sent, (res) => (res.proposal.status === "rejected" ? null : orderResultText(res.proposal, { label, broker: selected.broker, kind: selected.kind })));
+		if (r?.proposal.status === "rejected") return errs.fail(null, r.proposal.reason);
 		if (r) onOpenChange(false);
 	};
 
-	if (!paper.length)
+	if (!tradable.length)
 		return (
 			<FormDialog open={open} onOpenChange={onOpenChange} title="Neue Order" submit="OK" onSubmit={() => onOpenChange(false)}>
-				<p className="text-[13px] text-fg-2">Du hast kein eigenes Papierdepot. Lege eines in config.json an („kind": „paper“). Für Trade Republic erfasst du ausgeführte Trades unter Depots.</p>
+				<p className="text-[13px] text-fg-2">Du hast kein eigenes Papier- oder Broker-Depot. Lege eines in config.json an („kind“: „paper“). Für Trade Republic erfasst du ausgeführte Trades unter Depots.</p>
 			</FormDialog>
 		);
 
@@ -77,29 +93,34 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 		<FormDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title={selected?.kind === "broker" ? `Neue Order an ${selected.broker}` : "Neue Order (Papier)"}
+			title={broker ? `Neue Order an ${selected!.broker}` : "Neue Order (Papier)"}
 			description={
-				selected?.kind === "broker"
-					? `Geht nach dem Klick als Tagesorder an ${selected.broker}${selected.live ? " – echtes Geld" : " (Papierkonto)"}.`
+				broker
+					? `Geht als Tagesorder an ${selected!.broker}${selected!.live ? " – echtes Geld" : " (Papierkonto)"}. Vor dem Senden fragt der Desk noch einmal nach.`
 					: "Wird sofort zum aktuellen Kurs ausgeführt, eine Limit-Order sobald das Limit erreicht ist."
 			}
-			submit={selected?.kind === "broker" ? (selected.live ? "Mit echtem Geld senden" : `An ${selected.broker} senden`) : side === "buy" ? "Kaufen" : "Verkaufen"} onSubmit={() => void submit()} busy={busy || (check !== null && !check.ok)} error={err}>
+			submit={broker ? `An ${selected!.broker} senden…` : side === "buy" ? "Kaufen" : "Verkaufen"}
+			submitVariant={selected?.live ? "danger" : "primary"}
+			onSubmit={() => void submit()}
+			busy={busy || !selected || pending || (check !== null && !check.ok)}
+			error={errs.general}
+		>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
 				<Field label="Depot">
-					{(id) => (
-						<Select id={id} value={acc} onChange={(e) => setAcc(e.target.value)}>
-							{paper.map((a) => (
-								<option key={a.id} value={a.id}>
-									{a.name}
-									{a.live ? " – echtes Geld" : ""}
+					{(id, a) => (
+						<Select id={id} {...a} value={acc} onChange={(e) => setAcc(e.target.value)} data-testid="ticket-account">
+							{tradable.map((x) => (
+								<option key={x.id} value={x.id}>
+									{x.name}
+									{x.live ? " – echtes Geld" : ""}
 								</option>
 							))}
 						</Select>
 					)}
 				</Field>
 				<Field label="Wertpapier" hint={item ? `${item.name} · ${price(item.price, item.currency)}` : "Nur Werte von der Watchlist"}>
-					{(id) => (
-						<Select id={id} value={sym} onChange={(e) => setSymbol(e.target.value)}>
+					{(id, a) => (
+						<Select id={id} {...a} value={sym} onChange={(e) => setSymbol(e.target.value)}>
 							{(watch ?? []).map((w) => (
 								<option key={w.symbol} value={w.symbol}>
 									{w.symbol} – {w.name}
@@ -114,22 +135,34 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 				<Segmented label="Orderart" items={[{ id: "market", label: "Market" }, { id: "limit", label: "Limit" }]} value={type} onChange={setType} />
 			</div>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-				<Field label="Stück">{(id) => <Input id={id} inputMode="decimal" value={qtyText} onChange={(e) => setQtyText(e.target.value)} autoFocus />}</Field>
-				{type === "limit" && <Field label={`Limit (${item?.currency ?? "EUR"})`}>{(id) => <Input id={id} inputMode="decimal" value={limitText} onChange={(e) => setLimitText(e.target.value)} />}</Field>}
+				<Field label="Stück" error={errs.at("qty")}>
+					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={qtyText} onChange={(e) => setQtyText(e.target.value)} autoFocus />}
+				</Field>
+				{type === "limit" && (
+					<Field label={`Limit (${item?.currency ?? "EUR"})`} error={errs.at("limit")}>
+						{(id, a) => <Input id={id} {...a} inputMode="decimal" value={limitText} onChange={(e) => setLimitText(e.target.value)} />}
+					</Field>
+				)}
 			</div>
-			{check && (
-				<div className="flex flex-col gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px]" data-testid="order-check">
-					<span className="tnum">
-						Orderwert ≈ {eur(check.estimateCents)} + {eur(check.feeCents)} Gebühr
-					</span>
-					{[...check.violations, ...check.warnings].map((v, i) => (
-						<span key={v} className={i < check.violations.length ? "flex gap-2 text-err" : "flex gap-2 text-warn"}>
-							<TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-							{v}
+			<div className="flex min-h-[38px] flex-col gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px]" data-testid="order-check" aria-live="polite">
+				{!body ? (
+					<span className="text-fg-3">Stückzahl{type === "limit" ? " und Limit" : ""} eintragen – dann prüft der Desk die Order.</span>
+				) : pending || !check ? (
+					<span className="text-fg-3">{failed ?? "Prüfe die Order…"}</span>
+				) : (
+					<>
+						<span className="tnum">
+							Orderwert ≈ {eur(check.estimateCents)} + {eur(check.feeCents)} Gebühr
 						</span>
-					))}
-				</div>
-			)}
+						{[...check.violations, ...check.warnings].map((v, i) => (
+							<span key={v} className={i < check.violations.length ? "flex gap-2 text-err" : "flex gap-2 text-warn"}>
+								<TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+								{v}
+							</span>
+						))}
+					</>
+				)}
+			</div>
 		</FormDialog>
 	);
 }

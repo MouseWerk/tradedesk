@@ -2,7 +2,7 @@
 // ihrer Vorschläge. Texte sind Daten: nur als Text gerendert, nie als HTML. Eine Nachricht genehmigt nie eine Order.
 import { Link } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Bot, Send, X } from "lucide-react";
+import { ArrowDown, Bot, Send, X } from "lucide-react";
 import type { ChatMessage } from "@desk/shared";
 import { useAgents, useChat, useOverview } from "@/lib/api";
 import { Button, Segmented, cn } from "@/ui/kit";
@@ -49,19 +49,51 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 	const input = useRef<HTMLTextAreaElement>(null);
 	const shown = (messages ?? []).filter((m) => (filter === "mine" ? m.to.includes(user) || m.author === user : filter === "agents" ? m.role === "agent" : true));
 	const lastId = messages?.at(-1)?.id ?? 0;
+	// am Ende kleben nur, wenn du unten warst (oder selbst geschrieben hast) – sonst springt der Verlauf beim Lesen weg
+	const atBottom = useRef(true);
+	const forceBottom = useRef(false);
+	const [newBelow, setNewBelow] = useState(0);
+	const seenCount = useRef(0);
 
 	useLayoutEffect(() => {
 		const el = list.current;
+		if (!el) return;
+		const added = shown.length - seenCount.current;
+		seenCount.current = shown.length;
+		if (atBottom.current || forceBottom.current) {
+			el.scrollTop = el.scrollHeight;
+			forceBottom.current = false;
+			setNewBelow(0);
+		} else if (added > 0) setNewBelow((n) => n + added);
+	}, [shown.length]);
+	useLayoutEffect(() => {
+		const el = list.current;
 		if (el) el.scrollTop = el.scrollHeight;
-	}, [shown.length, filter]);
+		atBottom.current = true;
+		setNewBelow(0);
+	}, [filter]);
 	useEffect(() => {
 		if (lastId) onSeen?.(lastId);
 	}, [lastId, onSeen]);
+	const onScroll = () => {
+		const el = list.current;
+		if (!el) return;
+		atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+		if (atBottom.current) setNewBelow(0);
+	};
+	const jumpDown = () => {
+		const el = list.current;
+		if (el) el.scrollTop = el.scrollHeight;
+		atBottom.current = true;
+		setNewBelow(0);
+	};
 
 	const send = async () => {
 		const t = text.trim();
 		if (!t) return;
-		if (await run("/api/chat", "POST", { text: t })) setText("");
+		forceBottom.current = true;
+		// kein Neuladen nach dem Senden: die Nachricht kommt über den Live-Stream
+		if (await run("/api/chat", "POST", { text: t }, undefined, undefined, { refresh: false })) setText("");
 		input.current?.focus();
 	};
 	const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -76,7 +108,7 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 	};
 
 	return (
-		<aside className={cn("flex w-[360px] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)]", className)} aria-label="Chat" data-testid="chat">
+		<aside className={cn("flex w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)] min-[1600px]:w-[360px]", className)} aria-label="Chat" data-testid="chat">
 			<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
 				<h2 className="font-medium">Chat</h2>
 				<span className="text-[12px] text-fg-3">{names.length ? `${names.length} im Raum` : ""}</span>
@@ -89,12 +121,22 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 			<div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
 				<Segmented label="Nachrichten filtern" items={[{ id: "all", label: "Alle" }, { id: "mine", label: "An mich" }, { id: "agents", label: "Agenten" }]} value={filter} onChange={setFilter} />
 			</div>
-			<ol ref={list} className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3" aria-live="polite" aria-label="Nachrichten">
-				{shown.length === 0 && <li className="px-2 py-6 text-center text-[12.5px] text-fg-3">Noch keine Nachrichten. Agenten schreiben mit „python cli/desk.py say“.</li>}
-				{shown.map((m) => (
-					<Message key={m.id} m={m} mine={m.author === user} names={names} />
-				))}
-			</ol>
+			<div className="relative flex min-h-0 flex-1 flex-col">
+				<ol ref={list} onScroll={onScroll} className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3" aria-live="polite" aria-label="Nachrichten" data-testid="chat-list">
+					{shown.length === 0 && <li className="px-2 py-6 text-center text-[12.5px] text-fg-3">Noch keine Nachrichten. Agenten schreiben mit „python cli/desk.py say“.</li>}
+					{shown.map((m) => (
+						<Message key={m.id} m={m} mine={m.author === user} names={names} />
+					))}
+				</ol>
+				{newBelow > 0 && (
+					<div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
+						<Button size="sm" variant="outline" className="pointer-events-auto shadow-[var(--shadow)]" onClick={jumpDown} data-testid="chat-jump">
+							<ArrowDown className="size-3.5" aria-hidden />
+							{newBelow === 1 ? "1 neue Nachricht" : `${newBelow} neue Nachrichten`}
+						</Button>
+					</div>
+				)}
+			</div>
 			<div className="shrink-0 border-t border-line p-3">
 				<div className="mb-2 flex flex-wrap gap-1">
 					{names

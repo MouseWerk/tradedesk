@@ -11,33 +11,38 @@ read in the code but the effect was not observed; "unconfirmed" is a suspicion.
 
 | Id | Severity | Status | Title |
 |---|---|---|---|
-| F1 | major | open | Order calculator: submit enabled and confirm dialog shows the estimate of the previous quantity while the dry run is pending |
-| F2 | major | open | Global `placeholderData` shows the previous symbol's indicators and chart (and the previous account) under the new header |
-| F3 | major | open | Order ticket keeps the account from its first mount: deep link sends `accountId: ""`, after switching it preselects the other depot |
-| F4 | major | open | Enter in the auto-focused quantity field sends broker orders (approve dialog, order ticket) |
-| F5 | major | open | "Position schließen" always reports "geschlossen", also for `rejected`, `confirm` and `placed` |
-| F6 | major | open | `parseDe("1.000")` is 1: German thousands separators are read as decimals in every money and quantity field |
-| F7 | major | open | Live stream: nothing is reloaded after a reconnect (chat messages lost), and after an HTTP error it stays "Offline" for good |
-| F8 | major | open | Failed or schema-mismatched queries show an endless skeleton; the error text never appears; top bar says "Vorschläge 0" |
-| F9 | major | open | Arrow keys in the cockpit follow the API order, not the sorted scanner the owner sees |
-| F10 | major | open | Order calculator cannot size non-EUR symbols that no account holds, and blames the stop |
-| F11 | minor | open | Risk limits: a value typed into the next field is overwritten by the refetch of the previous commit |
-| F12 | minor | open | Chat jumps to the bottom on every new message while you read the history |
-| F13 | minor | open | Chat drawer (below 1280 px) is not a dialog: no Escape, no focus, module hotkeys act behind it |
-| F14 | minor | open | Focus does not return to the triggering button after a dialog or confirmation closes |
-| F15 | minor | open | Undo is pushed away by later toasts; toast timers restart on every new toast |
-| F16 | minor | open | Unread badge on a fresh browser counts the whole chat history |
-| F17 | minor | open | Notifications: denied permission gives no feedback; bell state never re-syncs; one notification per actor replaces the previous |
-| F18 | minor | open | "Trade erfassen" with a cleared date sends `time: null`, the server books "now" silently; dialog errors survive closing |
-| F19 | minor | open | Over-fetching: every action and every chat message refetches all active queries (and twice: action + SSE tick) |
-| F20 | minor | open | Calculator entry stays at the price of the moment the symbol was selected; prices below 1 lose digits |
-| F21 | minor | open | IBKR question without text: card and confirm dialog show empty quotes „“ and still offer "Bestätigen und senden" |
-| F22 | polish | open | Invalid `?symbol=` / `?account=` silently fall back while the URL keeps the invalid value |
-| F23 | polish | open | Chart reference lines keyed by label: duplicate React keys with two alerts or two positions |
-| F24 | polish | open | Watchlist search: Enter adds the top hit of the previous (debounced) query |
-| F25 | polish | open | SSE handlers call `JSON.parse` unguarded |
+| F1 | major | fixed | Order calculator: submit enabled and confirm dialog shows the estimate of the previous quantity while the dry run is pending |
+| F2 | major | fixed | Global `placeholderData` shows the previous symbol's indicators and chart (and the previous account) under the new header |
+| F3 | major | fixed | Order ticket keeps the account from its first mount: deep link sends `accountId: ""`, after switching it preselects the other depot |
+| F4 | major | fixed | Enter in the auto-focused quantity field sends broker orders (approve dialog, order ticket) |
+| F5 | major | fixed | "Position schließen" always reports "geschlossen", also for `rejected`, `confirm` and `placed` |
+| F6 | major | fixed | `parseDe("1.000")` is 1: German thousands separators are read as decimals in every money and quantity field |
+| F7 | major | fixed | Live stream: nothing is reloaded after a reconnect (chat messages lost), and after an HTTP error it stays "Offline" for good |
+| F8 | major | fixed | Failed or schema-mismatched queries show an endless skeleton; the error text never appears; top bar says "Vorschläge 0" |
+| F9 | major | fixed | Arrow keys in the cockpit follow the API order, not the sorted scanner the owner sees |
+| F10 | major | fixed | Order calculator cannot size non-EUR symbols that no account holds, and blames the stop |
+| F11 | minor | fixed | Risk limits: a value typed into the next field is overwritten by the refetch of the previous commit |
+| F12 | minor | fixed | Chat jumps to the bottom on every new message while you read the history |
+| F13 | minor | fixed | Chat drawer (below 1280 px) is not a dialog: no Escape, no focus, module hotkeys act behind it |
+| F14 | minor | fixed | Focus does not return to the triggering button after a dialog or confirmation closes |
+| F15 | minor | fixed | Undo is pushed away by later toasts; toast timers restart on every new toast |
+| F16 | minor | fixed | Unread badge on a fresh browser counts the whole chat history |
+| F17 | minor | fixed | Notifications: denied permission gives no feedback; bell state never re-syncs; one notification per actor replaces the previous |
+| F18 | minor | fixed | "Trade erfassen" with a cleared date sends `time: null`, the server books "now" silently; dialog errors survive closing |
+| F19 | minor | fixed | Over-fetching: every action and every chat message refetches all active queries (and twice: action + SSE tick) |
+| F20 | minor | fixed | Calculator entry stays at the price of the moment the symbol was selected; prices below 1 lose digits |
+| F21 | minor | fixed | IBKR question without text: card and confirm dialog show empty quotes „“ and still offer "Bestätigen und senden" |
+| F22 | polish | fixed | Invalid `?symbol=` / `?account=` silently fall back while the URL keeps the invalid value |
+| F23 | polish | fixed | Chart reference lines keyed by label: duplicate React keys with two alerts or two positions |
+| F24 | polish | fixed | Watchlist search: Enter adds the top hit of the previous (debounced) query |
+| F25 | polish | fixed | SSE handlers call `JSON.parse` unguarded |
 
 Counts: blocker 0, major 10, minor 11, polish 4.
+
+Web fix pass (branch q1-web, commits 31f8ef0, 9c990be, cdf3ea7, e2e in 2c3e0a1): all 25 fixed in the web app; F10
+works without a new server field (rate from positions, proposals or a dry run). Each finding below carries its status
+line. Tests: unit tests in `apps/web/test` (`format`, `logic`, `contrast`, `texts`, `styles`), e2e checks in
+`apps/web/e2e/run.mjs` (slow and failing responses via `page.route`).
 
 Checked and fine (no finding): day P/L agrees between sidebar (per account), overview "Heute" (+160,85 €, +0,3 %),
 cockpit day bar and `/api/overview` / `/api/cockpit` sums; pending count agrees between top bar, sidebar badge and
@@ -54,6 +59,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F1 – Order calculator: stale dry run gates submit and fills the confirm text
 
+- Status: fixed in cdf3ea7: `useDryRun` keys the result to the request body; submit is locked while the check for the current inputs is outstanding, the confirmation uses only the current check; the 2 R target is sent and shown. e2e with a held dry run.
 - Severity: major
 - Where: `apps/web/src/modules/trade/OrderCalc.tsx:155-173` (check kept while inputs change), `:183` (estimate in the
   confirm body), `:193` (takeProfit sent), `:270` (disabled rule)
@@ -79,6 +85,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F2 – Previous symbol's (or account's) data shown under the new header
 
+- Status: fixed in cdf3ea7: no global placeholderData; the chart keeps old candles only for the same symbol, chart and analysis are ignored when their symbol differs, Depots takes title and actions from the overview account. e2e with slow NVDA routes.
 - Severity: major
 - Where: `apps/web/src/lib/api.ts:9` (`placeholderData: (prev) => prev` for every query), used by `useAnalysis`
   (`IntradayChart.tsx:243`), `useChart` (`IntradayChart.tsx:242`, `MarketView.tsx:126`), `useAccount`
@@ -102,6 +109,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F3 – Order ticket: account state from the first mount
 
+- Status: fixed in cdf3ea7: the ticket sets account, symbol and side from the page on every open and refuses to submit without an account. e2e: deep link and account switch.
 - Severity: major
 - Where: `apps/web/src/modules/orders/OrderTicket.tsx:86` (`useState(accountId …)` evaluated once), `:100-106` (open
   resets symbol and side, not the account); `apps/web/src/modules/portfolio/PortfolioView.tsx:109` (ticket always
@@ -121,6 +129,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F4 – Enter in the first field sends a broker order
 
+- Status: fixed in cdf3ea7: owner decision 2026-10-16 – broker approve dialog, ticket and calculator open a second confirmation starting on Abbrechen; Enter sends nothing. e2e for approve and ticket.
 - Severity: major (owner decision whether Enter may send)
 - Where: `apps/web/src/ui/overlay.tsx:337-342` (form submit on Enter), `apps/web/src/modules/common.tsx:264` (approve:
   quantity field `autoFocus`), `apps/web/src/modules/orders/OrderTicket.tsx:182` (ticket: quantity `autoFocus`,
@@ -141,6 +150,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F5 – Closing a position always says "geschlossen"
 
+- Status: fixed in cdf3ea7: `orderResultText` maps the returned status (shared with calculator, ticket and approve); unit test and e2e with a routed rejection.
 - Severity: major
 - Where: `apps/web/src/modules/trade/parts.tsx:86`
 - Reproduce: cockpit, Positionen, "Schließen…" on ALV.DE, confirm; respond to `POST /api/proposals` with HTTP 200 and
@@ -155,6 +165,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F6 – German thousands separators read as decimals
 
+- Status: fixed in 31f8ef0: thousands dot, German decimals, single-dot decimals; English order refused with "Bitte deutsches Format: 1.234,50". Unit tests incl. edge cases, e2e: "1.000" in Max. Orderwert saves 100.000 cents.
 - Severity: major
 - Where: `apps/web/src/lib/format.ts:218-223` (`parseDe`), used by every money/quantity field (risk limits, cash,
   trade capture, fill price, calculator, ticket, alerts)
@@ -171,6 +182,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F7 – Live stream reconnect: no catch-up, and permanent "Offline" after an HTTP error
 
+- Status: fixed in cdf3ea7: after any error the next open reloads every query (chat included); a stream closed by an HTTP error is rebuilt with 1/2/5/10 s back-off. e2e: 503 phase, back to "Kurse …", the message sent during the gap appears.
 - Severity: major
 - Where: `apps/web/src/lib/api.ts:111-145` (`useLive`), `:73` (chat `staleTime: Infinity`, only SSE appends),
   server stream without replay (`apps/server/src/app.ts:216-240`)
@@ -191,6 +203,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F8 – Errors never shown; endless skeleton; "Vorschläge 0"
 
+- Status: fixed in cdf3ea7: `error && !data` shows "Daten nicht verfügbar" with Neu laden in every module; German text when the server is unreachable; top bar "–" when the count is unknown; the sidebar says "Server nicht erreichbar · Stand hh:mm" when a refetch fails. e2e: overview 500 and cockpit schema mismatch.
 - Severity: major
 - Where: `apps/web/src/modules/overview/OverviewView.tsx:172`, `apps/web/src/modules/trade/TradeView.tsx:45`,
   `apps/web/src/modules/risk/RiskView.tsx:124`, `apps/web/src/modules/agents/AgentsView.tsx:21`,
@@ -211,6 +224,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F9 – Scanner arrow keys follow a different order than shown
 
+- Status: fixed in cdf3ea7: see D7.
 - Severity: major
 - Where: `apps/web/src/modules/trade/TradeView.tsx:31-34` (uses `rows` = API order) vs
   `apps/web/src/modules/trade/Scanner.tsx:301` (displays `sorted`)
@@ -226,6 +240,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F10 – Calculator cannot size non-EUR symbols without a position
 
+- Status: fixed in cdf3ea7 without a server change: the rate comes from any position or proposal in that currency, otherwise from a dry run (`estimateCents` / quantity × price); the hint names the actual reason (no rate, stop, budget, cash). If the backend adds `fx` to the scan row, the calculator can use it directly. Unit tests and e2e with USD positions and proposals removed.
 - Severity: major
 - Where: `apps/web/src/modules/trade/OrderCalc.tsx:113` (fx only from a position of that symbol), `:147-149`,
   `:236` (hint)
@@ -244,6 +259,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F11 – Risk limits: next field's input overwritten
 
+- Status: fixed in cdf3ea7: only fields whose server value changed and that are not being edited are reset. e2e with a slow /api/risk.
 - Severity: minor
 - Where: `apps/web/src/modules/risk/RiskView.tsx:187` (`useEffect(() => setVals(all fields), [limits])`)
 - Reproduce: Risiko, Mein Papierdepot: "Max. Orderwert" `6000`, Tab, type `33` into "Max. Position" right away
@@ -257,6 +273,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F12 – Chat yanks to the bottom while reading
 
+- Status: fixed in cdf3ea7: sticks to the bottom only when you were there or wrote yourself; otherwise "n neue Nachrichten" jumps down. e2e.
 - Severity: minor
 - Where: `apps/web/src/shell/ChatPanel.tsx:53-56`
 - Reproduce: 40 long messages, scroll the chat list to the top, an agent writes. Reproduced: `scrollTop` 4617 of 4617
@@ -269,6 +286,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F13 – Chat drawer is not a dialog
 
+- Status: fixed in cdf3ea7: see D6.
 - Severity: minor
 - Where: `apps/web/src/shell/Shell.tsx:122-127` (drawer), `:97` (hotkeys check only `[role=dialog]`)
 - Reproduce: 1000 px wide, press `c`. Reproduced: drawer opens, focus stays in the page; Escape does not close it;
@@ -280,6 +298,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F14 – Focus not returned after dialogs
 
+- Status: fixed in cdf3ea7: see D5.
 - Severity: minor
 - Where: `apps/web/src/ui/overlay.tsx:292-311` (confirm) and `:331-372` (FormDialog), opened without `Dialog.Trigger`
 - Reproduce: Orders, focus "Ablehnen…" with the keyboard, Enter, Escape. Reproduced: `document.activeElement` is
@@ -291,6 +310,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F15 – Undo pushed away; toast timers restart
 
+- Status: fixed in cdf3ea7: toasts with an action are never displaced by later info toasts, each toast keeps its own timer; unit test for `pushToast`.
 - Severity: minor
 - Where: `apps/web/src/ui/overlay.tsx:393` (`xs.slice(-3)`), `:400` (new `onDone` per render) with `:408-411` (timer
   effect depends on it)
@@ -305,6 +325,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F16 – Unread badge counts the whole history on a fresh browser
 
+- Status: fixed in cdf3ea7: without a stored value everything up to the first chat load counts as read. e2e in a fresh context.
 - Severity: minor
 - Where: `apps/web/src/shell/Shell.tsx:61-79` (`desk.chatSeen` defaults to 0)
 - Reproduce: new profile at 1000 px (chat closed by default). Reproduced: "Chat (C), 48 ungelesen".
@@ -314,6 +335,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F17 – Notifications permission and state
 
+- Status: fixed in cdf3ea7: blocked permission shows a toast, the bell re-reads the permission on focus and visibility, the tag is per event. e2e for the blocked case.
 - Severity: minor
 - Where: `apps/web/src/shell/Shell.tsx:226,240`, `apps/web/src/lib/api.ts:88-106`
 - Reproduce: permission "denied" (headless default), click the bell. Reproduced: nothing visible happens
@@ -326,6 +348,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F18 – Trade capture: cleared date, sticky errors
 
+- Status: fixed in cdf3ea7: empty or future date is refused at the field, nothing is sent; errors are cleared when any dialog opens. e2e.
 - Severity: minor
 - Where: `apps/web/src/modules/portfolio/PortfolioView.tsx:276-277`, `:265-266` (state never reset on open)
 - Reproduce: "Trade erfassen…", fill symbol/qty/price, clear "Datum", "Erfassen". Reproduced: body contains
@@ -337,6 +360,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F19 – Over-fetching after actions and chat
 
+- Status: fixed in cdf3ea7: chat send reloads nothing; actions reload only when no tick arrives within 1,2 s; tick invalidation uses `cancelRefetch: false`. e2e request budget for chat send (tick-aware). The polling intervals of overview, cockpit and analysis are unchanged.
 - Severity: minor
 - Where: `apps/web/src/modules/common.tsx:45` (every action invalidates everything except chart/search),
   `apps/web/src/lib/api.ts:117-122` (every SSE tick/event invalidates all active queries), plus `refetchInterval` on
@@ -353,6 +377,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F20 – Calculator entry and precision
 
+- Status: fixed in cdf3ea7: for market orders the entry follows the live price until you edit it ("Kurs übernehmen" resets), inputs use the price digit rule. e2e with a changed cockpit price.
 - Severity: minor
 - Where: `apps/web/src/modules/trade/OrderCalc.tsx:127-132` (entry and stop only set on symbol change), `:105`
   (`toFixed(2)`)
@@ -366,6 +391,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F21 – IBKR question without text
 
+- Status: fixed in cdf3ea7: without text the card says "Rückfrage ohne Text – bitte im Gateway prüfen" and offers only Stornieren. e2e with a routed proposal.
 - Severity: minor
 - Where: `apps/web/src/modules/common.tsx:114` and `:212`
 - Reproduce: proposal list routed with an IBKR proposal in status `confirm` and `brokerMessage: null`. Reproduced: card
@@ -377,6 +403,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F22 – Invalid search params
 
+- Status: fixed in cdf3ea7: Trading, Depots and Markt replace an unknown symbol or account in the address and say so. e2e for Trading.
 - Severity: polish
 - Where: `apps/web/src/modules/trade/TradeView.tsx:24`, `apps/web/src/modules/portfolio/PortfolioView.tsx:24`,
   `apps/web/src/main.tsx:28`
@@ -387,6 +414,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F23 – Duplicate keys for chart reference lines
 
+- Status: fixed in 9c990be: keys are label, value and index.
 - Severity: polish
 - Where: `apps/web/src/ui/charts.tsx:296` and `:306` (`key={r.label}`); refs from `IntradayChart.tsx:256-262`,
   `MarketView.tsx:133-134`
@@ -396,6 +424,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F24 – Search Enter uses stale hits
 
+- Status: fixed in cdf3ea7: Enter takes the highlighted hit only when the hits belong to the current input; arrow keys move through options, the list closes on blur. e2e with a slow search.
 - Severity: polish
 - Where: `apps/web/src/modules/market/MarketView.tsx:66`
 - Unconfirmed (code): Enter within 300 ms of typing adds `hits[0]` of the previous debounced query. Also: the result
@@ -404,6 +433,7 @@ close fail with the server's message; chart pointer over 390 one-minute candles 
 
 ## F25 – Unguarded JSON.parse in SSE handlers
 
+- Status: fixed in cdf3ea7: SSE payloads are parsed with a guarded `parse`.
 - Severity: polish
 - Where: `apps/web/src/lib/api.ts:130` and `:134`
 - Code-confirmed: a malformed `event`/`chat` payload throws inside the listener (uncaught error in the console); use

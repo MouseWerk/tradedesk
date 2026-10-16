@@ -33,6 +33,8 @@
 	--color-ok: var(--ok);
 	--color-warn: var(--warn);
 	--color-err: var(--err);
+	--color-danger: var(--danger);
+	--color-danger-fg: var(--danger-fg);
 	--color-s1: var(--series-1);
 	--color-s2: var(--series-2);
 	--color-s3: var(--series-3);
@@ -53,9 +55,13 @@
 	--fg-3: oklch(0.52 0.01 265);
 	--primary: oklch(0.21 0.01 265);
 	--primary-fg: oklch(0.99 0 0);
-	--ok: oklch(0.5 0.13 155);
-	--warn: oklch(0.55 0.13 65);
-	--err: oklch(0.53 0.2 25);
+	/* Statusfarben so dunkel, dass Text auch auf der eigenen Tönung 4,5:1 hält (contrast.test.ts) */
+	--ok: oklch(0.46 0.12 155);
+	--warn: oklch(0.485 0.115 65);
+	--err: oklch(0.49 0.19 25);
+	/* Fläche gefährlicher Knöpfe (Not-Aus, echtes Geld) mit eigener Schrift: --err ist im Dunkeln für Text aufgehellt */
+	--danger: oklch(0.49 0.19 25);
+	--danger-fg: oklch(0.99 0 0);
 	/* Kategorien für Vergleichslinien: feste Reihenfolge, geprüft mit dem Paletten-Validator (dataviz) */
 	--series-1: #2a78d6;
 	--series-2: #eb6834;
@@ -84,6 +90,8 @@
 	--ok: oklch(0.75 0.15 155);
 	--warn: oklch(0.81 0.14 75);
 	--err: oklch(0.72 0.17 25);
+	--danger: oklch(0.55 0.19 25);
+	--danger-fg: oklch(0.99 0 0);
 	--series-1: #3987e5;
 	--series-2: #d95926;
 	--series-3: #199e70;
@@ -124,11 +132,35 @@ kbd {
 	outline: 2px solid var(--focus-ring); /* neutral, nie Akzentfarbe (AICodeGuidelines design/principles.md) */
 	outline-offset: 2px;
 }
-input,
-select,
-textarea {
-	font: inherit;
-	color: inherit;
+/* In @layer base: ungeschichtete Regeln schlagen Tailwinds Utilities (text-[13px]) – Felder in Dialogen wurden 16 px */
+@layer base {
+	input,
+	select,
+	textarea {
+		font: inherit;
+		color: inherit;
+	}
+}
+
+/* Tabellen: erste Spalte bleibt beim seitlichen Scrollen stehen, ein Verlauf am Rand zeigt, dass es weitergeht */
+@layer components {
+	.table-sticky :is(th, td):first-child {
+		position: sticky;
+		left: 0;
+		z-index: 1;
+		background: var(--surface);
+	}
+	.table-sticky tr:hover > td:first-child {
+		background: var(--surface-2);
+	}
+	.table-fade::after {
+		content: "";
+		position: absolute;
+		inset: 0 0 0 auto;
+		width: 28px;
+		pointer-events: none;
+		background: linear-gradient(to right, transparent, var(--surface));
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {

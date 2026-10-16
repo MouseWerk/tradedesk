@@ -38,6 +38,14 @@ export function ModuleError({ error, reset }: ErrorComponentProps) {
 	);
 }
 
+/**
+ * Abfrage ohne Daten fehlgeschlagen (Server weg, 500, Schema passt nicht): Meldung und „Neu laden“ statt eines
+ * Skeletts, das nie verschwindet.
+ */
+export function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+	return <Fallback title="Daten nicht verfügbar" error={error} onRetry={onRetry} />;
+}
+
 /** Für feste Teile des Rahmens (Seitenleiste, Chat). */
 export class Boundary extends Component<{ name: string; children: ReactNode; compact?: boolean }, { error: unknown }> {
 	state = { error: null as unknown };

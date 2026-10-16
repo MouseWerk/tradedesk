@@ -15,37 +15,44 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 | Id | Severity | Status | Title |
 |---|---|---|---|
-| D1 | major | open | "Mit Interactive Brokers abgleichen…" always fails in the browser (403 "Nur im Browser") |
-| D2 | major | open | Trading cockpit collapses to one or two columns at 1024–1600 px; order calculator far below the chart |
-| D3 | major | open | Tables hide the most important columns (G/V, Wert, Heute) behind an unmarked inner scroll |
-| D4 | major | open | Danger buttons in dark: white on `--err` is 2.68:1 (Not-Aus, live-money buttons) |
-| D5 | major | open | Focus is lost (goes to body) after every dialog and confirmation closes |
-| D6 | major | open | Chat drawer below 1280 px is not a dialog: no focus move, no Escape, no focus trap, hotkeys act behind it |
-| D7 | major | open | Arrow up/down in Trading follows the API order, not the scanner order shown; hijacks arrows everywhere |
-| D8 | major | open | All inputs and selects in dialogs render at 16 px instead of 13 px |
-| D9 | major | open | Day-trader information design: approval shows no risk, cockpit hides pending decisions, overview no session state |
-| D10 | major | open | IBKR Papier shows +50,56 € today and a rising curve with no positions or trades (unconfirmed: fixture or logic) |
-| D11 | minor | open | Light theme: warn text on warn tints is below 4.5:1 (badges 4.16, warnings box 4.40) |
-| D12 | minor | open | Scanner at 280–300 px: prices wrap ("61.250,00 / €"), symbols truncate with the name as tooltip |
-| D13 | minor | open | Overview "Wartet auf dich" shows 3 of 4 without saying so and cuts the cards' buttons |
-| D14 | minor | open | Skeletons: Trading skeleton overflows at 390 px (CLS 0.112); skeleton grids use other breakpoints than the final view |
-| D15 | minor | open | Order-Rechner keeps showing the computed size and its risk after you type a different quantity |
-| D16 | minor | open | Two different minus signs: `eur()` prints "-8,00 €", `signedEur()` prints "−8,00 €" |
-| D17 | minor | open | Currency mix: positions in € next to stops in $, scanner in $ for the same symbol |
-| D18 | minor | open | German text issues (grammar, English leftovers, quotes, redundant labels, missing thousands separator) |
-| D19 | minor | open | Screen-reader names: list buttons do not say what they act on; search results not keyboard-navigable |
-| D20 | minor | open | "Stornieren" and "Alarm löschen" act immediately without confirmation or undo |
-| D21 | minor | open | Live-money submit in "Neue Order" uses the primary variant, the calculator uses danger |
-| D22 | minor | open | Dialog validation errors are not tied to the field (no aria-invalid, no focus on the field) |
-| D23 | minor | open | No skip link: 14 Tab stops before the first action of a view |
-| D24 | polish | open | Empty grid slots and wrapping headers (5 stats as 3+2, agent cards, page head actions) |
-| D25 | polish | open | Chart y-axis: highest prices sit above the top tick without a label |
-| D26 | polish | open | Phone header: the pending button shrinks to a bare "4"; "0" while loading |
+| D1 | major | needs backend (wave 3) | "Mit Interactive Brokers abgleichen…" always fails in the browser (403 "Nur im Browser") |
+| D2 | major | fixed | Trading cockpit collapses to one or two columns at 1024–1600 px; order calculator far below the chart |
+| D3 | major | fixed | Tables hide the most important columns (G/V, Wert, Heute) behind an unmarked inner scroll |
+| D4 | major | fixed | Danger buttons in dark: white on `--err` is 2.68:1 (Not-Aus, live-money buttons) |
+| D5 | major | fixed | Focus is lost (goes to body) after every dialog and confirmation closes |
+| D6 | major | fixed | Chat drawer below 1280 px is not a dialog: no focus move, no Escape, no focus trap, hotkeys act behind it |
+| D7 | major | fixed | Arrow up/down in Trading follows the API order, not the scanner order shown; hijacks arrows everywhere |
+| D8 | major | fixed | All inputs and selects in dialogs render at 16 px instead of 13 px |
+| D9 | major | partly fixed | Day-trader information design: approval shows no risk, cockpit hides pending decisions, overview no session state |
+| D10 | major | needs backend (wave 3) | IBKR Papier shows +50,56 € today and a rising curve with no positions or trades (unconfirmed: fixture or logic) |
+| D11 | minor | fixed | Light theme: warn text on warn tints is below 4.5:1 (badges 4.16, warnings box 4.40) |
+| D12 | minor | fixed | Scanner at 280–300 px: prices wrap ("61.250,00 / €"), symbols truncate with the name as tooltip |
+| D13 | minor | fixed | Overview "Wartet auf dich" shows 3 of 4 without saying so and cuts the cards' buttons |
+| D14 | minor | fixed | Skeletons: Trading skeleton overflows at 390 px (CLS 0.112); skeleton grids use other breakpoints than the final view |
+| D15 | minor | fixed | Order-Rechner keeps showing the computed size and its risk after you type a different quantity |
+| D16 | minor | fixed | Two different minus signs: `eur()` prints "-8,00 €", `signedEur()` prints "−8,00 €" |
+| D17 | minor | fixed | Currency mix: positions in € next to stops in $, scanner in $ for the same symbol |
+| D18 | minor | fixed | German text issues (grammar, English leftovers, quotes, redundant labels, missing thousands separator) |
+| D19 | minor | fixed | Screen-reader names: list buttons do not say what they act on; search results not keyboard-navigable |
+| D20 | minor | fixed | "Stornieren" and "Alarm löschen" act immediately without confirmation or undo |
+| D21 | minor | fixed | Live-money submit in "Neue Order" uses the primary variant, the calculator uses danger |
+| D22 | minor | fixed | Dialog validation errors are not tied to the field (no aria-invalid, no focus on the field) |
+| D23 | minor | fixed | No skip link: 14 Tab stops before the first action of a view |
+| D24 | polish | fixed | Empty grid slots and wrapping headers (5 stats as 3+2, agent cards, page head actions) |
+| D25 | polish | fixed | Chart y-axis: highest prices sit above the top tick without a label |
+| D26 | polish | fixed | Phone header: the pending button shrinks to a bare "4"; "0" while loading |
+
+Web fix pass (branch q1-web, commits 31f8ef0, 9c990be, cdf3ea7, e2e in 2c3e0a1): 23 fixed, D9 partly (the parts that
+need server fields are left), D1 and D10 left for the backend (wave 3); the PIN login screen of the owner decision of
+2026-10-16 also waits for the server routes. Screenshots of the result: `build/preview/` after `npm run e2e`
+(`<theme>-<width>-<route>.png` at 390, 1280 and 1920 px with the chat open, `cockpit-<width>-chat|nochat.png` at 1280,
+1440 and 1600 px).
 
 ---
 
 ## D1 – Abgleich with IBKR always fails in the browser
 
+- Status: needs backend (wave 3): the browser's GET has no Origin, so `userOnly` refuses the preview; the route decision (drop `userOnly` on the read or make it a POST, and an error text that does not call the owner an agent) is a server change. The web keeps calling the GET.
 - Where: Depots → IBKR Papier, `apps/web/src/modules/portfolio/BrokerPanel.tsx:20-29` (`getChecked` GET),
   `apps/web/src/lib/api.ts:12-13`, server `apps/server/src/app.ts:173-175` (GET calls `userOnly`), origin detection
   `app.ts:55-63`.
@@ -63,6 +70,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D2 – Trading cockpit layout breaks down below ~1600 px of content width
 
+- Status: fixed in cdf3ea7: layout by content width – chart and calculator side by side from 700 px (scanner, waiting list and news under the calculator), three columns from 1300 px, stacked with the calculator right under the chart on phones; with the chat docked below 1600 px the sidebar becomes an icon rail and the chat is 320 px. e2e (2c3e0a1) asserts the calculator next to the chart with its button in the first screen at 1280/1440/1600, chat open and closed.
 - Where: `apps/web/src/modules/trade/TradeView.tsx:264` and `:270` (container queries `@max-[1400px]`, `@max-[900px]`).
 - Reproduce: dark, 1440 px, chat open (default) → `/trade?symbol=NVDA`: one column; the scanner spans the full
   width with prices 600 px away from symbols, the chart starts below the fold, the order calculator is ~1300 px down
@@ -82,6 +90,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D3 – Important table columns hidden behind an inner horizontal scroll
 
+- Status: fixed in cdf3ea7 (classes in 31f8ef0): columns give way by table width (`hideBelow`, container query on the table), money columns stay; sticky first column, edge fade when more is to the right; on phones "Heute" moves under "Wert". e2e at 390 and 1280 with chat: Heute, G/V and Wert headers inside the card.
 - Where: `apps/web/src/ui/kit.tsx:119-129` (`Table`), used in `OverviewView.tsx:82`, `PortfolioView.tsx:133`,
   `trade/parts.tsx:91`, `:151`.
 - Reproduce: (a) 390 px dark, Übersicht → table "Depots" shows only "Depot" and "Art"; Wert, Cash, Heute, Gesamt are
@@ -100,6 +109,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D4 – Danger buttons in dark theme fail contrast
 
+- Status: fixed in 31f8ef0: `--danger`/`--danger-fg` tokens (dark fill oklch(0.55 0.19 25) with white, 5.4:1; light 6.9:1); `contrast.test.ts` computes the pair from the tokens.
 - Where: `apps/web/src/ui/kit.tsx:35` (`danger: bg-err text-white`), `styles.css:86` (`--err` dark
   `oklch(0.72 0.17 25)`).
 - Reproduce: dark, any width, Trading "Not-Aus…" button, Risiko "Not-Aus…", confirm "Not-Aus einschalten"
@@ -113,6 +123,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D5 – Focus is not returned after dialogs close
 
+- Status: fixed in cdf3ea7: the opener is recorded before autoFocus moves focus (`useOpener`, `confirm()`) and focused again in `onCloseAutoFocus`; if it is gone or disabled, focus goes to the content (#main). e2e: form dialog and confirmation return focus.
 - Where: `apps/web/src/ui/overlay.tsx:29-48` (ConfirmProvider) and `:68-110` (FormDialog) – Radix `Dialog.Root`
   without `Dialog.Trigger`, opened from state.
 - Reproduce: dark/light 1440 px. Orders → Tab to "Freigeben…" → Enter → Escape: `document.activeElement` is
@@ -128,6 +139,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D6 – Chat drawer below 1280 px is not modal
 
+- Status: fixed in cdf3ea7: below 1280 px the chat is a Radix modal dialog – focus into the message field, Escape closes, focus back on the chat button, Tab trapped, module hotkeys inactive; the "c" hotkey is no longer typed into the field. e2e at 1024 px.
 - Where: `apps/web/src/shell/Shell.tsx:122-127`, `ChatPanel.tsx:79`.
 - Reproduce: dark, 390 and 1024 px, chat toggle: focus stays on the toggle; Escape does nothing (drawer stays open);
   Tab walks the page behind the overlay ("Vorschläge 4", "Neue Order…", "Freigeben…"); pressing "2" navigates to
@@ -143,6 +155,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D7 – Arrow keys in Trading follow the wrong order and hijack focus
 
+- Status: fixed in cdf3ea7: sort state lives in the cockpit, arrows follow the visible order and act only without a focused control or inside the scanner (roving tabindex, focus follows, the list scrolls, not the page). e2e: ArrowDown selects the next visible row and keeps focus there.
 - Where: `apps/web/src/modules/trade/TradeView.tsx:224-240` (uses `rows`), `Scanner.tsx:233` (displays `sorted`).
 - Reproduce: any theme, `/trade?symbol=NVDA`, scanner sorted by "Änderung" shows … SAP.DE, NVDA, ALV.DE …; ArrowDown
   goes to EUNL.DE (API order SAP.DE, ALV.DE, AAPL, MSFT, NVDA, EUNL.DE, BTC-EUR). Also with focus on the "Gap" tab of
@@ -157,6 +170,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D8 – Dialog inputs render at 16 px
 
+- Status: fixed in 31f8ef0: the element reset is in `@layer base`; guard in `styles.test.ts`, e2e reads 13 px in the Freigeben dialog.
 - Where: `apps/web/src/styles.css:127-132` (`input, select, textarea { font: inherit }`, unlayered).
 - Reproduce: any theme, Orders → "Neue Order…", Depots → "Trade erfassen…", Freigeben dialog: computed font-size of
   every input/select in the dialog is 16 px, the same select in the page is 13 px. Visible as oversized "Kauf",
@@ -171,6 +185,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D9 – Information design for a day trader
 
+- Status: partly fixed in cdf3ea7: the approve dialog and the broker confirmation show loss to stop incl. both fees, % of the account and the target in R (computed in the browser from `estimateCents` with the formula of `checkOrder`); the cockpit lists every waiting decision for all symbols; Übersicht shows sessions and the kill switch; the day bar always shows the daily loss against its stop ("0,0 % von 5,0 %"); "Krypto" instead of CCC, "vor 4 Min.", the Art badges became a kind line under the name. Needs backend (wave 3): risk as a server field on the proposal card, the open-risk sum of positions and the daily-loss headroom in EUR.
 - Where: `common.tsx:378-533` (ProposalCard and approve dialog), `TradeView.tsx:255,273-279`,
   `OverviewView.tsx:41-52`, `trade/parts.tsx:19-71`.
 - Reproduce: 1440 px, Orders and Übersicht (SHOTS/light-1280-chat-orders-full.png, dark-1440-chat-overview-full.png,
@@ -196,6 +211,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D10 – IBKR Papier shows a day gain without positions
 
+- Status: needs backend (wave 3): the day change of a cash-only account comes from the server (fixture curve or `dayChangeCents`); nothing in the web app invents it.
 - Where: Übersicht stats and table, sidebar, Depots → IBKR Papier, Trading day bar and Tagesstatistik.
 - Reproduce: any width. IBKR Papier: 0 positions, 0 trades, cash 25.000,00 €, "Gesamtrendite ±0,0 %" but
   "+50,56 € heute", sidebar "+0,2 %", and an equity curve rising from ~21.700 € to 25.000 €
@@ -210,6 +226,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D11 – Light theme: warn text on warn tints below AA
 
+- Status: fixed in 31f8ef0: light `--ok`, `--warn`, `--err` darkened; every text pair incl. 8–14 % tints over bg/surface/surface-2/surface-3 is asserted ≥ 4.5:1 in both themes (`contrast.test.ts`).
 - Where: `kit.tsx:17` (`warn: bg-warn/14 text-warn`), `common.tsx:436` (`bg-warn/10 text-warn`), PortfolioView
   `:346`; tokens `styles.css:57`.
 - Reproduce: light, Orders: "wartet auf dich" badges (11 px) 4.16:1; proposal warnings box 4.40:1; sidebar pending
@@ -222,6 +239,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D12 – Scanner rows break in the 280–300 px column
 
+- Status: fixed in cdf3ea7: price and change never wrap and do not shrink, "Depot" is an icon, the tooltip is "Symbol – Name". e2e: one row height at 1280/1440/1600.
 - Where: `apps/web/src/modules/trade/Scanner.tsx:256-264`.
 - Reproduce: 1440 px chat closed (two-column cockpit): BTC-EUR row shows "BTC-E…" and the price wraps to "61.250,00"
   / "€" on two lines, so the row is taller than the others (SHOTS/dlg-dark-kill-confirm.png,
@@ -236,6 +254,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D13 – "Wartet auf dich" on Übersicht hides items and cuts buttons
 
+- Status: fixed in cdf3ea7: compact rows (what, who, for which account, estimate, Freigeben…/Ablehnen…) for every waiting decision, "n weitere – alle unter Orders" beyond five, no nested scroller. e2e: rows match the count or the link exists.
 - Where: `apps/web/src/modules/overview/OverviewView.tsx:74-78`.
 - Reproduce: 1440 px chat open, dark: 4 pending, 3 rendered; the second card's "Freigeben…" is cut by the 340 px
   scroll box (SHOTS/dark-1440-chat-overview-full.png); 390 px: "gilt bis" and buttons cut
@@ -249,6 +268,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D14 – Skeletons overflow and differ from the final layout
 
+- Status: fixed in cdf3ea7: skeletons use the final grids (cockpit modes, stats) and reserve the chart height; e2e: no sideways scroll at 390 px while the API is held. CLS is not measured as a number.
 - Where: `TradeView.tsx:242-252` (fixed `grid-cols-[320px_minmax(0,1fr)_340px]`), `OverviewView.tsx:21`
   (`max-lg:` viewport vs final `@max-[900px]` container), `PortfolioView.tsx:92` (`grid-cols-5 max-lg:grid-cols-2` vs
   final `@max-[1000px]:grid-cols-3 @max-[640px]:grid-cols-2`); `Shell.tsx:257` shows "Vorschläge 0" while loading.
@@ -263,6 +283,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D15 – Order-Rechner shows the computed size after a manual quantity
 
+- Status: fixed in cdf3ea7: value and loss to stop are computed for the quantity that will be sent ("Rechner: 40" stays the hint), targets carry the currency. e2e types 10 and reads "10 Stk. ≈ …".
 - Where: `apps/web/src/modules/trade/OrderCalc.tsx:436` (hint), `:450-454` (sizing line), `:441-448` (targets).
 - Reproduce: Trading NVDA, press B, type 10: the line still says "40 Stk. ≈ 4.883,36 €, Verlust bis Stop 42,48 €",
   while the confirmation says "Kauf 10 NVDA … 1.220,84 €" (SHOTS/dlg-light-calc-confirm.png). Ziel 1–3 R values carry
@@ -276,6 +297,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D16 – Two minus signs
 
+- Status: fixed in 31f8ef0: `eur()`, `num()`, `qty()`, `compact()` print U+2212; unit test.
 - Where: `apps/web/src/lib/format.ts:5-7` (`eur()` via Intl → U+002D) vs `:10-13` (`signedEur` → U+2212).
 - Reproduce: Trading → Tagesstatistik, Papierdepot Atlas: "Ø Verlust -8,00 €" next to "−36,68 €" in the same table
   (SHOTS/dark-1440-chat-trade-full.png).
@@ -287,6 +309,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D17 – Currency mix between views and within rows
 
+- Status: fixed in cdf3ea7: positions show Einstand, Kurs and Stop in € (headers say "(€)"; the stop is converted with the current rate and marked ≈), the native price is the second line like in the scanner. e2e: AAPL row.
 - Where: `trade/parts.tsx:122-128` (Einstand/Kurs via `price(x)` = €, Stop via `price(x, p.currency)`),
   `PortfolioView.tsx:159-172` (same), `ScanRow`/chart in native currency.
 - Reproduce: Trading 1920 px: scanner "AAPL 231,40 $", positions "AAPL Einstand 188,50 € Kurs 212,89 €"; a stop set
@@ -300,6 +323,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D18 – German texts
 
+- Status: fixed in cdf3ea7 and 9c990be: „Name“ instead of "im Mein Papierdepot", German quotes, "Limit zum Einstieg", far reference lines "(außerhalb, höher/tiefer)", risk inputs with thousands dot, complete hints, "vor 4 Min.", "Krypto"; text guards in `texts.test.ts`. "Market" is kept as the order-type term – owner decision open whether it becomes "Bestens".
 - Where and reproduce (all confirmed in screenshots or code):
   - "Kauf 10 NVDA im Mein Papierdepot?" (`OrderCalc.tsx:379`), "… zum Marktkurs im {Depot}" (`trade/parts.tsx:85`) –
     use "in „Mein Papierdepot“" or "Depot: …".
@@ -319,6 +343,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D19 – Screen-reader names and search keyboard
 
+- Status: fixed in cdf3ea7: proposal buttons are named after what they act on ("Kauf 2 SAP.DE freigeben…"), position and alarm buttons too; the search is a combobox with arrow keys and aria-activedescendant, hits already on the watchlist say so. e2e checks the names.
 - Where: `common.tsx:467-490` (Freigeben…/Ablehnen…/Stornieren), `trade/parts.tsx:131` (Schließen…),
   `MarketView.tsx:207` ("Alarm löschen"), `MarketView.tsx:70-85` (search listbox).
 - Reproduce: Tab order on Orders lists "Freigeben… | Ablehnen…" four times with identical names; ArrowDown in the
@@ -333,6 +358,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D20 – Immediate destructive actions
 
+- Status: fixed in cdf3ea7: "Stornieren…" asks first (starts on Abbrechen, says what happens at the broker), deleting an alarm offers Rückgängig. e2e: alarm comes back.
 - Where: `common.tsx:356` + `:486-490` ("Stornieren", sends a cancel to the broker for placed IBKR orders),
   `MarketView.tsx:207` (alarm delete).
 - Reproduce: Orders with a placed/open order or Markt with an alarm: one click acts, no confirmation, no undo
@@ -343,6 +369,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D21 – Live-money submit variant inconsistent
 
+- Status: fixed in cdf3ea7: `FormDialog` takes `submitVariant`; live accounts submit with the danger variant in approve dialog, ticket and calculator.
 - Where: `overlay.tsx:98` (FormDialog submit always `primary`), `OrderTicket.tsx:352` ("Mit echtem Geld senden");
   calculator uses `danger` (`OrderCalc.tsx:470`).
 - Reproduce: code-confirmed; the fixture has no live account (unconfirmed visually).
@@ -351,6 +378,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D22 – Validation errors not tied to fields
 
+- Status: fixed in cdf3ea7: `Field` sets aria-invalid and aria-describedby, the dialog focuses the first invalid field; errors are cleared when a dialog opens. e2e on the approve and trade dialogs.
 - Where: `overlay.tsx:89-93`, `kit.tsx:103-114` (`Field` error has no id/`aria-describedby`, input no
   `aria-invalid`).
 - Reproduce: "Trade erfassen…" → "Erfassen" with an empty symbol: the alert appears at the bottom, the field is not
@@ -360,6 +388,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D23 – No skip link
 
+- Status: fixed in cdf3ea7: "Zum Inhalt" skip link as the first Tab stop, focuses #main. F6 cycling between regions is not added.
 - Where: `Shell.tsx:106-128`.
 - Reproduce: Orders, Tab from the top: 13 stops (7 modules, 3 depots, 3 header buttons, "Vorschläge") before
   "Neue Order…".
@@ -369,6 +398,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D24 – Empty slots and wrapping headers
 
+- Status: fixed in cdf3ea7: the five Depots stats fill each row (no hole), agent cards use auto-fit, secondary page actions collapse to icons with tooltips below 1000 px of content.
 - Reproduce: Depots at 1280 px chat open: 5 stats as 3 + 2 with an empty slot; page head actions wrap and leave
   "Ein-/Auszahlung…" alone on a second line (SHOTS/light-1280-chat-portfolio-tr-full.png); Agenten at 1920 px: two
   agent cards fill 40 % of the row (SHOTS/light-1920-chat-agents-full.png).
@@ -378,6 +408,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D25 – Chart y-axis top without label
 
+- Status: fixed in 9c990be: the domain runs from the tick below the low to the tick above the high, 3–6 ticks by height; unit test.
 - Where: `apps/web/src/ui/charts.tsx:145-153`, `:209-211`, `:338-340`.
 - Reproduce: Trading NVDA 1 T: candles reach ~132,9 $ above the top label 132,50 $, only three ticks; Depots Verlauf
   two ticks (SHOTS/light-1920-nochat-trade.png, light-1280-chat-portfolio-tr-full.png).
@@ -387,6 +418,7 @@ tooltips stay inside the chart at both edges (SHOTS/dlg-light-chart-tooltip-righ
 
 ## D26 – Phone header
 
+- Status: fixed in cdf3ea7: the phone header button shows a list icon and the count (named "Vorschläge, 4 warten auf dich"), "–" while unknown; stat label "Vermögen".
 - Where: `Shell.tsx:255-258`.
 - Reproduce: 390 px: the top-right primary button reads only "4" (label sr-only), next to the chat unread badge "5"
   (SHOTS/dark-390-nochat-overview-full.png); stat labels truncate ("Vermögen (deine D…") with a hover-only tooltip.
