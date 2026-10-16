@@ -1,16 +1,20 @@
-// HTTP: API, SSE-Stream, Web-App. Nur 127.0.0.1.
-// Zwei Arten Aufrufer: der Browser (sendet bei Änderungen immer einen Origin – das bist du) und cli/desk.py der
-// Agenten (ohne Origin). Freigeben, Ablehnen, Not-Aus, Grenzen und Trades erfassen gehen nur aus dem Browser.
+// HTTP: API, SSE-Stream, Web-App. Nur 127.0.0.1, nur mit dem eigenen Host (Host-Header) und Port.
+// Zwei Arten Aufrufer: du im Browser (angemeldet mit PIN: Sitzungs-Cookie, bei Änderungen zusätzlich der Origin des
+// Desks) und cli/desk.py der Agenten (ohne Cookie). Freigeben, Ablehnen, Bestätigen, Stornieren, Not-Aus, Grenzen,
+// Trades, Cash, Import, Abgleich, Watchlist und Alarme gehen nur mit deiner Sitzung. Lesen dürfen auch die Agenten.
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { ChartRange } from "@desk/shared";
 import { ChartRangeSchema } from "@desk/shared";
+import { AuthError, SESSION_COOKIE, SESSION_MAX_AGE_SEC } from "./auth.ts";
 import { DeskError, type Desk, type Origin } from "./desk.ts";
 
 export const VERSION = 1;
-const LOCAL_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/;
+const DEV_WEB_PORT = 5175; // Vite im Entwicklungsmodus (npm run dev:web), leitet /api weiter
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 // style-src mit 'unsafe-inline': Radix setzt beim offenen Dialog ein <style> für die Scroll-Sperre; Skripte bleiben streng.
 
@@ -48,31 +52,103 @@ const int = (v: string | undefined, d: number, lo: number, hi: number) => {
 	return v !== undefined && v !== "" && Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.trunc(n))) : d;
 };
 
+/** Hosts, unter denen der Desk antwortet: nur die eigene Adresse mit dem eigenen Port (gegen DNS-Rebinding). */
+export function localHosts(port: number, dev = false): Set<string> {
+	const ports = dev ? [port, DEV_WEB_PORT] : [port];
+	return new Set(ports.flatMap((p) => [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`]));
+}
+
+type Env = { Variables: { origin: Origin; session: string | null } };
+
 export function createApp(desk: Desk) {
-	const app = new Hono<{ Variables: { origin: Origin } }>();
+	const app = new Hono<Env>();
 	const cfg = desk.cfg;
+	const auth = desk.auth;
+	const hosts = localHosts(cfg.port, cfg.dev);
+	const origins = new Set([...hosts].map((h) => `http://${h}`));
+
+	// jede Anfrage, auch die Web-App: nur mit dem Host des Desks – eine fremde Seite, deren Name auf 127.0.0.1 zeigt, liest nichts
+	app.use("*", async (c, next) => {
+		const host = (c.req.header("Host") ?? new URL(c.req.url).host).toLowerCase();
+		if (!hosts.has(host)) return c.text("forbidden host", 403);
+		await next();
+	});
+
+	// Größe begrenzen, bevor gelesen wird: der CSV-Import darf 2,5 MB, alles andere 64 KB
+	const tooLarge = (c: Context) => c.json({ ok: false, msg: "Anfrage zu groß." }, 413);
+	const importLimit = bodyLimit({ maxSize: 2_600_000, onError: tooLarge });
+	const apiLimit = bodyLimit({ maxSize: 64 * 1024, onError: tooLarge });
+	app.use("/api/*", (c, next) => (/^\/api\/accounts\/[^/]+\/import$/.test(c.req.path) ? importLimit(c, next) : apiLimit(c, next)));
 
 	app.use("/api/*", async (c, next) => {
 		const origin = c.req.header("Origin") ?? "";
-		if (c.req.method !== "GET" && c.req.method !== "HEAD") {
-			// jede Webseite darf an 127.0.0.1 posten: nur JSON (erzwingt den Preflight) und nur ein lokaler Origin
+		const write = c.req.method !== "GET" && c.req.method !== "HEAD";
+		if (write) {
+			// jede Webseite darf an 127.0.0.1 posten: nur JSON (erzwingt den Preflight) und nur der Origin des Desks
 			const json = (c.req.header("Content-Type") ?? "").startsWith("application/json");
-			if (!json || (origin && !LOCAL_ORIGIN.test(origin))) return c.json({ ok: false, msg: "forbidden" }, 403);
+			if (!json || (origin && !origins.has(origin))) return c.json({ ok: false, msg: "forbidden" }, 403);
 		}
-		c.set("origin", origin ? "web" : "cli");
+		const token = getCookie(c, SESSION_COOKIE);
+		const session = auth.verify(token) ? token! : null;
+		c.set("session", session);
+		// du: gültige Sitzung, bei Änderungen zusätzlich ein Origin des Desks; ein Abruf von einer fremden Seite zählt nie
+		const site = c.req.header("Sec-Fetch-Site");
+		const owner = !!session && (write ? !!origin : !site || site === "same-origin" || site === "none");
+		if (write && origin && !session && !c.req.path.startsWith("/api/auth")) return c.json({ ok: false, msg: "Nicht angemeldet – im Browser mit deiner PIN anmelden.", code: "auth" }, 401);
+		c.set("origin", owner ? "web" : "cli");
 		await next();
 	});
 
 	app.onError((e, c) => {
 		if (e instanceof DeskError) return c.json({ ok: false, msg: e.message, data: e.data ?? null }, e.status as 400);
+		if (e instanceof AuthError) {
+			if (e.retryAfterSec) c.header("Retry-After", String(e.retryAfterSec));
+			return c.json({ ok: false, msg: e.message, code: "auth" }, e.status as 400);
+		}
 		console.error(e);
 		return c.json({ ok: false, msg: `Serverfehler: ${e.message}` }, 500);
 	});
 
-	const userOnly = (c: Context<{ Variables: { origin: Origin } }>) => {
-		if (c.get("origin") !== "web") throw new DeskError("Nur im Browser – das entscheidet der Mensch, nicht ein Agent.", 403);
+	const userOnly = (c: Context<Env>) => {
+		if (c.get("origin") !== "web") throw new DeskError("Nur im Browser mit deiner Anmeldung – das entscheidet der Mensch, nicht ein Agent.", 403);
 	};
-	const body = async (c: Context) => ((await c.req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+	/** JSON-Objekt aus dem Body; leer ist {}, kaputtes JSON ein 400 (nicht still {}). */
+	const body = async (c: Context) => {
+		const text = await c.req.text();
+		if (!text.trim()) return {} as Record<string, unknown>;
+		let v: unknown;
+		try {
+			v = JSON.parse(text);
+		} catch {
+			throw new DeskError("Ungültiges JSON.");
+		}
+		if (!v || typeof v !== "object" || Array.isArray(v)) throw new DeskError("JSON-Objekt erwartet.");
+		return v as Record<string, unknown>;
+	};
+	const browser = (c: Context) => {
+		if (!c.req.header("Origin")) throw new AuthError("Anmelden nur im Browser.", 403);
+	};
+	const startSession = (c: Context, token: string) => setCookie(c, SESSION_COOKIE, token, { httpOnly: true, sameSite: "Strict", path: "/", maxAge: SESSION_MAX_AGE_SEC });
+
+	/* Anmeldung: PIN einmal mit dem Einrichtungscode aus der Konsole setzen, dann mit der PIN anmelden */
+	app.get("/api/auth", (c) => c.json({ pinSet: auth.pinSet, authenticated: c.get("session") !== null }));
+	app.post("/api/auth/setup", async (c) => {
+		browser(c);
+		const b = await body(c);
+		startSession(c, auth.setup(b.code, b.pin));
+		desk.event("auth.setup", cfg.user, "PIN eingerichtet");
+		return c.json({ ok: true, pinSet: true, authenticated: true });
+	});
+	app.post("/api/auth/login", async (c) => {
+		browser(c);
+		startSession(c, auth.login((await body(c)).pin));
+		return c.json({ ok: true, pinSet: true, authenticated: true });
+	});
+	app.post("/api/auth/logout", (c) => {
+		auth.logout(c.get("session") ?? undefined);
+		deleteCookie(c, SESSION_COOKIE, { path: "/" });
+		return c.json({ ok: true, pinSet: auth.pinSet, authenticated: false });
+	});
 	const id = (c: Context) => {
 		const n = Number(c.req.param("id"));
 		if (!Number.isInteger(n) || n <= 0) throw new DeskError("Ungültige ID.");
@@ -170,7 +246,12 @@ export function createApp(desk: Desk) {
 
 	/* Broker */
 	app.get("/api/brokers", (c) => c.json(desk.brokerStatuses()));
+	// Vorschau: GET für die Web-App (mit Sitzung), POST …/preview als Variante ohne GET (holt beim Broker ab)
 	app.get("/api/accounts/:id/reconcile", async (c) => {
+		userOnly(c);
+		return c.json(await desk.reconcile(c.req.param("id")));
+	});
+	app.post("/api/accounts/:id/reconcile/preview", async (c) => {
 		userOnly(c);
 		return c.json(await desk.reconcile(c.req.param("id")));
 	});

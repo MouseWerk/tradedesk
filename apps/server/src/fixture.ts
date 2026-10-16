@@ -20,8 +20,12 @@ export interface Fixture {
 	cleanup(): void;
 }
 
+/** Bekannte Test-PIN der Fixture (Selbsttest, Tests, Playwright) – nie für echte Daten. */
+export const FIXTURE_PIN = "2468";
+
 export const FIXTURE_CONFIG = {
 	user: "Maurice",
+	port: 8097,
 	accounts: [
 		{ id: "tr", name: "Trade Republic", kind: "manual", broker: "Trade Republic", feeEur: 1, startCashEur: 0 },
 		{ id: "papier", name: "Mein Papierdepot", kind: "paper", feeEur: 1, startCashEur: 20000 },
@@ -39,6 +43,7 @@ export async function makeFixture({ seed = true, now }: { seed?: boolean; now?: 
 	const bySymbol = new Map(FAKE_CATALOG.map((i) => [FakeBroker.conid(i.symbol), i.symbol]));
 	const broker = new FakeBroker((conid) => market.items.get(bySymbol.get(conid) ?? "")?.price ?? 0, clock);
 	const desk = new Desk(cfg, db, market, clock, new Map([["ibkr", broker]]));
+	desk.auth.presetPin(FIXTURE_PIN);
 	const fx: Fixture = {
 		dir, cfg, db, desk, market, broker,
 		cleanup() {

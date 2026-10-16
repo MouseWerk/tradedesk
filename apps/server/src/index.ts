@@ -1,5 +1,6 @@
 // Tradedesk – Server. Start: node apps/server/src/index.ts [--port 8095] [--home <datenordner>]   (Node >= 24 führt TypeScript direkt aus)
-// Selbsttest: --selftest (eigene Fixture, kein Port, kein Netz). Fixture-Server für Playwright: --fixture.
+// Selbsttest: --selftest (eigene Fixture, kein Port, kein Netz). Fixture-Server für Playwright: --fixture (Test-PIN 2468).
+// PIN vergessen: --reset-pin löscht PIN und Sitzungen; der nächste Start zeigt einen neuen Einrichtungscode.
 import { serve } from "@hono/node-server";
 import { loadConfig } from "./config.ts";
 import { openDatabase } from "./db.ts";
@@ -7,6 +8,7 @@ import { Desk } from "./desk.ts";
 import { OffMarket, YahooMarket } from "./market.ts";
 import { createApp } from "./app.ts";
 import { IbkrBroker } from "./broker.ts";
+import { OwnerAuth } from "./auth.ts";
 
 if (process.argv.includes("--selftest")) {
 	const { selftest } = await import("./selftest.ts");
@@ -14,6 +16,13 @@ if (process.argv.includes("--selftest")) {
 }
 
 const base = loadConfig();
+if (process.argv.includes("--reset-pin")) {
+	const db = openDatabase(base.dbFile);
+	new OwnerAuth(db, Date.now).reset();
+	db.close();
+	console.log(`PIN und Sitzungen gelöscht (${base.dbFile}). Beim nächsten Start zeigt der Desk hier einen neuen Einrichtungscode.`);
+	process.exit(0);
+}
 let desk: Desk;
 let cleanup = () => {};
 if (process.argv.includes("--fixture")) {
@@ -36,6 +45,9 @@ const app = createApp(desk);
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "127.0.0.1" }, (info) => {
 	const live = cfg.accounts.filter((a) => a.live);
 	console.log(`Tradedesk on http://127.0.0.1:${info.port}  (${cfg.accounts.length} Depots, ${cfg.agents.length} Agenten, Markt ${desk.market.kind}, Daten ${cfg.home})`);
+	// der Einrichtungscode erscheint nur hier, in deiner Konsole – nie in Datenbank, Logdatei, API oder Chat
+	const code = desk.auth.startSetup();
+	if (code) console.log(`PIN festlegen: Einrichtungscode ${code} – im Browser eingeben und eine PIN (4–12 Ziffern) wählen.`);
 	if (desk.brokers.size) console.log(`Broker: ${[...desk.brokers.keys()].join(", ")} – Live-Handel ${cfg.liveTrading ? "AN" : "aus"}${live.length ? ` (echte Konten: ${live.map((a) => a.id).join(", ")})` : ""}`);
 });
 server.on("error", (e: NodeJS.ErrnoException) => {

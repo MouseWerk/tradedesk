@@ -2,7 +2,7 @@
 import type { AgentsData, Overview, Proposal, RiskData, WatchItem } from "@desk/shared";
 import { AgentsDataSchema, OverviewSchema, ProposalSchema, RiskDataSchema, WatchItemSchema } from "@desk/shared";
 import { createApp } from "./app.ts";
-import { makeFixture } from "./fixture.ts";
+import { FIXTURE_PIN, makeFixture } from "./fixture.ts";
 
 export async function selftest(): Promise<number> {
 	const fx = await makeFixture();
@@ -10,9 +10,23 @@ export async function selftest(): Promise<number> {
 	const check = (name: string, ok: boolean, detail = "") => results.push({ name, ok, detail });
 	try {
 		const app = createApp(fx.desk);
-		const get = async <T>(p: string) => (await (await app.request(p)).json()) as T;
-		const web = (p: string, method: string, body: unknown) => app.request(p, { method, headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:8095" }, body: JSON.stringify(body) });
-		const cli = (p: string, body: unknown) => app.request(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+		const base = `http://127.0.0.1:${fx.cfg.port}`;
+		const req = (p: string, init?: RequestInit) => app.request(base + p, init);
+		const get = async <T>(p: string) => (await (await req(p)).json()) as T;
+		const post = (p: string, method: string, body: unknown, headers: Record<string, string>) => req(p, { method, headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
+		const cli = (p: string, body: unknown) => post(p, "POST", body, {});
+
+		// du meldest dich mit der PIN an; ein Agent, der nur einen Origin mitschickt, bekommt nichts
+		const spoofed = await post("/api/risk/kill", "PUT", { on: true }, { Origin: base });
+		check("a spoofed Origin without your login is refused", spoofed.status === 401 && !fx.desk.killSwitch, String(spoofed.status));
+		const wrong = await post("/api/auth/login", "POST", { pin: "0000" }, { Origin: base });
+		check("a wrong PIN is refused", wrong.status === 401);
+		const login = await post("/api/auth/login", "POST", { pin: FIXTURE_PIN }, { Origin: base });
+		const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+		check("login sets an HttpOnly, SameSite=Strict session cookie", login.status === 200 && /HttpOnly/i.test(login.headers.get("set-cookie") ?? "") && /SameSite=Strict/i.test(login.headers.get("set-cookie") ?? ""));
+		const web = (p: string, method: string, body: unknown) => post(p, method, body, { Origin: base, Cookie: cookie });
+		const rebind = await app.request("http://evil.example:8097/api/overview");
+		check("a foreign Host header is refused (DNS rebinding)", rebind.status === 403);
 
 		const ov = await get<Overview>("/api/overview");
 		check("overview matches its schema", OverviewSchema.safeParse(ov).success);
@@ -51,7 +65,7 @@ export async function selftest(): Promise<number> {
 		check("kill switch blocks your own orders too", blocked.status === 422);
 		await web("/api/risk/kill", "PUT", { on: false });
 
-		const foreign = await app.request("/api/risk/kill", { method: "PUT", headers: { "Content-Type": "application/json", Origin: "https://evil.example" }, body: JSON.stringify({ on: true }) });
+		const foreign = await post("/api/risk/kill", "PUT", { on: true }, { Origin: "https://evil.example", Cookie: cookie });
 		check("foreign origin is refused", foreign.status === 403);
 	} catch (e) {
 		check("selftest ran through", false, String((e as Error).stack ?? e));

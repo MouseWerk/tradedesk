@@ -1,22 +1,24 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createApp } from "../src/app.ts";
 import { cleanConfig } from "../src/config.ts";
 import { makeFixture, type Fixture } from "../src/fixture.ts";
+import { deskHttp } from "./owner.ts";
 
 let fx: Fixture;
 let clock: number;
+let http: ReturnType<typeof deskHttp>;
 
 beforeEach(async () => {
 	clock = new Date(2026, 9, 15, 11, 0).getTime();
 	fx = await makeFixture({ now: () => clock });
+	http = deskHttp(fx);
+	await http.login();
 });
 afterEach(() => fx.cleanup());
 
-const web = (p: string, method: string, body: unknown = {}) =>
-	createApp(fx.desk).request(p, { method, headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:8095" }, body: JSON.stringify(body) });
-const cli = (p: string, body: unknown, method = "POST") => createApp(fx.desk).request(p, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const web = (p: string, method: string, body: unknown = {}) => http.web(p, method, body);
+const cli = (p: string, body: unknown, method = "POST") => http.cli(p, body, method);
 const propose = (over: Record<string, unknown> = {}) =>
 	fx.desk.submit({ author: "Atlas", accountId: "agent-atlas", symbol: "SAP.DE", side: "buy", qty: 2, stopLoss: 190, confidence: 0.7, thesis: "Test", ...over }, "cli");
 
@@ -140,7 +142,7 @@ describe("HTTP boundary", () => {
 	});
 
 	it("form posts without JSON are refused", async () => {
-		const r = await createApp(fx.desk).request("/api/journal", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "author=Atlas&text=hi" });
+		const r = await http.request("/api/journal", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "author=Atlas&text=hi" });
 		expect(r.status).toBe(403);
 	});
 
@@ -157,7 +159,7 @@ describe("HTTP boundary", () => {
 	});
 
 	it("serves no file outside the web build", async () => {
-		const r = await createApp(fx.desk).request("/..%2f..%2fpackage.json");
+		const r = await http.request("/..%2f..%2fpackage.json");
 		expect(await r.text()).not.toContain("workspaces");
 	});
 });

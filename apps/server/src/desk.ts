@@ -15,6 +15,7 @@ import type { Config } from "./config.ts";
 import type { Database } from "./db.ts";
 import { fxSymbol, type Market, type QuoteData } from "./market.ts";
 import type { Broker } from "./broker.ts";
+import { OwnerAuth } from "./auth.ts";
 
 export class DeskError extends Error {
 	readonly status: number;
@@ -88,6 +89,7 @@ export class Desk extends EventEmitter {
 	readonly db: Database;
 	readonly market: Market;
 	readonly now: () => number;
+	readonly auth: OwnerAuth; // deine PIN und Sitzungen (ein Objekt je Desk: Sperre nach Fehlversuchen gilt prozessweit)
 
 	constructor(cfg: Config, db: Database, market: Market, now: () => number = Date.now, brokers: Map<string, Broker> = new Map()) {
 		super();
@@ -96,6 +98,7 @@ export class Desk extends EventEmitter {
 		this.db = db;
 		this.market = market;
 		this.now = now;
+		this.auth = new OwnerAuth(db, now);
 		this.setMaxListeners(200);
 		this.marketState = market.kind === "off" ? "off" : "live";
 		for (const a of cfg.accounts)
@@ -535,6 +538,9 @@ export class Desk extends EventEmitter {
 	 */
 	async submit(body: unknown, origin: Origin, { dryRun = false } = {}): Promise<{ ok: boolean; check: Check; proposal: Proposal | null }> {
 		const raw = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+		// Tippfehler wie "stoploss" sind kein "ohne Stop": unbekannte Felder von Agenten werden abgewiesen
+		const unknown = origin === "cli" ? Object.keys(raw).filter((k) => !(k in ProposalInputSchema.shape)) : [];
+		if (unknown.length) throw new DeskError(`Ungültiger Vorschlag: unbekanntes Feld „${unknown[0].slice(0, 40)}“ – erlaubt: ${Object.keys(ProposalInputSchema.shape).join(", ")}.`);
 		const parsed = ProposalInputSchema.safeParse(origin === "web" ? { confidence: 1, thesis: "Eigene Order", ...raw, author: this.cfg.user } : raw);
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
