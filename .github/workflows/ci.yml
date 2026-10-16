@@ -1,0 +1,54 @@
+# Jeder Push und jeder Pull Request: dieselben Prüfungen wie lokal (CLAUDE.md, Abschnitt Checks).
+# Rot heißt: das ist die nächste Aufgabe.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Europe/Berlin
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit and API tests
+        run: npm test
+      - name: Server selftest
+        run: npm run selftest
+      - name: CLI selftest
+        run: python cli/desk.py --selftest
+      - name: Build
+        run: npm run build
+      - name: Playwright browser
+        run: npx --workspace @desk/web playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "0"
+      - name: E2E
+        run: npm run e2e
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: build/preview
+          retention-days: 7
+          if-no-files-found: ignore
