@@ -25,7 +25,14 @@ export interface QuoteData {
 	volume: number | null;
 	timezone: string;
 	session: Session | null; // Handelszeiten des aktuellen bzw. letzten Handelstags
+	source?: QuoteSource; // woher der Kurs kommt (setzt die Kursquelle, src/feed.ts)
+	bid?: number | null;
+	ask?: number | null;
+	delayed?: boolean | null; // laut Quelle verzögert; null/fehlt: unbekannt (Yahoo sagt es nicht)
 }
+
+/** Herkunft eines Kurses. */
+export type QuoteSource = "yahoo" | "ibkr" | "fake";
 
 export interface Market {
 	readonly kind: "yahoo" | "fake" | "off";

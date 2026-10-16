@@ -214,7 +214,7 @@ export function createApp(desk: Desk) {
 		const p = desk.priced(symbol);
 		if (!p) throw new DeskError(`Kein Kurs für ${symbol}.`, 404);
 		const i = desk.instrument(symbol)!;
-		return c.json({ symbol, name: i.name, currency: p.currency, price: p.price, fx: p.fx, priceEur: p.price * p.fx, prevClose: p.prevClose, marketTime: p.marketTime, watched: desk.watchlist().some((w) => w.symbol === symbol && w.watched) });
+		return c.json({ symbol, name: i.name, currency: p.currency, price: p.price, fx: p.fx, priceEur: p.price * p.fx, prevClose: p.prevClose, marketTime: p.marketTime, watched: desk.watchlist().some((w) => w.symbol === symbol && w.watched), quote: desk.quoteInfo(symbol) });
 	});
 	app.post("/api/market/alerts", async (c) => {
 		userOnly(c);
@@ -299,6 +299,9 @@ export function createApp(desk: Desk) {
 		return c.json(desk.chat({ since: since === undefined ? undefined : int(since, 0, 0, Number.MAX_SAFE_INTEGER), limit: int(c.req.query("limit"), 200, 1, 1000) }));
 	});
 	app.post("/api/chat", async (c) => c.json({ ok: true, message: desk.say(await body(c), c.get("origin")) }));
+
+	/* Auswertung: account = Depot-ID, "mine" (Standard) oder "all"; from/to als JJJJ-MM-TT (Ortszeit) */
+	app.get("/api/analytics", (c) => c.json(desk.analytics({ account: c.req.query("account"), from: c.req.query("from"), to: c.req.query("to") })));
 
 	/* Agenten und Journal */
 	app.get("/api/agents", (c) => c.json(desk.agentsData()));

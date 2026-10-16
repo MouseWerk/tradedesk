@@ -97,6 +97,12 @@ export const MIGRATIONS: string[] = [
 	ALTER TABLE proposal ADD COLUMN closed_at INTEGER;
 	CREATE INDEX trade_proposal ON trade (proposal_id) WHERE proposal_id IS NOT NULL;
 	`,
+	/* 5: Kursquelle je Kurs (yahoo, ibkr, fake), Bid/Ask und ob die Quelle ihn als verzögert meldet */ `
+	ALTER TABLE quote ADD COLUMN source TEXT NOT NULL DEFAULT '';
+	ALTER TABLE quote ADD COLUMN bid REAL;
+	ALTER TABLE quote ADD COLUMN ask REAL;
+	ALTER TABLE quote ADD COLUMN delayed INTEGER;
+	`,
 ];
 
 function param(v: unknown): SQLInputValue {

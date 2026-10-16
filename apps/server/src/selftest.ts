@@ -1,7 +1,7 @@
 // node apps/server/src/index.ts --selftest – ohne Port, ohne Netz, ohne echte Daten (Fixture mit Fake-Börse).
 import { SESSION_HEADER } from "./auth.ts";
-import type { AgentsData, Overview, Proposal, RiskData, WatchItem } from "@desk/shared";
-import { AgentsDataSchema, OverviewSchema, ProposalSchema, RiskDataSchema, WatchItemSchema } from "@desk/shared";
+import type { AgentsData, Analytics, Overview, Proposal, RiskData, WatchItem } from "@desk/shared";
+import { AgentsDataSchema, AnalyticsSchema, OverviewSchema, ProposalSchema, RiskDataSchema, WatchItemSchema } from "@desk/shared";
 import { createApp } from "./app.ts";
 import { FIXTURE_PIN, makeFixture, tradingDayClock } from "./fixture.ts";
 
@@ -38,6 +38,8 @@ export async function selftest(): Promise<number> {
 		check("watchlist matches its schema and has quotes", WatchItemSchema.array().safeParse(watch).success && watch.every((w) => w.price !== null));
 		check("agents data matches its schema", AgentsDataSchema.safeParse(await get<AgentsData>("/api/agents")).success);
 		check("risk data matches its schema", RiskDataSchema.safeParse(await get<RiskData>("/api/risk")).success);
+		const an = await get<Analytics>("/api/analytics?account=all");
+		check("analytics matches its schema and has closed trades", AnalyticsSchema.safeParse(an).success && an.tradesTotal > 0, String(an.tradesTotal));
 
 		const invented = await cli("/api/proposals", { author: "Atlas", accountId: "agent-atlas", symbol: "TSLA", side: "buy", qty: 1, confidence: 0.9, thesis: "x" });
 		check("invented symbol is not proposed", invented.status === 422);
