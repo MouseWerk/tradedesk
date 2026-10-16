@@ -1,7 +1,7 @@
 // Chat: du, die Agenten und der Desk in einem Raum. Agenten schreiben über cli/desk.py say, der Desk meldet Ergebnisse
 // ihrer Vorschläge. Texte sind Daten: nur als Text gerendert, nie als HTML. Eine Nachricht genehmigt nie eine Order.
 import { Link } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowDown, Bot, Send, X } from "lucide-react";
 import type { ChatMessage } from "@desk/shared";
 import { de } from "@/i18n/de";
@@ -42,7 +42,7 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 	const { data: ov } = useOverview();
 	const { data: agents } = useAgents();
 	const user = ov?.user ?? "";
-	const names = [user, ...(agents?.agents.map((a) => a.name) ?? [])].filter(Boolean);
+	const names = useMemo(() => [user, ...(agents?.agents.map((a) => a.name) ?? [])].filter(Boolean), [user, agents]);
 	const [filter, setFilter] = useState<"all" | "mine" | "agents">("all");
 	const [text, setText] = useState("");
 	const { run, busy } = useAction();
@@ -54,19 +54,21 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 	const atBottom = useRef(true);
 	const forceBottom = useRef(false);
 	const [newBelow, setNewBelow] = useState(0);
-	const seenCount = useRef(0);
+	const seenId = useRef(0);
+	const shownLast = shown.at(-1)?.id ?? 0;
 
+	// nach der letzten ID, nicht nach der Länge: die Liste hält höchstens 500, ab dann bleibt die Länge gleich
 	useLayoutEffect(() => {
 		const el = list.current;
 		if (!el) return;
-		const added = shown.length - seenCount.current;
-		seenCount.current = shown.length;
+		const added = seenId.current ? shown.filter((m) => m.id > seenId.current).length : 0;
+		seenId.current = shownLast;
 		if (atBottom.current || forceBottom.current) {
 			el.scrollTop = el.scrollHeight;
 			forceBottom.current = false;
 			setNewBelow(0);
 		} else if (added > 0) setNewBelow((n) => n + added);
-	}, [shown.length]);
+	}, [shownLast]); // eslint-disable-line react-hooks/exhaustive-deps
 	useLayoutEffect(() => {
 		const el = list.current;
 		if (el) el.scrollTop = el.scrollHeight;
@@ -89,12 +91,19 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 		setNewBelow(0);
 	};
 
+	const sending = useRef(false);
 	const send = async () => {
 		const t = text.trim();
-		if (!t) return;
+		// Enter zweimal schnell: die erste Nachricht ist noch unterwegs, sonst ginge sie doppelt raus
+		if (!t || sending.current) return;
+		sending.current = true;
 		forceBottom.current = true;
 		// kein Neuladen nach dem Senden: die Nachricht kommt über den Live-Stream
-		if (await run("/api/chat", "POST", { text: t }, undefined, undefined, { refresh: false })) setText("");
+		try {
+			if (await run("/api/chat", "POST", { text: t }, undefined, undefined, { refresh: false })) setText("");
+		} finally {
+			sending.current = false;
+		}
 		input.current?.focus();
 	};
 	const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {

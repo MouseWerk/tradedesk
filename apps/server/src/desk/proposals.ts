@@ -82,8 +82,15 @@ export abstract class DeskProposals extends DeskMarket {
 	protected reserved(accountId: string, exclude?: number): { cashCents: number; buyValue: Map<string, number>; sellQty: Map<string, number>; unpriced: number[]; riskCents: number } {
 		const a = this.account(accountId);
 		const out = { cashCents: 0, buyValue: new Map<string, number>(), sellQty: new Map<string, number>(), unpriced: [] as number[], riskCents: 0 };
-		for (const r of this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE account_id = ? AND status IN (${RESERVING}) AND id != ?`, accountId, exclude ?? 0)) {
-			const qty = roundQty((r.approved_qty ?? r.qty) - (r.filled_qty ?? 0)); // der ausgeführte Teil steckt schon im Buch
+		// gebuchte Stück je Vorschlag aus dem Buch: der Broker meldet „ausgeführt“ oft, bevor die Ausführung gebucht ist –
+		// bis dahin bindet die Order weiter (drei Tage lang)
+		const booked = new Map<number, number>();
+		for (const t of this.tradeRows(accountId)) if (t.proposal_id !== null) booked.set(t.proposal_id, (booked.get(t.proposal_id) ?? 0) + t.qty);
+		for (const r of this.db.all<ProposalRow>(
+			`SELECT * FROM proposal WHERE account_id = ? AND (status IN (${RESERVING}) OR (status = 'filled' AND broker_order_id IS NOT NULL AND status_at > ?)) AND id != ?`,
+			accountId, this.now() - 3 * 86_400_000, exclude ?? 0,
+		)) {
+			const qty = roundQty((r.approved_qty ?? r.qty) - Math.max(r.filled_qty ?? 0, booked.get(r.id) ?? 0)); // der gebuchte Teil steckt schon im Buch
 			if (qty <= 0) continue;
 			if (r.side === "sell") {
 				out.sellQty.set(r.symbol, (out.sellQty.get(r.symbol) ?? 0) + qty);
@@ -105,29 +112,62 @@ export abstract class DeskProposals extends DeskMarket {
 	}
 
 	/**
-	 * Was Agenten-Käufe in deinen Depots mit echtem Geld zusammen binden (config "agentBudgetEur"): gehaltene Lose aus
-	 * Agenten-Vorschlägen zum Einstand mit Kaufgebühr, dazu wartende und freigegebene, noch nicht ausgeführte Käufe mit
-	 * Gebühr. Ein Verkauf gibt das Budget wieder frei (zum Einstand, Gewinn und Verlust zählen nicht). exclude: die Order selbst.
+	 * Was Agenten-Käufe in deinen Depots mit echtem Geld zusammen binden (config "agentBudgetEur"), je Depot und Symbol:
+	 * - gehaltene Stücke aus Agenten-Käufen zum Einstand mit Kaufgebühr. Ein Verkauf von Hand geht zuerst zu deinen
+	 *   eigenen Stücken, ein Agenten-Verkauf zuerst zu denen der Agenten – nie gibt dein eigener Verkauf das Budget frei,
+	 *   solange die Stücke der Agenten noch da sind (FIFO würde das älteste Los schließen, egal wessen);
+	 * - wartende und freigegebene Käufe mit Gebühr, soweit noch nicht gebucht – auch, wenn der Broker sie schon als
+	 *   ausgeführt meldet, die Ausführung aber noch fehlt (drei Tage lang).
+	 * Gewinn und Verlust zählen nicht: das Budget begrenzt, was gleichzeitig gebunden ist. exclude: die Order selbst.
 	 */
 	agentBudget(exclude?: number): AgentBudget | null {
 		const budget = this.cfg.agentBudgetCents;
 		if (budget === null) return null;
 		const accounts = this.cfg.accounts.filter(realMoney);
+		const agents = this.cfg.agents;
+		const inAgents = agents.map(() => "?").join(",");
 		let used = 0;
 		let unpriced = false;
-		for (const a of accounts) {
-			const agentBuys = new Set(this.db.all<{ id: number }>("SELECT id FROM proposal WHERE account_id = ? AND side = 'buy' AND author != ?", a.id, this.cfg.user).map((r) => r.id));
-			if (!agentBuys.size) continue;
-			const { rows, book } = this.ledger(a.id);
-			const byId = new Map(rows.map((t) => [t.id, t]));
-			for (const lots of book.openLots.values())
-				for (const l of lots) {
-					const t = byId.get(l.tradeId);
-					if (t?.proposal_id && agentBuys.has(t.proposal_id) && t.qty > 0) used += Math.round(((t.value_cents + t.fee_cents) * l.qty) / t.qty);
+		for (const a of agents.length ? accounts : []) {
+			const { rows } = this.ledger(a.id);
+			const ids = [...new Set(rows.map((t) => t.proposal_id).filter((x): x is number => x !== null))];
+			const byAgent = new Set(ids.length ? this.db.all<{ id: number }>(`SELECT id FROM proposal WHERE id IN (${ids.join(",")}) AND author IN (${inAgents})`, ...agents).map((r) => r.id) : []);
+			const pos = new Map<string, { agentQty: number; agentCost: number; ownQty: number }>();
+			const booked = new Map<number, number>();
+			for (const t of rows) {
+				const s = pos.get(t.symbol) ?? { agentQty: 0, agentCost: 0, ownQty: 0 };
+				pos.set(t.symbol, s);
+				const agent = t.proposal_id !== null && byAgent.has(t.proposal_id);
+				if (t.side === "buy") {
+					if (t.proposal_id !== null) booked.set(t.proposal_id, (booked.get(t.proposal_id) ?? 0) + t.qty);
+					if (agent) {
+						s.agentQty += t.qty;
+						s.agentCost += t.value_cents + t.fee_cents;
+					} else s.ownQty += t.qty;
+					continue;
 				}
-			for (const r of this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE account_id = ? AND side = 'buy' AND author != ? AND status IN ('pending',${RESERVING}) AND id != ?`, a.id, this.cfg.user, exclude ?? 0)) {
-				const qty = roundQty((r.approved_qty ?? r.qty) - (r.filled_qty ?? 0));
-				if (qty <= 0) continue;
+				const own = (n: number) => {
+					const x = Math.min(n, s.ownQty);
+					s.ownQty = roundQty(s.ownQty - x);
+					return n - x;
+				};
+				const ofAgents = (n: number) => {
+					const x = Math.min(n, s.agentQty);
+					if (s.agentQty > 0) s.agentCost -= (s.agentCost * x) / s.agentQty;
+					s.agentQty = roundQty(s.agentQty - x);
+					return n - x;
+				};
+				if (agent) own(ofAgents(t.qty));
+				else ofAgents(own(t.qty));
+			}
+			for (const s of pos.values()) if (s.agentQty > 1e-9) used += Math.round(s.agentCost);
+			const open = this.db.all<ProposalRow>(
+				`SELECT * FROM proposal WHERE account_id = ? AND side = 'buy' AND author IN (${inAgents}) AND id != ? AND (status IN ('pending',${RESERVING}) OR (status = 'filled' AND status_at > ?))`,
+				a.id, ...agents, exclude ?? 0, this.now() - 3 * 86_400_000,
+			);
+			for (const r of open) {
+				const qty = roundQty((r.status === "pending" ? r.qty : (r.approved_qty ?? r.qty)) - (booked.get(r.id) ?? 0));
+				if (qty <= 1e-9) continue;
 				const p = this.priced(r.symbol);
 				const fx = p?.fx ?? this.fx(this.instrument(r.symbol)?.currency ?? "");
 				const unit = r.limit_price ?? p?.price ?? r.quote_price;

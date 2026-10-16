@@ -141,8 +141,9 @@ export abstract class DeskBook extends DeskCore {
 
 	protected trades(accountId: string, limit = 500): Trade[] {
 		const book = this.book(accountId);
+		// toReversed: die Zeilen gehören dem Zwischenspeicher, ein reverse() drehte sie für alle anderen Leser mit um
 		return this.tradeRows(accountId)
-			.reverse()
+			.toReversed()
 			.slice(0, limit)
 			.map((t) => ({
 				id: t.id, accountId: t.account_id, symbol: t.symbol, side: t.side, qty: t.qty, price: t.price, currency: t.currency, fx: t.fx, valueCents: t.value_cents, feeCents: t.fee_cents,

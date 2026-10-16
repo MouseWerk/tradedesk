@@ -64,7 +64,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
 			<Dialog.Portal>
 				<Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay)]" />
 				<Dialog.Content
-					className="fixed top-[12vh] left-1/2 z-50 flex max-h-[min(560px,76vh)] w-[640px] max-w-[calc(100vw-24px)] -translate-x-1/2 animate-enter flex-col overflow-hidden rounded-xl border border-line bg-surface text-[13px] text-fg shadow-2xl outline-none max-sm:top-2"
+					className="fixed top-[12vh] left-1/2 z-50 flex max-h-[min(560px,76dvh)] w-[640px] max-w-[calc(100vw-24px)] -translate-x-1/2 animate-enter flex-col overflow-hidden rounded-xl border border-line bg-surface text-[13px] text-fg shadow-2xl outline-none max-sm:top-2"
 					aria-describedby={undefined}
 					data-testid="palette"
 					onCloseAutoFocus={(e) => {

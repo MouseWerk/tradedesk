@@ -8,7 +8,7 @@ import { Bot, Check, Clock, OctagonX, Radio, TriangleAlert, User, X } from "luci
 import type { AccountSummary, Proposal, ProposalStatus, QuoteInfo } from "@desk/shared";
 import { movePct, sideLabel, statusLabel } from "@desk/shared";
 import { de } from "@/i18n/de";
-import { live, refreshable, send } from "@/lib/api";
+import { live, refreshable, send, useRisk } from "@/lib/api";
 import { ago, dateTime, eur, inputNumber, num, numberError, parseDe, pct, price, qty as fmtQty } from "@/lib/format";
 import { orderResultText, proposalRisk } from "@/lib/orders";
 import { quoteLabel } from "@/lib/quotes";
@@ -40,7 +40,10 @@ export function useAction() {
 	const qc = useQueryClient();
 	const toast = useToast();
 	const [busy, setBusy] = useState(false);
-	const reload = () => void qc.invalidateQueries({ predicate: refreshable }, { cancelRefetch: false });
+	const reload = () => {
+		void qc.invalidateQueries({ predicate: refreshable }, { cancelRefetch: false });
+		void qc.invalidateQueries({ queryKey: ["analytics"] }, { cancelRefetch: false });
+	};
 	const run = async <T,>(url: string, method: "POST" | "PUT" | "DELETE", body: unknown, ok?: string | ((r: T) => string | null), undo?: { label: string; run: () => void }, opts: { refresh?: boolean } = {}): Promise<T | null> => {
 		setBusy(true);
 		const t0 = Date.now();
@@ -235,6 +238,7 @@ function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
 					<dd>{price(p.price, p.currency)}</dd>
 					<dt className="text-fg-3">{de.proposal.approve.estimated}</dt>
 					<dd>{de.proposal.approve.plusFee(eur(estimate(qtyNum)), eur(acc?.feeCents ?? 0))}</dd>
+					{p.side === "buy" && p.author !== acc?.owner && acc?.owner === "user" && (manual || liveMoney) && <BudgetFact />}
 					{p.side === "buy" && (
 						<>
 							<dt className="text-fg-3">{de.proposal.stopTarget}</dt>
@@ -489,5 +493,17 @@ export function QuoteTag({ quote, stale, className }: { quote: QuoteInfo | null 
 			{l.text}
 			<span className="sr-only">. {l.title}</span>
 		</span>
+	);
+}
+
+/** Im Freigabe-Dialog eines Agenten-Kaufs mit echtem Geld: was vom Agenten-Budget noch frei ist (diese Order schon eingerechnet). */
+function BudgetFact() {
+	const b = useRisk().data?.agentBudget;
+	if (!b) return null;
+	return (
+		<>
+			<dt className="text-fg-3">{de.proposal.approve.budget}</dt>
+			<dd data-testid="approve-budget">{de.proposal.approve.budgetValue(eur(b.freeCents), eur(b.budgetCents))}</dd>
+		</>
 	);
 }

@@ -60,6 +60,38 @@ describe("with a budget", () => {
 		expect(fx.desk.risk().agentBudget!.usedCents).toBe(0);
 	});
 
+	it("your own sale goes to your own shares first, the agents' stay counted (FIFO would close the oldest lot)", async () => {
+		fx.market.set("EUNL.DE", 45);
+		await fx.desk.tick();
+		const p = await buy(1, "tr", false);
+		await fx.desk.approve(p.proposal!.id, {});
+		fx.desk.fill(p.proposal!.id, { price: 45 });
+		await fx.desk.recordTrade("tr", { symbol: "EUNL.DE", side: "buy", qty: 2, price: 45 });
+		const own = fx.desk.detail("tr").positions.find((x) => x.symbol === "EUNL.DE")!.qty - 1;
+		await fx.desk.recordTrade("tr", { symbol: "EUNL.DE", side: "sell", qty: own, price: 45 });
+		expect(fx.desk.risk().agentBudget!.usedCents).toBe(4_600);
+		expect((await buy(2)).ok).toBe(false);
+	});
+
+	it("a broker order reported as filled but not booked yet still counts", async () => {
+		const a = fx.cfg.accounts.find((x) => x.id === "ibkr")! as { live: boolean };
+		a.live = true;
+		fx.cfg.liveTrading = true;
+		fx.broker.paper = false;
+		for (const p of fx.desk.proposals({ status: "pending" })) fx.desk.reject(p.id, "x");
+		fx.desk.setLimits("ibkr", { dailyLossPct: 50 });
+		fx.market.set("EUNL.DE", 45);
+		await fx.desk.tick();
+		const order = await fx.desk.submit({ author: "Atlas", accountId: "ibkr", symbol: "EUNL.DE", side: "buy", qty: 2, stopLoss: 39, confidence: 0.7, thesis: "x", orderType: "limit", limitPrice: 40 }, "cli");
+		await fx.desk.approve(order.proposal!.id, {});
+		const used = fx.desk.risk().agentBudget!.usedCents;
+		expect(used).toBe(8_000 + 200);
+		fx.broker.setRaw(fx.desk.proposal(order.proposal!.id).brokerOrderId!, "Filled");
+		await fx.desk.pollBroker("ibkr");
+		expect(fx.desk.proposal(order.proposal!.id).status).toBe("filled");
+		expect(fx.desk.risk().agentBudget!.usedCents).toBe(used);
+	});
+
 	it("is checked again on approval, without counting the order itself", async () => {
 		fx.market.set("EUNL.DE", 45);
 		await fx.desk.tick();
@@ -73,5 +105,17 @@ describe("with a budget", () => {
 		expect((await buy(5, "agent-atlas")).ok).toBe(true);
 		expect((await buy(5, "papier")).ok).toBe(true);
 		expect((await fx.desk.submit({ accountId: "papier", symbol: "EUNL.DE", side: "buy", qty: 5 }, "web", { dryRun: true })).ok).toBe(true);
+	});
+});
+
+describe("cached trade rows", () => {
+	it("keep their time order however often the depot is read (trades() used to reverse them in place)", () => {
+		const times = () => (fx.desk as unknown as { tradeRows(id: string): { time: number }[] }).tradeRows("tr").map((t) => t.time);
+		const before = times();
+		fx.desk.detail("tr");
+		fx.desk.detail("tr");
+		fx.desk.detail("tr");
+		expect(times()).toEqual(before);
+		expect(before).toEqual(before.toSorted((x, y) => x - y));
 	});
 });

@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { ChartRange, Cockpit, Proposal, ScanRow } from "@desk/shared";
 import { dayKey, ema, vwap } from "@desk/shared";
 import { useAnalysis, useChart, useWatchlist } from "@/lib/api";
-import { compact, date, hhmm, num, pct, price, tone } from "@/lib/format";
+import { compact, date, hhmm, num, pct, price, priceDigits, tone } from "@/lib/format";
 import { CandleChart, type Overlay, type RefLine } from "@/ui/charts";
 import { Card, Empty, Segmented, Skeleton, cn } from "@/ui/kit";
 import { QuoteTag } from "../common";
@@ -30,6 +30,7 @@ export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow
 	const chart = shown?.symbol === row.symbol ? shown : undefined;
 	const { data: analysis } = useAnalysis(row.symbol);
 	const a = analysis?.symbol === row.symbol ? analysis : undefined;
+	const dp = priceDigits(row.price ?? 1); // unter 1 vier Nachkommastellen, wie der Kurs selbst
 	const height = small ? 340 : 420;
 	const { data: watch } = useWatchlist();
 	const candles = chart?.candles ?? [];
@@ -73,14 +74,14 @@ export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow
 					<span className={tone(row.changePct)}>{pct(row.changePct)}</span>
 				</div>
 				<dl className="flex min-w-0 basis-full flex-wrap gap-x-5 gap-y-1 text-[12px] tnum">
-					<Kv k={de.analytics.col.day} v={`${num(row.dayLow)} – ${num(row.dayHigh)}`} extra={<RangeBar pos={row.rangePos} className="ml-2" />} />
+					<Kv k={de.analytics.col.day} v={`${num(row.dayLow, dp)} – ${num(row.dayHigh, dp)}`} extra={<RangeBar pos={row.rangePos} className="ml-2" />} />
 					<Kv k={de.scanner.sorts.gap} v={pct(row.gapPct)} />
 					<Kv k={de.ui.chart.volume} v={`${compact(row.volume)}${row.relVolume ? ` · ${row.relVolume.toLocaleString("de-DE", { maximumFractionDigits: 1 })}×` : ""}`} />
-					<Kv k={de.intraday.atr} v={a?.atr14 ? `${num(a.atr14)} (${pct(row.atrPct, { signed: false })})` : "–"} />
-					<Kv k={de.intraday.vwap} v={num(a?.vwap)} hint={a?.vwap && row.price ? (row.price >= a.vwap ? de.intraday.above : de.intraday.below) : undefined} />
-					<Kv k={de.intraday.ema} v={`${num(a?.ema9)} / ${num(a?.ema21)}`} hint={a?.ema9 && a.ema21 ? (a.ema9 >= a.ema21 ? de.intraday.emaAbove : de.intraday.emaBelow) : undefined} />
+					<Kv k={de.intraday.atr} v={a?.atr14 ? `${num(a.atr14, dp)} (${pct(row.atrPct, { signed: false })})` : "–"} />
+					<Kv k={de.intraday.vwap} v={num(a?.vwap, dp)} hint={a?.vwap && row.price ? (row.price >= a.vwap ? de.intraday.above : de.intraday.below) : undefined} />
+					<Kv k={de.intraday.ema} v={`${num(a?.ema9, dp)} / ${num(a?.ema21, dp)}`} hint={a?.ema9 && a.ema21 ? (a.ema9 >= a.ema21 ? de.intraday.emaAbove : de.intraday.emaBelow) : undefined} />
 					<Kv k={de.intraday.rsi} v={a?.rsi14 === null || a?.rsi14 === undefined ? "–" : num(a.rsi14, 0)} hint={a?.rsi14 ? (a.rsi14 >= 70 ? de.intraday.overbought : a.rsi14 <= 30 ? de.intraday.oversold : undefined) : undefined} />
-					<Kv k={de.intraday.prevClose} v={num(a?.prevClose)} />
+					<Kv k={de.intraday.prevClose} v={num(a?.prevClose, dp)} />
 				</dl>
 			</div>
 			<div className="flex flex-wrap items-center gap-3 px-4 pt-3">

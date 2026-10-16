@@ -19,6 +19,7 @@ export class Desk extends DeskAnalytics {
 			const s = this.summary(a);
 			const rows = this.tradeRows(a.id);
 			let openRisk = this.reserved(a.id).riskCents;
+			const boughtToday = new Set(rows.filter((t) => t.side === "buy" && t.time >= from).map((t) => t.symbol));
 			for (const p of this.positions(a, s)) {
 				const fx = this.priced(p.symbol)?.fx ?? null;
 				// offene Position mit Stop: was bis zum Stop noch verloren gehen kann, plus die Verkaufsgebühr
@@ -28,7 +29,7 @@ export class Desk extends DeskAnalytics {
 					accountId: a.id, symbol: p.symbol, name: p.name, currency: p.currency, qty: p.qty, avgPrice: p.avgPrice, price: p.price, nativePrice: p.nativePrice,
 					unrealizedCents: p.unrealizedCents, unrealizedPct: p.unrealizedPct, stopLoss: p.stopLoss, takeProfit: p.takeProfit,
 					r: avgNative !== null && p.nativePrice !== null ? rMultiple(avgNative, p.stopLoss, p.nativePrice) : null,
-					openedToday: rows.some((t) => t.symbol === p.symbol && t.side === "buy" && t.time >= from),
+					openedToday: boughtToday.has(p.symbol),
 				});
 			}
 			// Tagesverlust-Stopp in EUR auf den Stand von gestern, wie in der Risikoprüfung

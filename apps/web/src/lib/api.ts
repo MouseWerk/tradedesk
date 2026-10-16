@@ -105,8 +105,11 @@ export const keys = {
 	analytics: (account: string, from: string | null, to: string | null) => ["analytics", account, from ?? "", to ?? ""] as const,
 };
 
-/** Was ein Tick des Desks neu lädt: alles Angezeigte außer Kerzen (eigener Takt), Suche, News und Chat (kommt als Nachricht). */
-export const refreshable = (q: Query) => !["chart", "search", "news", "chat"].includes(String(q.queryKey[0]));
+/**
+ * Was ein Tick des Desks neu lädt: alles Angezeigte außer Kerzen (eigener Takt), Suche, News, Chat (kommt als Nachricht)
+ * und Auswertung (rechnet über den ganzen Verlauf; neu bei Ereignissen wie Ausführungen und Trades, sonst jede Minute).
+ */
+export const refreshable = (q: Query) => !["chart", "search", "news", "chat", "analytics"].includes(String(q.queryKey[0]));
 
 export const useOverview = () => useQuery({ queryKey: keys.overview, queryFn: () => getChecked("/api/overview", OverviewSchema), refetchInterval: 60_000 });
 export const useAccount = (id: string | undefined) => useQuery({ queryKey: keys.account(id ?? ""), queryFn: () => getChecked(`/api/accounts/${encodeURIComponent(id!)}`, AccountDetailSchema), enabled: !!id });
@@ -142,6 +145,7 @@ export const useAnalytics = (account: string, from: string | null, to: string | 
 		queryKey: keys.analytics(account, from, to),
 		queryFn: () => getChecked(`/api/analytics?${new URLSearchParams({ account, ...(from ? { from } : {}), ...(to ? { to } : {}) })}`, AnalyticsSchema),
 		placeholderData: (prev) => prev,
+		refetchInterval: 60_000, // der Live-Wert von heute; Trades und Ausführungen laden über ihre Ereignisse sofort neu
 	});
 export const useChat = () => useQuery({ queryKey: keys.chat, queryFn: () => getChecked("/api/chat?limit=300", ChatMessageSchema.array()), staleTime: Number.POSITIVE_INFINITY });
 
@@ -250,6 +254,7 @@ export function useLive(): LiveState {
 			es.addEventListener("tick", refresh);
 			es.addEventListener("event", (e) => {
 				refresh();
+				void qc.invalidateQueries({ queryKey: ["analytics"] }, { cancelRefetch: false });
 				const parsed = EventSchema.safeParse(parse((e as MessageEvent).data));
 				if (parsed.success && NOTIFY_KINDS.has(parsed.data.kind)) notify(de.api.notifyEvent(parsed.data.actor), (parsed.data as DeskEvent).text, `event-${parsed.data.id}-${parsed.data.time}`);
 			});

@@ -66,7 +66,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 				<Dialog.Portal>
 					<Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay)] backdrop-blur-[3px]" />
 					<Dialog.Content
-						className="fixed top-1/2 left-1/2 z-50 max-h-[calc(100vh-32px)] w-[460px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 animate-enter overflow-y-auto rounded-xl border border-line bg-surface p-5 shadow-2xl"
+						className="fixed top-1/2 left-1/2 z-50 max-h-[calc(100dvh-32px)] w-[460px] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 animate-enter overflow-y-auto rounded-xl border border-line bg-surface p-5 shadow-2xl"
 						data-testid="confirm"
 						onCloseAutoFocus={(e) => {
 							e.preventDefault();
@@ -117,7 +117,7 @@ export function FormDialog({ open, onOpenChange, title, description, children, o
 				<Dialog.Overlay className="fixed inset-0 z-50 bg-[var(--overlay)]" />
 				<Dialog.Content
 					ref={content}
-					className={cn("fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 animate-enter flex-col rounded-xl border border-line bg-surface shadow-2xl", wide ? "w-[640px]" : "w-[480px]")}
+					className={cn("fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-32px)] max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-1/2 animate-enter flex-col rounded-xl border border-line bg-surface shadow-2xl", wide ? "w-[640px]" : "w-[480px]")}
 					onCloseAutoFocus={(e) => {
 						e.preventDefault();
 						restoreFocus(opener.current);

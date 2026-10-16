@@ -56,7 +56,7 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 		if (!selected) return errs.fail(null, de.orders.ticket.noAccount);
 		if (!(qtyNum > 0)) return errs.fail("qty", numberError(qtyText) ?? de.proposal.qtyPositive);
 		if (type === "limit" && !(limitNum > 0)) return errs.fail("limit", numberError(limitText) ?? de.orders.ticket.limitMissing);
-		if (!body || pending || !check) return errs.fail(null, de.orders.ticket.checkRunning);
+		if (!body || pending || !check) return errs.fail(null, failed ?? de.orders.ticket.checkRunning);
 		if (!check.ok) return errs.fail(null, check.violations[0] ?? de.orders.ticket.checkBlocked);
 		const sent = body;
 		if (broker) {

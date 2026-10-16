@@ -25,6 +25,15 @@ export interface OrderBody {
 export function useDryRun(body: OrderBody | null, delay = 250): { check: Check | null; pending: boolean; failed: string | null } {
 	const key = body ? JSON.stringify(body) : null;
 	const [res, setRes] = useState<{ key: string; check: Check | null; failed: string | null } | null>(null);
+	// Server kurz nicht erreichbar: nach ein paar Sekunden von selbst noch einmal prüfen, sonst hinge das Formular, bis
+	// du ein Feld änderst
+	const [attempt, setAttempt] = useState(0);
+	const unreachable = res?.key === key && res.failed === de.orderResult.dryRun.unreachable;
+	useEffect(() => {
+		if (!unreachable) return;
+		const t = setTimeout(() => setAttempt((n) => n + 1), 3_000);
+		return () => clearTimeout(t);
+	}, [unreachable, res]);
 	useEffect(() => {
 		if (!key) return;
 		const ctl = new AbortController();
@@ -40,7 +49,7 @@ export function useDryRun(body: OrderBody | null, delay = 250): { check: Check |
 			clearTimeout(t);
 			ctl.abort();
 		};
-	}, [key, delay]);
+	}, [key, delay, attempt]);
 	const current = res && key && res.key === key ? res : null;
 	return { check: current?.check ?? null, pending: !!key && !current, failed: current?.failed ?? null };
 }

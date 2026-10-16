@@ -93,7 +93,7 @@ function Login({ onDone }: { onDone: () => void }) {
 			>
 				<h1 className="text-[15px] font-semibold">{de.auth.login}</h1>
 				<Field label={de.auth.pin} error={err} hint={" "}>
-					{(id) => <Input id={id} ref={ref} type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} aria-invalid={!!err} />}
+					{(id, a) => <Input id={id} {...a} ref={ref} type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} />}
 				</Field>
 				<Button type="submit" variant="primary" disabled={busy}>
 					{de.auth.login}
@@ -128,7 +128,7 @@ function Setup({ onDone }: { onDone: () => void }) {
 				<Field label={de.auth.code}>{(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" autoFocus spellCheck={false} />}</Field>
 				<Field label={de.auth.newPin}>{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} />}</Field>
 				<Field label={de.auth.repeatPin} error={err} hint={" "}>
-					{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value.replace(/\D/g, ""))} maxLength={12} aria-invalid={!!err} />}
+					{(id, a) => <Input id={id} {...a} type="password" inputMode="numeric" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value.replace(/\D/g, ""))} maxLength={12} />}
 				</Field>
 				<Button type="submit" variant="primary" disabled={busy}>
 					{de.auth.setup}

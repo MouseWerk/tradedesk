@@ -134,11 +134,11 @@ export default function PortfolioView() {
 			)}
 			{a?.kind === "manual" && (
 				<>
-					<TradeDialog open={dialog === "trade"} onOpenChange={(o) => setDialog(o ? "trade" : null)} account={a} />
+					<TradeDialog key={a.id} open={dialog === "trade"} onOpenChange={(o) => setDialog(o ? "trade" : null)} account={a} />
 					<ImportDialog open={dialog === "import"} onOpenChange={(o) => setDialog(o ? "import" : null)} account={a} />
 				</>
 			)}
-			{a && <CashDialog open={dialog === "cash"} onOpenChange={(o) => setDialog(o ? "cash" : null)} account={a} />}
+			{a && <CashDialog key={a.id} open={dialog === "cash"} onOpenChange={(o) => setDialog(o ? "cash" : null)} account={a} />}
 			<OrderTicket open={dialog === "order"} onOpenChange={(o) => setDialog(o ? "order" : null)} accounts={accounts} accountId={accountId} />
 		</Page>
 	);

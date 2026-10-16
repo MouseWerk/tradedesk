@@ -1,7 +1,7 @@
 // Risiko: Not-Aus und Grenzen je Depot. Änderungen gelten sofort (beim Verlassen des Feldes), mit Rückgängig.
 import { useEffect, useRef, useState } from "react";
 import { OctagonX, ShieldCheck } from "lucide-react";
-import type { RiskLimits } from "@desk/shared";
+import type { RiskData, RiskLimits } from "@desk/shared";
 import { useRisk } from "@/lib/api";
 import { eur, inputNumber, numberError, parseDe, pct } from "@/lib/format";
 import { Badge, Button, Card, Field, Input, Skeleton, cn } from "@/ui/kit";
@@ -54,19 +54,7 @@ export default function RiskView() {
 						<dd className="font-medium tnum">{de.risk.hours(data.proposalTtlHours)}</dd>
 					</div>
 				</dl>
-				<div className="border-t border-line px-4 py-3 text-[12.5px]" data-testid="agent-budget">
-					<div className="text-fg-3">{de.risk.agentBudget}</div>
-					{data.agentBudget ? (
-						<>
-							<div className="font-medium tnum">{de.risk.agentBudgetValue(eur(data.agentBudget.usedCents), eur(data.agentBudget.freeCents), eur(data.agentBudget.budgetCents))}</div>
-							<p className="text-[11.5px] text-fg-3">
-								{data.agentBudget.unpriced ? de.risk.agentBudgetUnpriced : de.risk.agentBudgetHint(data.accounts.filter((x) => data.agentBudget!.accounts.includes(x.account.id)).map((x) => x.account.name).join(", ") || "–")}
-							</p>
-						</>
-					) : (
-						<p className="text-[11.5px] text-fg-3">{de.risk.agentBudgetNone}</p>
-					)}
-				</div>
+				<AgentBudgetRow data={data} />
 				<p className="border-t border-line px-4 py-2 text-[11.5px] text-fg-3">{de.risk.configNote}</p>
 			</Card>
 			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(340px,100%),1fr))] gap-4">
@@ -112,7 +100,9 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 		const next = f.fromUi(v);
 		if (next === limits[f.key]) return;
 		const prev = limits[f.key];
-		await run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: next }, de.risk.changed(f.label, name), { label: de.portfolio.undo, run: () => void run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: prev }, de.risk.reset) });
+		const saved = await run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: next }, de.risk.changed(f.label, name), { label: de.portfolio.undo, run: () => void run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: prev }, de.risk.reset) });
+		// abgelehnt: das Feld zeigt wieder, was wirklich gilt – nie eine Grenze, die nicht gespeichert ist
+		if (!saved) setVals((x) => ({ ...x, [f.key]: f.toUi(prev) }));
 	};
 	return (
 		<Card title={name} aside={owner === "user" ? <Badge>{de.risk.yourDepot}</Badge> : <Badge>{de.risk.agentBadge(owner)}</Badge>}>
@@ -148,5 +138,28 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 			</label>
 			<p className="mt-2 text-[12px] text-fg-3 tnum">{de.risk.today(dayLossPct === null ? de.risk.noPrevDay : dayLossPct > 0 ? de.risk.dayLoss(pct(dayLossPct, { signed: false })) : de.risk.noLoss)}</p>
 		</Card>
+	);
+}
+
+/** Agenten-Budget: frei, gebunden, Balken (neutral), für welche Depots */
+function AgentBudgetRow({ data }: { data: RiskData }) {
+	const b = data.agentBudget;
+	const names = b ? data.accounts.filter((x) => b.accounts.includes(x.account.id)).map((x) => x.account.name) : [];
+	return (
+		<dl className="border-t border-line px-4 py-3 text-[12.5px]" data-testid="agent-budget">
+			<dt className="text-fg-3">{de.risk.agentBudget}</dt>
+			{b ? (
+				<>
+					<dd className="font-medium tnum">{de.risk.agentBudgetValue(eur(b.usedCents), eur(b.freeCents), eur(b.budgetCents))}</dd>
+					<dd className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+						<div className="h-full rounded-full bg-fg-3" style={{ width: `${Math.min(100, (b.usedCents / Math.max(1, b.budgetCents)) * 100)}%` }} />
+					</dd>
+					{b.unpriced && <dd className="mt-1 text-[11.5px] text-warn">{de.risk.agentBudgetUnpriced}</dd>}
+					<dd className="mt-1 text-[11.5px] text-fg-3">{names.length ? de.risk.agentBudgetHint(names.join(", ")) : de.risk.agentBudgetNoDepot}</dd>
+				</>
+			) : (
+				<dd className="text-[11.5px] text-fg-3">{de.risk.agentBudgetNone}</dd>
+			)}
+		</dl>
 	);
 }
