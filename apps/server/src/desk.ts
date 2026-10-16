@@ -580,7 +580,7 @@ export class Desk extends EventEmitter {
 		return {
 			id: r.id, accountId: r.account_id, author: r.author, symbol: r.symbol, name: i?.name ?? r.symbol, currency: i?.currency ?? "EUR", side: r.side, qty: r.qty, orderType: r.order_type,
 			limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, confidence: r.confidence, thesis: r.thesis, status: r.status, reason: r.reason, quotePrice: r.quote_price,
-			price: p?.price ?? null, estimateCents: orderValueCents(qty, unit, p?.fx ?? this.fx(i?.currency ?? "EUR") ?? 1), warnings: JSON.parse(r.warnings) as string[], createdAt: r.created_at,
+			price: p?.price ?? null, estimateCents: orderValueCents(qty, unit, fx ?? 1) /* nur Anzeige */, warnings: JSON.parse(r.warnings) as string[], createdAt: r.created_at,
 			decidedAt: r.decided_at, decidedBy: r.decided_by, approvedQty: r.approved_qty, expiresAt: r.expires_at, fillPrice: r.fill_price,
 			brokerOrderId: r.broker_order_id, brokerMessage: r.broker_message, filledQty: r.filled_qty,
 			...this.riskOf(r, fx, equityCents ?? this.summary(this.account(r.account_id)).equityCents),
@@ -1708,7 +1708,10 @@ export class Desk extends EventEmitter {
 		if (this.ticking) return this.ticking;
 		this.ticking = (async () => {
 			try {
-				await this.refresh(this.trackedSymbols());
+				const tracked = this.trackedSymbols();
+				// Fehler von Symbolen, die niemand mehr verfolgt, nicht ewig melden (Wechselkurse bleiben, die hängen an Beständen)
+				for (const s of this.quoteErrors.keys()) if (!s.endsWith("=X") && !tracked.includes(s)) this.quoteErrors.delete(s);
+				await this.refresh(tracked);
 				await this.refreshDaily(this.scanSymbols().filter((s) => !this.dailyStat(s)).slice(0, 3)).catch(() => undefined);
 				for (const id of this.brokers.keys()) await this.pollBroker(id).catch((e) => console.error(`broker ${id}:`, (e as Error).message));
 				this.db.tx(() => {
