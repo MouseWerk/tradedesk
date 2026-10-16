@@ -120,3 +120,4 @@ has data, keeps Yahoo for everything else (meta, sessions, FX, crypto, failures,
 - TODO push: IBKR's websocket streaming instead of polling the snapshot (not verified here).
 - TODO meta from IBKR (contract details, trading hours) so Yahoo is not needed for IBKR symbols.
 - TODO show `lastError` of the feed in the UI.
+- TODO a conid lookup that fails (e.g. before the gateway login) is retried only after an hour; until then that symbol stays on Yahoo.
