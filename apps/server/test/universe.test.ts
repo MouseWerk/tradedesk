@@ -93,3 +93,15 @@ describe("agentDepots: false", () => {
 		expect(r.proposal!.status).toBe("pending");
 	});
 });
+
+describe("a depot removed from config.json", () => {
+	it("keeps its rows in the database but breaks no list and no tick", async () => {
+		fx.cfg.accounts = fx.cfg.accounts.filter((a) => a.owner === "user"); // Agenten-Papierdepots mit Vorschlägen fallen weg
+		expect(fx.desk.proposals().every((p) => fx.cfg.accounts.some((a) => a.id === p.accountId))).toBe(true);
+		await fx.desk.tick();
+		expect((await deskHttp(fx).get("/api/proposals?status=pending")).status).toBe(200);
+		expect(fx.desk.overview().pending).toBe(fx.desk.proposals({ status: "pending" }).length);
+		fx.desk.cockpit();
+		fx.desk.agentsData();
+	});
+});

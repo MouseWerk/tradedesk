@@ -187,7 +187,7 @@ export abstract class DeskBook extends DeskCore {
 			quotesAt: this.quotesAt,
 			accounts: summaries,
 			curve,
-			pending: this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE status = 'pending'")!.n,
+			pending: this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM proposal WHERE status = 'pending' AND ${this.knownAccounts()}`)!.n,
 			events: this.events(30),
 			failedQuotes: [...this.quoteErrors.keys()].sort(),
 			quoteFeed: this.feed.source,

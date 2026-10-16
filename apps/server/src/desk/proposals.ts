@@ -59,7 +59,7 @@ export abstract class DeskProposals extends DeskMarket {
 	}
 
 	proposals(opts: { status?: string; author?: string; limit?: number } = {}): Proposal[] {
-		const where: string[] = [];
+		const where: string[] = [this.knownAccounts()];
 		const params: unknown[] = [];
 		if (opts.status === "active") where.push(`status IN ('pending','open','placed','sending','confirm')`);
 		else if (opts.status) {
@@ -426,7 +426,7 @@ export abstract class DeskProposals extends DeskMarket {
 	/** Offene Papier-Orders: Limits, sobald der Kurs sie erreicht, Market-Orders zur Eröffnung – nur zur Handelszeit. */
 	protected fillLimits() {
 		if (this.killSwitch) return;
-		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'open' ORDER BY id")) {
+		for (const r of this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE status = 'open' AND ${this.knownAccounts()} ORDER BY id`)) {
 			if (!this.inSession(r.symbol) || this.quoteProblem(r.symbol)) continue; // warten statt auf altem Kurs ausführen
 			const p = this.priced(r.symbol);
 			if (!p || (r.limit_price && !crossed(r.side, p.price, r.limit_price))) continue;
@@ -469,7 +469,7 @@ export abstract class DeskProposals extends DeskMarket {
 
 	/** Stop-Loss und Kursziel sind Hinweise an dich, keine automatischen Orders. */
 	protected checkStops() {
-		const rows = this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'filled' AND side = 'buy' AND closed_at IS NULL AND ((stop_loss IS NOT NULL AND stop_hit_at IS NULL) OR (take_profit IS NOT NULL AND target_hit_at IS NULL))");
+		const rows = this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE status = 'filled' AND side = 'buy' AND closed_at IS NULL AND ${this.knownAccounts()} AND ((stop_loss IS NOT NULL AND stop_hit_at IS NULL) OR (take_profit IS NOT NULL AND target_hit_at IS NULL))`);
 		const held = new Map<string, Set<number>>(); // Depot → Vorschläge mit gehaltenen Losen
 		const booked = new Set(rows.length ? this.db.all<{ p: number }>(`SELECT DISTINCT proposal_id AS p FROM trade WHERE deleted_at IS NULL AND proposal_id IN (${rows.map((r) => r.id).join(",")})`).map((x) => x.p) : []);
 		for (const r of rows) {

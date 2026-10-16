@@ -104,6 +104,15 @@ export abstract class DeskCore extends EventEmitter {
 		this.quotesAt = last?.fetched_at ?? null;
 	}
 
+	/**
+	 * SQL-Bedingung: nur Zeilen von Depots, die config.json noch kennt. Ein entferntes Depot (z. B. Papier abgeschaltet)
+	 * behält seine Daten in der Datenbank, taucht aber nirgends mehr auf – und bricht keine Liste oder keinen Takt ab.
+	 * Die IDs sind von cleanConfig geprüft ([a-z0-9-]), das Einsetzen ist sicher.
+	 */
+	protected knownAccounts(col = "account_id"): string {
+		return `${col} IN (${this.cfg.accounts.map((a) => `'${a.id}'`).join(",") || "''"})`;
+	}
+
 	account(id: string): Account {
 		const a = this.cfg.accounts.find((x) => x.id === id);
 		if (!a) throw new DeskError(de.core.unknownDepot(id), 404);

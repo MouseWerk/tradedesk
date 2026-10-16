@@ -34,7 +34,7 @@ export abstract class DeskJournal extends DeskManual {
 
 	agentsData(): AgentsData {
 		const agents = this.cfg.agents.map((name) => {
-			const count = (status: string) => this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND ${status}`, name)!.n;
+			const count = (status: string) => this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND ${status} AND ${this.knownAccounts()}`, name)!.n;
 			const last = this.db.get<{ t: number | null }>("SELECT MAX(t) AS t FROM (SELECT MAX(created_at) AS t FROM proposal WHERE author = ? UNION ALL SELECT MAX(time) FROM journal WHERE author = ?)", name, name);
 			const a = this.cfg.accounts.find((x) => x.owner === name);
 			const decisions = { pending: count("status = 'pending'"), approved: count("status IN ('open','placed','filled')"), rejected: count("status IN ('rejected','stale')"), lastActive: last?.t ?? null };

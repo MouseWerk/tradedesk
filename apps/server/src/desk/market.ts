@@ -105,7 +105,7 @@ export abstract class DeskMarket extends DeskRisk {
 
 	trackedSymbols(): string[] {
 		const watch = this.db.all<{ symbol: string }>("SELECT symbol FROM watch").map((r) => r.symbol);
-		const active = this.db.all<{ symbol: string }>(`SELECT DISTINCT symbol FROM proposal WHERE status IN ('pending','open','placed','sending','confirm')`).map((r) => r.symbol);
+		const active = this.db.all<{ symbol: string }>(`SELECT DISTINCT symbol FROM proposal WHERE status IN ('pending','open','placed','sending','confirm') AND ${this.knownAccounts()}`).map((r) => r.symbol);
 		return [...new Set([...watch, ...this.heldSymbols(), ...active])];
 	}
 
