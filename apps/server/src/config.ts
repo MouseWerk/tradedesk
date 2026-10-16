@@ -27,6 +27,7 @@ export interface Config {
 	maxQuoteAgeSec: number; // während der Handelszeit entscheidet kein älterer Kurs (Vorschlag, Freigabe, Bestätigung, Limit)
 	universe: string[]; // Scanner-Universum neben der Watchlist ("universe" in config.json, sonst src/universe.ts)
 	universeIntervalSec: number; // so oft wird das Universum abgefragt – langsam, sonst sperrt Yahoo
+	agentDepots: boolean; // je Agent ein Papierdepot (Standard); false: nur deine Depots, kein Spielgeld
 	autoPaper: boolean; // Agenten handeln ihr eigenes Papierdepot ohne Freigabe (nur Papier, nie echtes Geld)
 	agentBudgetCents: number | null; // "agentBudgetEur": so viel dürfen Agenten-Käufe mit echtem Geld zusammen binden; null: ohne Grenze
 	liveTrading: boolean; // Hauptschalter: Orders mit echtem Geld nur, wenn true (IBKR-Papierkonten gehen immer)
@@ -101,7 +102,7 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		const name = typeof a?.name === "string" ? a.name.trim() : "";
 		if (!NAME.test(name) || name.toLowerCase() === user.toLowerCase() || agents.some((x) => x.toLowerCase() === name.toLowerCase())) continue;
 		agents.push(name);
-		accounts.push({ id: agentAccountId(name), name: de.config.agentDepot(name), kind: "paper", owner: name, broker: de.config.paperBroker, feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000), live: false });
+		if (raw.agentDepots !== false) accounts.push({ id: agentAccountId(name), name: de.config.agentDepot(name), kind: "paper", owner: name, broker: de.config.paperBroker, feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000), live: false });
 	}
 	return {
 		...base,
@@ -120,6 +121,7 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		maxQuoteAgeSec: Math.trunc(clampNum(raw.maxQuoteAgeSec, 120, 30, 3600)),
 		universe: Array.isArray(raw.universe) ? [...new Set(raw.universe.filter((s): s is string => typeof s === "string" && /^[A-Za-z0-9.=^-]{1,24}$/.test(s.trim())).map((s) => s.trim().toUpperCase()))].slice(0, 500) : [...DEFAULT_UNIVERSE],
 		universeIntervalSec: Math.trunc(clampNum(raw.universeIntervalSec, 300, 120, 3600)),
+		agentDepots: raw.agentDepots !== false,
 		autoPaper: raw.autoPaper === true,
 		agentBudgetCents: typeof raw.agentBudgetEur === "number" && Number.isFinite(raw.agentBudgetEur) && raw.agentBudgetEur > 0 ? Math.round(Math.min(raw.agentBudgetEur, 10_000_000) * 100) : null,
 		liveTrading: raw.liveTrading === true,

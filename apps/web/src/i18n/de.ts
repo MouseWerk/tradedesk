@@ -535,6 +535,7 @@ export const de = {
 		active: (ago: string) => `aktiv ${ago}`,
 		neverActive: "noch nie aktiv",
 		equity: (equity: string) => `${equity} Depotwert`,
+		noDepot: "kein eigenes Depot – schlägt nur für deine Depots vor",
 		winRate: "Trefferquote",
 		closed: (count: number) => `${thousands(count)} geschlossen`,
 		approved: "Freigegeben",

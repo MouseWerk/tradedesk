@@ -34,12 +34,15 @@ export abstract class DeskJournal extends DeskManual {
 
 	agentsData(): AgentsData {
 		const agents = this.cfg.agents.map((name) => {
-			const a = this.cfg.accounts.find((x) => x.owner === name)!;
+			const count = (status: string) => this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND ${status}`, name)!.n;
+			const last = this.db.get<{ t: number | null }>("SELECT MAX(t) AS t FROM (SELECT MAX(created_at) AS t FROM proposal WHERE author = ? UNION ALL SELECT MAX(time) FROM journal WHERE author = ?)", name, name);
+			const a = this.cfg.accounts.find((x) => x.owner === name);
+			const decisions = { pending: count("status = 'pending'"), approved: count("status IN ('open','placed','filled')"), rejected: count("status IN ('rejected','stale')"), lastActive: last?.t ?? null };
+			// ohne eigenes Depot: nur die Vorschläge zählen (ausgeführt sind sie in deinen Depots)
+			if (!a) return { name, accountId: null, equityCents: 0, returnPct: null, curve: [], trades: count("status = 'filled'"), closed: 0, winRate: null, ...decisions };
 			const s = this.summary(a);
 			const book = this.book(a.id);
 			const closed = [...book.realizedBySell.values()];
-			const count = (status: string) => this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND ${status}`, name)!.n;
-			const last = this.db.get<{ t: number | null }>("SELECT MAX(t) AS t FROM (SELECT MAX(created_at) AS t FROM proposal WHERE author = ? UNION ALL SELECT MAX(time) FROM journal WHERE author = ?)", name, name);
 			return {
 				name,
 				accountId: a.id,
@@ -49,10 +52,7 @@ export abstract class DeskJournal extends DeskManual {
 				trades: this.tradeRows(a.id).length,
 				closed: closed.length,
 				winRate: closed.length ? (closed.filter((x) => x > 0).length / closed.length) * 100 : null,
-				pending: count("status = 'pending'"),
-				approved: count("status IN ('open','placed','filled')"),
-				rejected: count("status IN ('rejected','stale')"),
-				lastActive: last?.t ?? null,
+				...decisions,
 			};
 		});
 		const you = this.cfg.accounts.filter((a) => a.owner === "user").map((a) => {

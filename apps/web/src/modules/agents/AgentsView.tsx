@@ -79,9 +79,9 @@ export default function AgentsView() {
 										<div className="text-[22px] font-semibold tnum">
 											<span className={tone(a.returnPct)}>{pct(a.returnPct)}</span>
 										</div>
-										<div className="text-[12px] text-fg-3 tnum">{de.agents.equity(eur(a.equityCents))}</div>
+										<div className="text-[12px] text-fg-3 tnum">{a.accountId ? de.agents.equity(eur(a.equityCents)) : de.agents.noDepot}</div>
 									</div>
-									<Sparkline values={a.curve.map((p) => p.equityCents)} color={i < 4 ? SERIES[i + 1] : "var(--fg-2)"} className="ml-auto h-10 w-32" />
+									{a.curve.length > 1 && <Sparkline values={a.curve.map((p) => p.equityCents)} color={i < 4 ? SERIES[i + 1] : "var(--fg-2)"} className="ml-auto h-10 w-32" />}
 								</div>
 								<dl className="mt-4 grid grid-cols-3 gap-3 text-[12px]">
 									<div>
@@ -101,9 +101,11 @@ export default function AgentsView() {
 									</div>
 								</dl>
 								<div className="mt-4 flex gap-3 text-[12.5px]">
-									<Link to="/portfolio" search={{ account: a.accountId }} className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
-										{de.agents.viewDepot}
-									</Link>
+									{a.accountId && (
+										<Link to="/portfolio" search={{ account: a.accountId }} className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
+											{de.agents.viewDepot}
+										</Link>
+									)}
 									{a.pending > 0 && (
 										<Link to="/orders" className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
 											{de.agents.pendingProposals(a.pending)}

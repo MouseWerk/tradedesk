@@ -310,7 +310,7 @@ export type JournalEntry = z.infer<typeof JournalEntrySchema>;
 
 export const AgentSummarySchema = z.object({
 	name: z.string(),
-	accountId: z.string(),
+	accountId: z.string().nullable(), // null: ohne eigenes Papierdepot (config "agentDepots": false)
 	equityCents: z.number().int(),
 	returnPct: z.number().nullable(),
 	curve: z.array(CurvePointSchema),

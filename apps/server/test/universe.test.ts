@@ -80,3 +80,16 @@ describe("autoPaper", () => {
 		expect(r.proposal).toBeNull();
 	});
 });
+
+describe("agentDepots: false", () => {
+	it("gives agents no paper depot; they still propose for yours and show up on the agents page", async () => {
+		const cfg = cleanConfig({ accounts: [{ id: "revolut", kind: "manual", broker: "Revolut" }], agents: ["Atlas"], agentDepots: false }, base);
+		expect(cfg.accounts.map((a) => a.id)).toEqual(["revolut"]);
+		expect(cleanConfig({ agents: ["Atlas"] }, base).accounts.map((a) => a.id)).toContain("agent-atlas");
+		fx.cfg.accounts = fx.cfg.accounts.filter((a) => a.owner === "user");
+		const a = fx.desk.agentsData().agents.find((x) => x.name === "Atlas")!;
+		expect(a).toMatchObject({ accountId: null, equityCents: 0, curve: [] });
+		const r = await fx.desk.submit({ author: "Atlas", accountId: "tr", symbol: "SAP.DE", side: "buy", qty: 1, stopLoss: 190, confidence: 0.7, thesis: "x" }, "cli");
+		expect(r.proposal!.status).toBe("pending");
+	});
+});

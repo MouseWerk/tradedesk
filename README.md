@@ -114,6 +114,7 @@ computer.
 | `liveTrading` | `false` by default; must be `true` before orders go to a real-money broker account |
 | `universe` | optional list of symbols the scanner watches besides the watchlist (default: about 150 large stocks, `apps/server/src/universe.ts`); `[]` turns it off |
 | `universeIntervalSec` | how often the universe is fetched, default 300 (at least 120 – faster gets you blocked by Yahoo) |
+| `agentDepots` | `false`: agents get no paper depot of their own – no play money, they only propose for your depots |
 | `autoPaper` | `true`: agents trade their own paper depot without approval (paper only; your depots always wait for you) |
 | `agentBudgetEur` | optional; the most all agents together may tie up in your real-money accounts (manual and live broker): waiting, approved and held agent buys at cost with fees. Without it only the per-account limits apply |
 | `agents` | Agent names; each gets a paper account `agent-<name>` with `startCashEur` |
