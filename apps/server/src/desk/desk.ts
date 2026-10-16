@@ -1,11 +1,12 @@
-// Der Desk: alle Module zusammen, dazu Cockpit und Takt (Kurse, Broker-Abruf, Limits, Abläufe, Hinweise, Tagesstand).
+// Der Desk: alle Module zusammen (core → book → risk → market → proposals → broker → manual → journal → analytics),
+// dazu Cockpit und Takt (Kurse, Broker-Abruf, Limits, Abläufe, Hinweise, Tagesstand).
 import type { Cockpit, CockpitPosition } from "@desk/shared";
 import { cents, dayKey, orderValueCents, rMultiple } from "@desk/shared";
-import { DeskJournal } from "./journal.ts";
+import { DeskAnalytics } from "./analytics.ts";
 
 const BROKER_KEEPALIVE_MS = 60_000; // IBKR empfiehlt etwa einmal je Minute /tickle, unabhängig vom Kurstakt
 
-export class Desk extends DeskJournal {
+export class Desk extends DeskAnalytics {
 	private timer: NodeJS.Timeout | null = null;
 	private ticking: Promise<void> | null = null;
 

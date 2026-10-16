@@ -72,6 +72,28 @@ export interface Book {
 	sellsCents: number; // Summe Verkaufswert − Gebühr
 	oversold: Map<number, number>; // Verkauf → Stück über den Bestand zu seinem Zeitpunkt (sollte leer sein)
 	openLots: Map<string, { tradeId: number; qty: number }[]>; // noch gehaltene Lose je Symbol, ältestes zuerst
+	closed: ClosedLot[]; // geschlossene Teile von Losen in der Reihenfolge der Verkäufe (Auswertung)
+}
+
+/**
+ * Ein geschlossener Trade: der Teil eines Kauf-Loses, den ein Verkauf nach FIFO geschlossen hat. Ein Verkauf über zwei
+ * Lose ergibt zwei, ein Teilverkauf eines Loses einen (der Rest bleibt offen). Einstand und Erlös sind die Anteile, die
+ * buildBook ohnehin rechnet – die Summe über die Teile eines Verkaufs ist genau sein realisiertes Ergebnis.
+ */
+export interface ClosedLot {
+	buyId: number;
+	sellId: number;
+	symbol: string;
+	qty: number;
+	entryTime: number;
+	exitTime: number;
+	entryPrice: number; // EUR je Stück ohne Gebühr (gebuchter Kaufwert / Stück)
+	exitPrice: number; // EUR je Stück ohne Gebühr (gebuchter Verkaufswert / Stück)
+	costCents: number; // anteiliger Einstand inkl. anteiliger Kaufgebühr
+	proceedsCents: number; // anteiliger Erlös nach anteiliger Verkaufsgebühr
+	buyFeeCents: number;
+	sellFeeCents: number;
+	pnlCents: number; // proceedsCents − costCents
 }
 
 interface Lot {
@@ -79,6 +101,19 @@ interface Lot {
 	qty: number;
 	price: number;
 	costCents: number;
+	feeCents: number; // noch nicht zugeordneter Teil der Kaufgebühr (steckt in costCents)
+	time: number;
+}
+
+/** Betrag in ganzen Cent nach Gewichten aufteilen; der letzte Teil bekommt den Rest, die Summe bleibt genau. */
+function split(total: number, weights: number[], sum: number): number[] {
+	let left = total;
+	return weights.map((w, i) => {
+		if (i === weights.length - 1) return left;
+		const part = Math.round((total * w) / sum);
+		left -= part;
+		return part;
+	});
 }
 
 /** Bestand nach FIFO (wie das deutsche Steuerrecht). Verkäufe über den Bestand hinaus zählen nur bis zum Bestand. */
@@ -90,6 +125,7 @@ export function buildBook(trades: TradeLike[]): Book {
 	let feesCents = 0;
 	let buysCents = 0;
 	let sellsCents = 0;
+	const closed: ClosedLot[] = [];
 	const sorted = [...trades].sort((a, b) => a.time - b.time || a.id - b.id);
 	for (const t of sorted) {
 		feesCents += t.feeCents;
@@ -98,18 +134,23 @@ export function buildBook(trades: TradeLike[]): Book {
 		if (t.side === "buy") {
 			buysCents += t.valueCents + t.feeCents;
 			// Preis je Stück in EUR aus dem gebuchten Wert: bei Trade Republic kauft man AAPL in EUR, notiert ist sie in USD
-			list.push({ tradeId: t.id, qty: t.qty, price: t.valueCents / 100 / t.qty, costCents: t.valueCents + t.feeCents });
+			list.push({ tradeId: t.id, qty: t.qty, price: t.valueCents / 100 / t.qty, costCents: t.valueCents + t.feeCents, feeCents: t.feeCents, time: t.time });
 			continue;
 		}
 		sellsCents += t.valueCents - t.feeCents;
 		let left = t.qty;
 		let cost = 0;
+		const parts: { lot: Lot; take: number; cost: number; fee: number }[] = [];
 		while (left > 1e-9 && list.length) {
 			const lot = list[0];
 			const take = Math.min(lot.qty, left);
-			const part = take >= lot.qty - 1e-9 ? lot.costCents : Math.round((lot.costCents * take) / lot.qty);
+			const whole = take >= lot.qty - 1e-9;
+			const part = whole ? lot.costCents : Math.round((lot.costCents * take) / lot.qty);
+			const fee = whole ? lot.feeCents : Math.round((lot.feeCents * take) / lot.qty);
+			parts.push({ lot, take, cost: part, fee });
 			cost += part;
 			lot.costCents -= part;
+			lot.feeCents -= fee;
 			lot.qty = roundQty(lot.qty - take);
 			left = roundQty(left - take);
 			if (lot.qty <= 1e-9) list.shift();
@@ -121,6 +162,18 @@ export function buildBook(trades: TradeLike[]): Book {
 		const realized = proceeds - cost;
 		realizedBySell.set(t.id, realized);
 		realizedCents += realized;
+		if (parts.length) {
+			const sellFee = soldQty >= t.qty - 1e-9 ? t.feeCents : Math.round((t.feeCents * soldQty) / t.qty);
+			const takes = parts.map((p) => p.take);
+			const proceedsParts = split(proceeds, takes, soldQty);
+			const feeParts = split(sellFee, takes, soldQty);
+			parts.forEach((p, i) =>
+				closed.push({
+					buyId: p.lot.tradeId, sellId: t.id, symbol: t.symbol, qty: p.take, entryTime: p.lot.time, exitTime: t.time, entryPrice: p.lot.price, exitPrice: t.valueCents / 100 / t.qty,
+					costCents: p.cost, proceedsCents: proceedsParts[i], buyFeeCents: p.fee, sellFeeCents: feeParts[i], pnlCents: proceedsParts[i] - p.cost,
+				}),
+			);
+		}
 	}
 	const holdings = new Map<string, Holding>();
 	const openLots = new Map<string, { tradeId: number; qty: number }[]>();
@@ -132,7 +185,7 @@ export function buildBook(trades: TradeLike[]): Book {
 		const avgPrice = list.reduce((s, l) => s + l.qty * l.price, 0) / qty;
 		holdings.set(symbol, { symbol, qty, costCents, avgPrice });
 	}
-	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents, oversold, openLots };
+	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents, oversold, openLots, closed };
 }
 
 /** Verkäufe, die zu ihrem Zeitpunkt mehr Stück verkaufen, als im Bestand waren (Trade-ID → Stück zu viel). Wie buildBook sortiert. */

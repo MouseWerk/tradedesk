@@ -300,6 +300,9 @@ export function createApp(desk: Desk) {
 	});
 	app.post("/api/chat", async (c) => c.json({ ok: true, message: desk.say(await body(c), c.get("origin")) }));
 
+	/* Auswertung: account = Depot-ID, "mine" (Standard) oder "all"; from/to als JJJJ-MM-TT (Ortszeit) */
+	app.get("/api/analytics", (c) => c.json(desk.analytics({ account: c.req.query("account"), from: c.req.query("from"), to: c.req.query("to") })));
+
 	/* Agenten und Journal */
 	app.get("/api/agents", (c) => c.json(desk.agentsData()));
 	app.get("/api/journal", (c) => c.json(desk.journal({ author: c.req.query("author"), symbol: c.req.query("symbol"), limit: int(c.req.query("limit"), 100, 1, 500) })));

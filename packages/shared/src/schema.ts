@@ -458,3 +458,116 @@ export const ReconcileSchema = z.object({
 	cashNote: z.string().nullable(), // warum das Cash nicht verglichen wird (z. B. Basiswährung nicht EUR)
 });
 export type Reconcile = z.infer<typeof ReconcileSchema>;
+
+/* ------------------------------------------------------------------ Auswertung */
+
+/**
+ * Ein geschlossener Trade (GET /api/analytics): der Teil eines Kauf-Loses, den ein Verkauf nach FIFO geschlossen hat
+ * (buildBook). Einstieg = Zeit und Kurs des Loses, Ausstieg = der Verkauf. Ein Verkauf über zwei Lose ergibt zwei
+ * geschlossene Trades, ein Teilverkauf einen über die verkaufte Stückzahl (der Rest des Loses bleibt offen). Einstand
+ * und Erlös sind anteilig inkl. Gebühren; die Summe über die Teile eines Verkaufs ist genau sein realisiertes Ergebnis.
+ */
+export const ClosedTradeSchema = z.object({
+	accountId: z.string(),
+	symbol: z.string(),
+	name: z.string(),
+	author: z.string(), // wer den Einstieg entschieden hat: Autor des Vorschlags hinter dem Kauf, sonst der Besitzer des Depots
+	buyTradeId: z.number().int(),
+	sellTradeId: z.number().int(),
+	proposalId: z.number().int().nullable(), // Vorschlag hinter dem Kauf
+	qty: z.number(),
+	entryTime: z.number(),
+	exitTime: z.number(),
+	entryPrice: z.number(), // EUR je Stück ohne Gebühr
+	exitPrice: z.number(), // EUR je Stück ohne Gebühr
+	costCents: z.number().int(), // Einstand inkl. anteiliger Kaufgebühr
+	proceedsCents: z.number().int(), // Erlös nach anteiliger Verkaufsgebühr
+	feesCents: z.number().int(), // anteilige Kauf- und Verkaufsgebühr
+	pnlCents: z.number().int(), // proceedsCents − costCents
+	holdMs: z.number(),
+	stopLoss: z.number().nullable(), // Stop des Vorschlags (Wertpapierwährung)
+	riskCents: z.number().int().nullable(), // Verlust bis zum Stop inkl. beider anteiligen Gebühren; null ohne Stop
+	r: z.number().nullable(), // pnlCents / riskCents; null ohne Stop, mit Stop über dem Einstieg oder Kauf in anderer Währung als der Stop
+});
+export type ClosedTrade = z.infer<typeof ClosedTradeSchema>;
+
+/** Kennzahlen über geschlossene Trades. Gewinn: pnlCents > 0, Verlust: < 0 (genau 0 zählt zu keinem). */
+export const TradeStatsSchema = z.object({
+	trades: z.number().int(),
+	wins: z.number().int(),
+	losses: z.number().int(),
+	winRate: z.number().nullable(), // wins / trades in %
+	pnlCents: z.number().int(),
+	grossProfitCents: z.number().int(), // Summe der Gewinne
+	grossLossCents: z.number().int(), // Summe der Verluste (≤ 0)
+	profitFactor: z.number().nullable(), // Gewinne / |Verluste|; null ohne Verlust
+	expectancyCents: z.number().int().nullable(), // Ergebnis je Trade
+	expectancyR: z.number().nullable(), // mittleres R der Trades mit R
+	rTrades: z.number().int(), // Trades mit bekanntem R
+	avgWinCents: z.number().int().nullable(),
+	avgLossCents: z.number().int().nullable(), // negativ
+	largestWinCents: z.number().int().nullable(),
+	largestLossCents: z.number().int().nullable(),
+	avgHoldMs: z.number().nullable(),
+	feesCents: z.number().int(),
+});
+export type TradeStats = z.infer<typeof TradeStatsSchema>;
+
+/**
+ * Kurve mit Drawdown. Ergebnis = Equity − Einzahlungen (Ein- und Auszahlungen sind kein Gewinn oder Verlust). Spitze =
+ * höchstes Ergebnis seit Beginn des Zeitraums; Drawdown = Ergebnis − Spitze (≤ 0), in % von (Einzahlungen des Tages +
+ * Spitze), also dem Depotwert, den du zur Spitze mit den heutigen Einzahlungen hättest.
+ */
+export const AnalyticsPointSchema = CurvePointSchema.extend({
+	resultCents: z.number().int(),
+	peakCents: z.number().int(),
+	drawdownCents: z.number().int(),
+	drawdownPct: z.number().nullable(),
+});
+export type AnalyticsPoint = z.infer<typeof AnalyticsPointSchema>;
+
+export const MaxDrawdownSchema = z.object({
+	cents: z.number().int(), // tiefster Drawdown (≤ 0)
+	pct: z.number().nullable(), // dessen Prozent
+	peakDay: z.string(),
+	troughDay: z.string(),
+	recoveryDay: z.string().nullable(), // erster Tag danach mit Ergebnis ≥ Spitze; null: noch nicht erholt
+});
+
+/**
+ * Ergebnis je Ortstag (Kalender). realizedCents: Verkäufe des Tages. resultCents: Änderung des Ergebnisses seit dem
+ * vorigen Tagesstand (sinceDay; Lücken ohne Stand gehören zum nächsten Tag mit Stand), unrealizedChangeCents = resultCents
+ * minus realisiert im selben Fenster. Tage ohne Tagesstand, aber mit Verkäufen: nur realizedCents, der Rest null.
+ */
+export const DayResultSchema = z.object({
+	day: z.string(),
+	realizedCents: z.number().int(),
+	trades: z.number().int(), // geschlossene Trades an diesem Tag
+	resultCents: z.number().int().nullable(),
+	unrealizedChangeCents: z.number().int().nullable(),
+	sinceDay: z.string().nullable(),
+});
+export type DayResult = z.infer<typeof DayResultSchema>;
+
+/** R-Verteilung: from < r ≤ to; from null = ohne Untergrenze, to null = ohne Obergrenze. */
+export const RBucketSchema = z.object({ from: z.number().nullable(), to: z.number().nullable(), trades: z.number().int(), pnlCents: z.number().int() });
+
+export const AnalyticsSchema = z.object({
+	scope: z.string(), // "mine" (deine Depots), "all" oder eine Depot-ID
+	accountIds: z.array(z.string()),
+	from: z.string().nullable(), // YYYY-MM-DD, null: ab Beginn
+	to: z.string(),
+	timezone: z.string(), // Ortszeit für Tage, Wochentage und Stunden (Europe/Berlin)
+	curve: z.array(AnalyticsPointSchema),
+	maxDrawdown: MaxDrawdownSchema.nullable(),
+	days: z.array(DayResultSchema),
+	trades: z.array(ClosedTradeSchema), // Ausstieg im Zeitraum, neueste zuerst, höchstens 1000
+	tradesTotal: z.number().int(),
+	stats: TradeStatsSchema,
+	rBuckets: z.array(RBucketSchema),
+	byWeekday: z.array(TradeStatsSchema.extend({ weekday: z.number().int() })), // 1 = Montag … 7 = Sonntag, nach Einstieg; immer alle 7
+	byHour: z.array(TradeStatsSchema.extend({ hour: z.number().int() })), // Stunde des Einstiegs 0–23; immer alle 24
+	byAuthor: z.array(TradeStatsSchema.extend({ author: z.string() })), // du und jeder Agent (auch ohne Trades), dann weitere
+	bySymbol: z.array(TradeStatsSchema.extend({ symbol: z.string(), name: z.string() })), // nach Ergebnis absteigend
+});
+export type Analytics = z.infer<typeof AnalyticsSchema>;
