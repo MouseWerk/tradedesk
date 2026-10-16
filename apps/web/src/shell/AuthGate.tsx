@@ -1,10 +1,11 @@
 // Anmeldung vor dem Desk: beim ersten Start PIN festlegen (mit dem Einrichtungscode aus dem Serverfenster), danach
-// mit der PIN anmelden. Das Cookie hält dich 30 Tage angemeldet; läuft die Sitzung ab, kommt dieser Bildschirm wieder.
+// mit der PIN anmelden. Die Sitzung (Token im localStorage, kein Cookie) hält dich 30 Tage angemeldet; läuft die Sitzung ab, kommt dieser Bildschirm wieder.
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { KeyRound } from "lucide-react";
 import { AUTH_EVENT, getAuth, send, setSessionToken } from "@/lib/api";
 import { Button, Field, Input } from "@/ui/kit";
+import { de } from "@/i18n/de";
 
 const PIN = /^\d{4,12}$/;
 
@@ -17,15 +18,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
 		window.addEventListener(AUTH_EVENT, on);
 		return () => window.removeEventListener(AUTH_EVENT, on);
 	}, [refetch]);
-	if (isLoading) return <Screen><p className="text-[13px] text-fg-3">Verbinde mit dem Desk…</p></Screen>;
+	if (isLoading) return <Screen><p className="text-[13px] text-fg-3">{de.auth.connecting}</p></Screen>;
 	if (error || !data)
 		return (
 			<Screen>
 				<p className="text-[13px] text-fg-2" role="alert">
-					Desk nicht erreichbar – läuft der Server noch?
+					{de.api.unreachable}
 				</p>
 				<Button className="mt-4" onClick={() => void refetch()}>
-					Erneut versuchen
+					{de.auth.retry}
 				</Button>
 			</Screen>
 		);
@@ -46,8 +47,8 @@ function Screen({ children }: { children: ReactNode }) {
 						<KeyRound className="size-4" />
 					</span>
 					<div className="leading-tight">
-						<div className="font-semibold">Tradedesk</div>
-						<div className="text-[12px] text-fg-3">Freigaben nur mit deiner PIN</div>
+						<div className="font-semibold">{de.shell.product}</div>
+						<div className="text-[12px] text-fg-3">{de.auth.tagline}</div>
 					</div>
 				</div>
 				{children}
@@ -86,18 +87,18 @@ function Login({ onDone }: { onDone: () => void }) {
 				className="flex flex-col gap-4"
 				onSubmit={(e) => {
 					e.preventDefault();
-					if (!PIN.test(pin)) return setErr("Die PIN hat 4 bis 12 Ziffern.");
+					if (!PIN.test(pin)) return setErr(de.auth.pinLength);
 					void go("/api/auth/login", { pin }).then(() => setPin(""));
 				}}
 			>
-				<h1 className="text-[15px] font-semibold">Anmelden</h1>
-				<Field label="PIN" error={err} hint={" "}>
+				<h1 className="text-[15px] font-semibold">{de.auth.login}</h1>
+				<Field label={de.auth.pin} error={err} hint={" "}>
 					{(id) => <Input id={id} ref={ref} type="password" inputMode="numeric" autoComplete="current-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} aria-invalid={!!err} />}
 				</Field>
 				<Button type="submit" variant="primary" disabled={busy}>
-					Anmelden
+					{de.auth.login}
 				</Button>
-				<p className="text-[11.5px] text-fg-3">PIN vergessen? Desk mit „--reset-pin“ starten und neu festlegen.</p>
+				<p className="text-[11.5px] text-fg-3">{de.auth.forgot}</p>
 			</form>
 		</Screen>
 	);
@@ -114,23 +115,23 @@ function Setup({ onDone }: { onDone: () => void }) {
 				className="flex flex-col gap-4"
 				onSubmit={(e) => {
 					e.preventDefault();
-					if (!code.trim()) return setErr("Einrichtungscode aus dem Serverfenster eintragen.");
-					if (!PIN.test(pin)) return setErr("Die PIN hat 4 bis 12 Ziffern.");
-					if (pin !== again) return setErr("Die beiden PINs sind verschieden.");
+					if (!code.trim()) return setErr(de.auth.codeMissing);
+					if (!PIN.test(pin)) return setErr(de.auth.pinLength);
+					if (pin !== again) return setErr(de.auth.pinMismatch);
 					void go("/api/auth/setup", { code: code.trim(), pin });
 				}}
 			>
-				<h1 className="text-[15px] font-semibold">PIN festlegen</h1>
+				<h1 className="text-[15px] font-semibold">{de.auth.setup}</h1>
 				<p className="text-[12.5px] leading-relaxed text-fg-2">
-					Mit der PIN gibst du Orders frei. Den Einrichtungscode zeigt nur das Fenster, in dem der Desk läuft (Zeile „PIN festlegen: Einrichtungscode“) – so kann kein Agent die PIN vor dir setzen.
+					{de.auth.setupIntro}
 				</p>
-				<Field label="Einrichtungscode">{(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" autoFocus spellCheck={false} />}</Field>
-				<Field label="Neue PIN (4–12 Ziffern)">{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} />}</Field>
-				<Field label="PIN wiederholen" error={err} hint={" "}>
+				<Field label={de.auth.code}>{(id) => <Input id={id} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" autoFocus spellCheck={false} />}</Field>
+				<Field label={de.auth.newPin}>{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} maxLength={12} />}</Field>
+				<Field label={de.auth.repeatPin} error={err} hint={" "}>
 					{(id) => <Input id={id} type="password" inputMode="numeric" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value.replace(/\D/g, ""))} maxLength={12} aria-invalid={!!err} />}
 				</Field>
 				<Button type="submit" variant="primary" disabled={busy}>
-					PIN festlegen
+					{de.auth.setup}
 				</Button>
 			</form>
 		</Screen>

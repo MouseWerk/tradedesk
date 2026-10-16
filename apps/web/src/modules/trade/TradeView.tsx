@@ -11,6 +11,7 @@ import type { Side } from "@desk/shared";
 import { useCockpit, useOverview, useProposals } from "@/lib/api";
 import { Card, Empty, Skeleton, cn } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
+import { de } from "@/i18n/de";
 import { Page, ProposalRow, isActive, needsYou } from "../common";
 import { DayTable, NewsCard, Positions, SessionBar } from "./parts";
 import { Scanner, sortRows, type Sort } from "./Scanner";
@@ -109,15 +110,15 @@ export default function TradeView() {
 			<SessionBar cockpit={data} />
 			{unknown && (
 				<p className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px] text-fg-2" role="status">
-					„{unknown}“ steht nicht im Scanner (Watchlist oder Depot) – du siehst {selected?.symbol ?? "den ersten Wert"}.
+					{de.trade.unknownSymbol(unknown, selected?.symbol ?? null)}
 					<button type="button" className="ml-auto text-fg-3 underline underline-offset-2 hover:text-fg" onClick={() => setUnknown(null)}>
-						Ausblenden
+						{de.trade.hide}
 					</button>
 				</p>
 			)}
 			{rows.length === 0 ? (
 				<Card>
-					<Empty>Die Watchlist ist leer. Unter Markt Werte suchen und hinzufügen – dann erscheinen sie hier im Scanner.</Empty>
+					<Empty>{de.trade.emptyWatchlist}</Empty>
 				</Card>
 			) : (
 				<div ref={ref} className={cn("grid items-start gap-4", GRID[mode])} data-layout={mode}>
@@ -150,13 +151,13 @@ function Waiting({ proposals, accounts, symbol }: { proposals: Parameters<typeof
 	const shown = list.slice(0, 6);
 	return (
 		<Card
-			title="Wartet auf dich"
+			title={de.trade.waiting}
 			icon={<ListChecks className="size-4" />}
 			pad={false}
-			label={`Wartet auf dich: ${waiting.length}`}
+			label={de.trade.waitingLabel(waiting.length)}
 			aside={
 				<Link to="/orders" className="-mr-2 inline-flex h-7 items-center rounded-md px-2 tnum hover:bg-surface-3 hover:text-fg">
-					{waiting.length ? `${waiting.length} offen` : "Orders"}
+					{waiting.length ? de.trade.waitingOpen(waiting.length) : de.trade.orders}
 				</Link>
 			}
 		>
@@ -168,13 +169,13 @@ function Waiting({ proposals, accounts, symbol }: { proposals: Parameters<typeof
 					{list.length > shown.length && (
 						<li className="px-4 py-2 text-[12px]">
 							<Link to="/orders" className="text-fg-2 underline underline-offset-2 hover:text-fg">
-								Alle {list.length} unter Orders
+								{de.trade.allInOrders(list.length)}
 							</Link>
 						</li>
 					)}
 				</ul>
 			) : (
-				<Empty>Nichts wartet auf dich.</Empty>
+				<Empty>{de.trade.nothingWaiting}</Empty>
 			)}
 		</Card>
 	);

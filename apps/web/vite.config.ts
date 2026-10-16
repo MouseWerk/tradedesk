@@ -10,5 +10,10 @@ export default defineConfig({
 	plugins: [react(), tailwindcss()],
 	resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
 	server: { port: 5175, strictPort: true, host: "127.0.0.1", proxy: { "/api": api } },
-	build: { target: "es2023", chunkSizeWarningLimit: 600 },
+	build: {
+		target: "es2023",
+		chunkSizeWarningLimit: 600,
+		// der Textkatalog (src/i18n/de.ts) als eigene Datei: braucht jede Seite, ändert sich aber unabhängig vom Code
+		rolldownOptions: { output: { codeSplitting: { groups: [{ name: "texts", test: /[\\/]src[\\/]i18n[\\/]/ }] } } },
+	},
 });

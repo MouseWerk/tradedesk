@@ -4,6 +4,7 @@ import { Link, useNavigate, useSearch as useRouteSearch } from "@tanstack/react-
 import { useEffect, useId, useState } from "react";
 import { Bell, Check, Plus, Search, ShoppingCart, Trash2, X } from "lucide-react";
 import type { Alert, ChartRange, WatchItem } from "@desk/shared";
+import { de } from "@/i18n/de";
 import { useAgents, useChart, useCockpit, useOverview, useProposals, useSearch, useWatchlist } from "@/lib/api";
 import { ago, date, dateTime, numberError, parseDe, pct, price, tone } from "@/lib/format";
 import { CandleChart, type RefLine } from "@/ui/charts";
@@ -13,16 +14,9 @@ import { FormDialog, useConfirm, useFormErrors } from "@/ui/overlay";
 import { Page, QuoteTag, useAction } from "../common";
 import { OrderTicket } from "../orders/OrderTicket";
 
-const RANGES: { id: ChartRange; label: string }[] = [
-	{ id: "1d", label: "1 T" },
-	{ id: "1mo", label: "1 M" },
-	{ id: "3mo", label: "3 M" },
-	{ id: "6mo", label: "6 M" },
-	{ id: "1y", label: "1 J" },
-	{ id: "5y", label: "5 J" },
-];
+const RANGES: { id: ChartRange; label: string }[] = (["1d", "1mo", "3mo", "6mo", "1y", "5y"] as const).map((id) => ({ id, label: de.market.range[id] }));
 
-const alertLabel = (a: Pick<Alert, "op">) => (a.op === "above" ? "über" : "unter");
+const alertLabel = (a: Pick<Alert, "op">) => de.market.op[a.op];
 
 export default function MarketView() {
 	const { symbol: wanted } = useRouteSearch({ strict: false }) as { symbol?: string };
@@ -47,9 +41,9 @@ export default function MarketView() {
 		<Page>
 			{unknown && (
 				<p className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px] text-fg-2" role="status">
-					„{unknown}“ ist nicht auf der Watchlist – links suchen und hinzufügen.
+					{de.market.unknown(unknown)}
 					<button type="button" className="ml-auto text-fg-3 underline underline-offset-2 hover:text-fg" onClick={() => setUnknown(null)}>
-						Ausblenden
+						{de.market.hide}
 					</button>
 				</p>
 			)}
@@ -60,7 +54,7 @@ export default function MarketView() {
 				) : (
 					!isLoading && (
 						<Card>
-							<Empty>Die Watchlist ist leer – links ein Wertpapier suchen und hinzufügen.</Empty>
+							<Empty>{de.market.empty}</Empty>
 						</Card>
 					)
 				)}
@@ -90,7 +84,7 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 			setQ("");
 			return onSelect(symbol);
 		}
-		if (await run("/api/market/watchlist", "POST", { symbol }, `${symbol} auf der Watchlist.`)) {
+		if (await run("/api/market/watchlist", "POST", { symbol }, de.market.added(symbol))) {
 			setQ("");
 			onSelect(symbol);
 		}
@@ -100,12 +94,12 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 	const { data: cockpit } = useCockpit();
 	const stale = new Set(cockpit?.scan.filter((r) => r.quoteStale).map((r) => r.symbol));
 	return (
-		<Card title="Watchlist" pad={false} className="flex flex-col" aside={`${items?.length ?? 0}`}>
+		<Card title={de.market.watchlist} pad={false} className="flex flex-col" aside={`${items?.length ?? 0}`}>
 			<div className="relative border-b border-line p-3">
 				<Search className="pointer-events-none absolute top-1/2 left-5.5 size-3.5 -translate-y-1/2 text-fg-3" aria-hidden />
 				<Input
-					aria-label="Wertpapier suchen"
-					placeholder="Suchen: Name, Symbol, ISIN…"
+					aria-label={de.market.searchLabel}
+					placeholder={de.market.searchPlaceholder}
 					className="pl-8"
 					role="combobox"
 					aria-expanded={shown}
@@ -134,9 +128,9 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 					}}
 				/>
 				{shown && (
-					<div id={listId} className="absolute inset-x-3 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-lg border border-line bg-surface py-1 shadow-2xl scroll-thin" role="listbox" aria-label="Suchergebnisse">
+					<div id={listId} className="absolute inset-x-3 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-lg border border-line bg-surface py-1 shadow-2xl scroll-thin" role="listbox" aria-label={de.market.results}>
 						{!current.length && (isFetching || debounced !== q.trim()) ? (
-							<div className="px-3 py-2 text-[12px] text-fg-3">Suche…</div>
+							<div className="px-3 py-2 text-[12px] text-fg-3">{de.market.searching}</div>
 						) : current.length ? (
 							current.map((h, i) => {
 								const on = watched.has(h.symbol);
@@ -159,21 +153,21 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 										{on ? (
 											<span className="flex shrink-0 items-center gap-1 text-[11px] text-fg-3">
 												<Check className="size-3.5" aria-hidden />
-												auf der Watchlist
+												{de.market.onWatchlist}
 											</span>
 										) : (
-											<Plus className="size-3.5 shrink-0 text-fg-3" aria-label="hinzufügen" />
+											<Plus className="size-3.5 shrink-0 text-fg-3" aria-label={de.market.add} />
 										)}
 									</div>
 								);
 							})
 						) : (
-							<div className="px-3 py-2 text-[12px] text-fg-3">Nichts gefunden.</div>
+							<div className="px-3 py-2 text-[12px] text-fg-3">{de.market.nothing}</div>
 						)}
 					</div>
 				)}
 			</div>
-			<ul className="scroll-thin max-h-[calc(100vh-220px)] overflow-y-auto py-1 @max-[780px]:max-h-72" aria-label="Werte">
+			<ul className="scroll-thin max-h-[calc(100vh-220px)] overflow-y-auto py-1 @max-[780px]:max-h-72" aria-label={de.market.symbols}>
 				{loading && [0, 1, 2, 3].map((i) => <Skeleton key={i} className="mx-3 my-2 h-9" />)}
 				{items?.map((w) => {
 					const on = w.symbol === selected;
@@ -189,8 +183,8 @@ function Watchlist({ items, loading, selected, onSelect }: { items?: WatchItem[]
 								<span className="flex min-w-0 flex-1 flex-col leading-tight">
 									<span className={cn("flex items-center gap-1.5", on && "font-semibold")}>
 										{w.symbol}
-										{w.held && <Badge className="h-4 px-1 text-[10px]">Depot</Badge>}
-										{w.alerts.some((a) => !a.triggeredAt) && <Bell className="size-3 text-fg-3" aria-label="Alarm gesetzt" />}
+										{w.held && <Badge className="h-4 px-1 text-[10px]">{de.market.held}</Badge>}
+										{w.alerts.some((a) => !a.triggeredAt) && <Bell className="size-3 text-fg-3" aria-label={de.market.alertSet} />}
 									</span>
 									<span className="flex min-w-0 items-baseline gap-1.5 text-[11.5px] text-fg-3">
 										<span className="truncate" title={w.name}>
@@ -226,19 +220,19 @@ function Detail({ item }: { item: WatchItem }) {
 	const { run } = useAction();
 	const confirm = useConfirm();
 	const [dialog, setDialog] = useState<"order" | "alert" | null>(null);
-	const limits: RefLine[] = (proposals ?? []).filter((p) => p.symbol === item.symbol && p.status === "open" && p.limitPrice).map((p) => ({ value: p.limitPrice!, label: `Limit ${p.side === "buy" ? "Kauf" : "Verkauf"}` }));
-	const alerts: RefLine[] = item.alerts.filter((a) => !a.triggeredAt).map((a) => ({ value: a.price, label: `Alarm ${alertLabel(a)}` }));
+	const limits: RefLine[] = (proposals ?? []).filter((p) => p.symbol === item.symbol && p.status === "open" && p.limitPrice).map((p) => ({ value: p.limitPrice!, label: de.market.limitLine(de.market.side[p.side]) }));
+	const alerts: RefLine[] = item.alerts.filter((a) => !a.triggeredAt).map((a) => ({ value: a.price, label: de.market.alertLine(alertLabel(a)) }));
 	const notes = (agents?.journal ?? []).filter((j) => j.symbol === item.symbol);
 	const intraday = range === "1d";
 	const remove = async () => {
-		if (await confirm({ title: `${item.symbol} von der Watchlist nehmen?`, body: item.held ? "Der Wert bleibt sichtbar, solange er in einem Depot liegt." : "Agenten können ihn danach nicht mehr vorschlagen.", confirm: "Entfernen", danger: true }))
-			await run(`/api/market/watchlist/${encodeURIComponent(item.symbol)}`, "DELETE", {}, `${item.symbol} entfernt.`);
+		if (await confirm({ title: de.market.removeTitle(item.symbol), body: item.held ? de.market.removeHeld : de.market.removeBody, confirm: de.market.remove, danger: true }))
+			await run(`/api/market/watchlist/${encodeURIComponent(item.symbol)}`, "DELETE", {}, de.market.removed(item.symbol));
 	};
 	// Löschen sofort, mit Rückgängig: der Alarm wird mit denselben Werten neu angelegt
 	const removeAlert = (a: Alert) =>
-		run(`/api/market/alerts/${a.id}`, "DELETE", {}, `Alarm ${alertLabel(a)} ${price(a.price, item.currency)} gelöscht.`, {
-			label: "Rückgängig",
-			run: () => void run("/api/market/alerts", "POST", { symbol: item.symbol, op: a.op, price: a.price }, "Alarm wiederhergestellt."),
+		run(`/api/market/alerts/${a.id}`, "DELETE", {}, de.market.alertDeleted(alertLabel(a), price(a.price, item.currency)), {
+			label: de.portfolio.undo,
+			run: () => void run("/api/market/alerts", "POST", { symbol: item.symbol, op: a.op, price: a.price }, de.market.alertRestored),
 		});
 	return (
 		<div className="flex min-w-0 flex-col gap-4">
@@ -249,7 +243,7 @@ function Detail({ item }: { item: WatchItem }) {
 							{item.name}
 						</h1>
 						<p className="text-[12px] text-fg-3">
-							{item.symbol} · {item.exchange === "CCC" ? "Krypto" : item.exchange || "–"} · {item.currency} · Stand {item.marketTime ? dateTime(item.marketTime) : "–"} · <QuoteTag quote={item.quote} className="text-[12px]" />
+							{item.symbol} · {item.exchange === "CCC" ? de.market.crypto : item.exchange || "–"} · {item.currency} · {de.market.asOf(item.marketTime ? dateTime(item.marketTime) : "–")} · <QuoteTag quote={item.quote} className="text-[12px]" />
 						</p>
 					</div>
 					<div className="flex items-baseline gap-2 tnum">
@@ -261,21 +255,21 @@ function Detail({ item }: { item: WatchItem }) {
 					<div className="ml-auto flex flex-wrap gap-2">
 						<Button variant="primary" onClick={() => setDialog("order")}>
 							<ShoppingCart className="size-4" aria-hidden />
-							Order…
+							{de.palette.order}
 						</Button>
 						<Button onClick={() => setDialog("alert")}>
 							<Bell className="size-4" aria-hidden />
-							Alarm…
+							{de.market.alertAction}
 						</Button>
 						{item.watched && (
-							<Button size="icon" variant="ghost" onClick={() => void remove()} aria-label={`${item.symbol} von der Watchlist nehmen…`} title="Von der Watchlist nehmen…">
+							<Button size="icon" variant="ghost" onClick={() => void remove()} aria-label={de.market.removeAria(item.symbol)} title={de.market.removeHint}>
 								<Trash2 className="size-4" />
 							</Button>
 						)}
 					</div>
 				</div>
 				<div className="flex items-center gap-2 px-4 pt-3">
-					<Segmented label="Zeitraum" items={RANGES} value={range} onChange={setRange} />
+					<Segmented label={de.market.rangeLabel} items={RANGES} value={range} onChange={setRange} />
 				</div>
 				<div className="p-3 pt-2">
 					{!chart && !error ? (
@@ -284,7 +278,7 @@ function Detail({ item }: { item: WatchItem }) {
 						<Empty className="h-[340px] content-center">{(error as Error).message}</Empty>
 					) : chart && chart.candles.length ? (
 						<CandleChart
-							label={`Kursverlauf ${item.symbol}, ${RANGES.find((r) => r.id === range)!.label}`}
+							label={de.market.chartLabel(item.symbol, RANGES.find((r) => r.id === range)!.label)}
 							candles={chart.candles}
 							format={(v) => price(v, chart.currency)}
 							timeLabel={(t, long) => (intraday ? new Date(t).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) : long ? date(t) : new Date(t).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "2-digit" }))}
@@ -292,12 +286,12 @@ function Detail({ item }: { item: WatchItem }) {
 							height={340}
 						/>
 					) : (
-						<Empty className="h-[340px] content-center">{isLoading ? "Lade Kurse…" : "Für diesen Zeitraum gibt es keine Kurse."}</Empty>
+						<Empty className="h-[340px] content-center">{isLoading ? de.market.loading : de.market.noCandles}</Empty>
 					)}
 				</div>
 			</Card>
 			<div className="grid grid-cols-2 gap-4 @max-[1100px]:grid-cols-1">
-				<Card title="Alarme" icon={<Bell className="size-4" />} pad={false}>
+				<Card title={de.market.alerts} icon={<Bell className="size-4" />} pad={false}>
 					{item.alerts.length ? (
 						<ul className="divide-y divide-line">
 							{item.alerts.map((a) => (
@@ -305,18 +299,18 @@ function Detail({ item }: { item: WatchItem }) {
 									<span className="tnum">
 										{alertLabel(a)} {price(a.price, item.currency)}
 									</span>
-									{a.triggeredAt ? <Badge variant="ok">ausgelöst {ago(a.triggeredAt)}</Badge> : <Badge>aktiv</Badge>}
-									<Button variant="ghost" size="iconSm" className="ml-auto" aria-label={`Alarm ${alertLabel(a)} ${price(a.price, item.currency)} löschen`} title="Löschen (mit Rückgängig)" onClick={() => void removeAlert(a)}>
+									{a.triggeredAt ? <Badge variant="ok">{de.market.triggered(ago(a.triggeredAt))}</Badge> : <Badge>{de.market.active}</Badge>}
+									<Button variant="ghost" size="iconSm" className="ml-auto" aria-label={de.market.deleteAlert(alertLabel(a), price(a.price, item.currency))} title={de.market.deleteTitle} onClick={() => void removeAlert(a)}>
 										<X className="size-3.5" />
 									</Button>
 								</li>
 							))}
 						</ul>
 					) : (
-						<Empty>Kein Alarm. Ausgelöste Alarme erscheinen im Verlauf der Übersicht.</Empty>
+						<Empty>{de.market.noAlerts}</Empty>
 					)}
 				</Card>
-				<Card title="Notizen der Agenten" pad={false}>
+				<Card title={de.market.notes} pad={false}>
 					{notes.length ? (
 						<ul className="divide-y divide-line">
 							{notes.map((n) => (
@@ -331,9 +325,9 @@ function Detail({ item }: { item: WatchItem }) {
 						</ul>
 					) : (
 						<Empty>
-							Keine Notizen zu {item.symbol}.{" "}
+							{de.market.noNotes(item.symbol)}{" "}
 							<Link to="/agents" className="underline">
-								Zum Journal
+								{de.market.toJournal}
 							</Link>
 						</Empty>
 					)}
@@ -352,24 +346,24 @@ function AlertDialog({ open, onOpenChange, item }: { open: boolean; onOpenChange
 	const { run, busy } = useAction();
 	const submit = async () => {
 		const v = parseDe(value);
-		if (!(v > 0)) return errs.fail("price", numberError(value) ?? "Kurs größer als 0.");
-		if (await run("/api/market/alerts", "POST", { symbol: item.symbol, op, price: v }, `Alarm ${op === "above" ? "über" : "unter"} ${price(v, item.currency)} gesetzt.`)) {
+		if (!(v > 0)) return errs.fail("price", numberError(value) ?? de.market.pricePositive);
+		if (await run("/api/market/alerts", "POST", { symbol: item.symbol, op, price: v }, de.market.alertCreated(de.market.op[op], price(v, item.currency)))) {
 			setValue("");
 			onOpenChange(false);
 		}
 	};
 	return (
-		<FormDialog open={open} onOpenChange={onOpenChange} title={`Alarm für ${item.symbol}`} description={`Jetzt ${price(item.price, item.currency)}. Der Alarm erscheint einmal im Verlauf.`} submit="Alarm setzen" onSubmit={() => void submit()} busy={busy} error={errs.general}>
+		<FormDialog open={open} onOpenChange={onOpenChange} title={de.market.alertTitle(item.symbol)} description={de.market.alertDescription(price(item.price, item.currency))} submit={de.market.alertSubmit} onSubmit={() => void submit()} busy={busy} error={errs.general}>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-				<Field label="Wenn der Kurs">
+				<Field label={de.market.when}>
 					{(id, a) => (
 						<Select id={id} {...a} value={op} onChange={(e) => setOp(e.target.value as "above" | "below")}>
-							<option value="below">fällt unter</option>
-							<option value="above">steigt über</option>
+							<option value="below">{de.market.fallsBelow}</option>
+							<option value="above">{de.market.risesAbove}</option>
 						</Select>
 					)}
 				</Field>
-				<Field label={`Kurs (${item.currency})`} error={errs.at("price")}>
+				<Field label={de.market.priceField(item.currency)} error={errs.at("price")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} autoFocus />}
 				</Field>
 			</div>

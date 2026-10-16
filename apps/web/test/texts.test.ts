@@ -3,6 +3,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { de } from "../src/i18n/de.ts";
 
 const SRC = path.resolve(import.meta.dirname, "../src");
 function files(dir: string): string[] {
@@ -38,7 +39,9 @@ describe("owner rule: broker orders never send on Enter (2026-10-16)", () => {
 		for (const f of ["modules/common.tsx", "modules/orders/OrderTicket.tsx", "modules/trade/OrderCalc.tsx"]) {
 			const src = all.find((x) => x.f === f)!.src;
 			expect(src, f).toMatch(/useConfirm\(\)/);
-			expect(src, f).toMatch(/Mit echtem Geld senden/);
+			// der Knopf der zweiten Bestätigung kommt aus dem Katalog (src/i18n/de.ts)
+			expect(src, f).toMatch(/\bde\.common\.sendLive\b/);
 		}
+		expect(de.common.sendLive).toBe("Mit echtem Geld senden");
 	});
 });

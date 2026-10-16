@@ -8,6 +8,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { ArrowRight, CornerDownLeft, LogOut, MessageSquare, Moon, OctagonX, Search, ShoppingCart, Sun, Wallet, ListChecks, CandlestickChart } from "lucide-react";
 import type { AccountSummary } from "@desk/shared";
 import { sideLabel, statusLabel } from "@desk/shared";
+import { de } from "@/i18n/de";
 import { useOverview, useProposals, useWatchlist } from "@/lib/api";
 import { qty as fmtQty } from "@/lib/format";
 import { rank } from "@/lib/fuzzy";
@@ -26,7 +27,7 @@ export interface PaletteActions {
 	chatOpen: boolean;
 }
 
-type Group = "Module" | "Wartet" | "Aktionen" | "Depots" | "Werte";
+type Group = keyof typeof de.palette.group;
 interface Entry {
 	id: string;
 	group: Group;
@@ -37,11 +38,9 @@ interface Entry {
 	run: () => void;
 }
 
-const GROUP_LABEL: Record<Group, string> = { Module: "Module", Wartet: "Offene Vorschläge", Aktionen: "Aktionen", Depots: "Depots", Werte: "Werte" };
-
 function accountHint(a: AccountSummary): string {
-	if (a.owner !== "user") return `Papierdepot von ${a.owner}`;
-	return a.kind === "paper" ? "Papierdepot" : a.kind === "manual" ? `${a.broker} · manuell` : `${a.broker}${a.live ? " · echtes Geld" : " · Papierkonto"}`;
+	if (a.owner !== "user") return de.palette.agentDepot(a.owner);
+	return a.kind === "paper" ? de.common.paperDepot : de.palette.brokerHint(a.broker, a.kind === "manual" ? de.palette.manual : a.live ? de.common.liveMoney : de.common.paperAccount);
 }
 
 /** Nach dem Wechsel auf Orders: die Karte des Vorschlags zeigen und ihren ersten Knopf fokussieren. */
@@ -76,7 +75,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
 						run?.();
 					}}
 				>
-					<Dialog.Title className="sr-only">Befehlspalette</Dialog.Title>
+					<Dialog.Title className="sr-only">{de.palette.title}</Dialog.Title>
 					{open && (
 						<Body
 							actions={actions}
@@ -106,31 +105,31 @@ function Body({ actions, choose }: { actions: PaletteActions; choose: (run: () =
 		const accounts = ov?.accounts ?? [];
 		const go = (to: string, search?: Record<string, string>) => () => void navigate({ to, search });
 		return [
-			...MODULES.map((m) => ({ id: `m-${m.id}`, group: "Module" as const, label: m.title, hint: `Taste ${m.hotkey}`, keywords: m.keywords, icon: <m.icon className="size-4" />, run: go(m.path) })),
+			...MODULES.map((m) => ({ id: `m-${m.id}`, group: "modules" as const, label: m.title, hint: de.palette.hotkey(m.hotkey), keywords: m.keywords, icon: <m.icon className="size-4" />, run: go(m.path) })),
 			...(proposals ?? []).filter(isActive).map((p) => ({
 				id: `p-${p.id}`,
-				group: "Wartet" as const,
-				label: `${sideLabel[p.side]} ${fmtQty(p.approvedQty ?? p.qty)} ${p.symbol}`,
-				hint: `${p.author} für ${accounts.find((a) => a.id === p.accountId)?.name ?? p.accountId} · ${statusLabel[p.status]}`,
-				keywords: [p.name, p.author, "Vorschlag", "Freigabe"],
+				group: "waiting" as const,
+				label: de.palette.proposalLabel(sideLabel[p.side], fmtQty(p.approvedQty ?? p.qty), p.symbol),
+				hint: de.palette.proposalHint(p.author, accounts.find((a) => a.id === p.accountId)?.name ?? p.accountId, statusLabel[p.status]),
+				keywords: [p.name, p.author].concat(de.nav.keywords.proposal),
 				icon: <ListChecks className="size-4" />,
 				run: () => {
 					void navigate({ to: "/orders" });
 					focusProposal(p.id);
 				},
 			})),
-			{ id: "a-order", group: "Aktionen" as const, label: "Order…", hint: "Neue Order im Papier- oder Broker-Depot", keywords: ["kaufen", "verkaufen", "neue order", "ticket"], icon: <ShoppingCart className="size-4" />, run: actions.order },
-			{ id: "a-kill", group: "Aktionen" as const, label: ov?.killSwitch ? "Not-Aus ausschalten" : "Not-Aus…", hint: ov?.killSwitch ? "Handel wieder freigeben" : "Alle Freigaben und Ausführungen stoppen", keywords: ["notaus", "stopp", "kill", "risiko"], icon: <OctagonX className="size-4" />, run: actions.kill },
-			{ id: "a-theme", group: "Aktionen" as const, label: actions.dark ? "Helles Design" : "Dunkles Design", hint: "Design wechseln", keywords: ["theme", "hell", "dunkel", "farbe"], icon: actions.dark ? <Sun className="size-4" /> : <Moon className="size-4" />, run: actions.theme },
-			{ id: "a-chat", group: "Aktionen" as const, label: actions.chatOpen ? "Chat schließen" : "Chat öffnen", hint: "Taste C", keywords: ["nachricht", "agenten"], icon: <MessageSquare className="size-4" />, run: actions.chat },
-			{ id: "a-logout", group: "Aktionen" as const, label: "Abmelden", hint: "danach nur mit PIN wieder an Freigaben", keywords: ["logout", "pin", "sitzung"], icon: <LogOut className="size-4" />, run: actions.logout },
-			...accounts.map((a) => ({ id: `d-${a.id}`, group: "Depots" as const, label: a.name, hint: accountHint(a), keywords: [a.broker, a.owner === "user" ? "Depot" : `Agent ${a.owner}`], icon: <Wallet className="size-4" />, run: go("/portfolio", { account: a.id }) })),
-			...(watch ?? []).map((w) => ({ id: `s-${w.symbol}`, group: "Werte" as const, label: w.symbol, hint: `${w.name}${w.held ? " · im Depot" : ""}`, keywords: [w.name], icon: <CandlestickChart className="size-4" />, run: go("/trade", { symbol: w.symbol }) })),
+			{ id: "a-order", group: "actions" as const, label: de.palette.order, hint: de.palette.orderHint, keywords: de.nav.keywords.order, icon: <ShoppingCart className="size-4" />, run: actions.order },
+			{ id: "a-kill", group: "actions" as const, label: ov?.killSwitch ? de.palette.killOff : de.palette.killOn, hint: ov?.killSwitch ? de.palette.killOffHint : de.palette.killOnHint, keywords: de.nav.keywords.kill, icon: <OctagonX className="size-4" />, run: actions.kill },
+			{ id: "a-theme", group: "actions" as const, label: actions.dark ? de.shell.lightTheme : de.shell.darkTheme, hint: de.palette.themeHint, keywords: de.nav.keywords.theme, icon: actions.dark ? <Sun className="size-4" /> : <Moon className="size-4" />, run: actions.theme },
+			{ id: "a-chat", group: "actions" as const, label: actions.chatOpen ? de.chat.close : de.chat.open, hint: de.palette.hotkey("C"), keywords: de.nav.keywords.chat, icon: <MessageSquare className="size-4" />, run: actions.chat },
+			{ id: "a-logout", group: "actions" as const, label: de.shell.logout, hint: de.palette.logoutHint, keywords: de.nav.keywords.logout, icon: <LogOut className="size-4" />, run: actions.logout },
+			...accounts.map((a) => ({ id: `d-${a.id}`, group: "depots" as const, label: a.name, hint: accountHint(a), keywords: [a.broker, a.owner === "user" ? de.nav.keywords.depot : de.nav.keywords.agent(a.owner)], icon: <Wallet className="size-4" />, run: go("/portfolio", { account: a.id }) })),
+			...(watch ?? []).map((w) => ({ id: `s-${w.symbol}`, group: "symbols" as const, label: w.symbol, hint: w.held ? de.palette.held(w.name) : w.name, keywords: [w.name], icon: <CandlestickChart className="size-4" />, run: go("/trade", { symbol: w.symbol }) })),
 		];
 	}, [ov, watch, proposals, actions, navigate]);
 
 	// leere Eingabe: Module, Offenes und Aktionen zuerst, von den Werten nur ein paar
-	const shown = useMemo(() => (q.trim() ? rank(entries, q, 40) : [...entries.filter((e) => e.group !== "Werte"), ...entries.filter((e) => e.group === "Werte").slice(0, 6)]), [entries, q]);
+	const shown = useMemo(() => (q.trim() ? rank(entries, q, 40) : [...entries.filter((e) => e.group !== "symbols"), ...entries.filter((e) => e.group === "symbols").slice(0, 6)]), [entries, q]);
 	useEffect(() => setActive(0), [q]);
 	const current = shown[Math.min(active, shown.length - 1)];
 	useEffect(() => {
@@ -164,8 +163,8 @@ function Body({ actions, choose }: { actions: PaletteActions; choose: (run: () =
 					aria-controls={listId}
 					aria-autocomplete="list"
 					aria-activedescendant={current ? `${listId}-${current.id}` : undefined}
-					aria-label="Befehl, Modul, Wert oder Depot suchen"
-					placeholder="Modul, Wert, Depot oder Aktion…"
+					aria-label={de.palette.inputLabel}
+					placeholder={de.palette.placeholder}
 					className="my-1.5 h-9 min-w-0 flex-1 rounded-md bg-transparent px-1 text-[14px] placeholder:text-fg-3 max-sm:h-11"
 					value={q}
 					onChange={(e) => setQ(e.target.value)}
@@ -174,10 +173,10 @@ function Body({ actions, choose }: { actions: PaletteActions; choose: (run: () =
 					autoComplete="off"
 					data-testid="palette-input"
 				/>
-				<Kbd className="max-sm:hidden">Esc</Kbd>
+				<Kbd className="max-sm:hidden">{de.shell.keys.esc}</Kbd>
 			</div>
-			<div ref={list} id={listId} role="listbox" aria-label="Treffer" className="scroll-thin min-h-0 flex-1 overflow-y-auto py-1.5" data-testid="palette-list">
-				{shown.length === 0 && <div className="px-4 py-6 text-center text-[12.5px] text-fg-3">Nichts gefunden für „{q.trim()}“.</div>}
+			<div ref={list} id={listId} role="listbox" aria-label={de.palette.results} className="scroll-thin min-h-0 flex-1 overflow-y-auto py-1.5" data-testid="palette-list">
+				{shown.length === 0 && <div className="px-4 py-6 text-center text-[12.5px] text-fg-3">{de.palette.nothing(q.trim())}</div>}
 				{shown.map((e, i) => {
 					const on = e === current;
 					const head = grouped && (i === 0 || shown[i - 1].group !== e.group);
@@ -185,7 +184,7 @@ function Body({ actions, choose }: { actions: PaletteActions; choose: (run: () =
 						<div key={e.id} role="presentation">
 							{head && (
 								<div className="px-4 pt-2.5 pb-1 text-[11px] font-medium text-fg-3" role="presentation">
-									{GROUP_LABEL[e.group]}
+									{de.palette.group[e.group]}
 								</div>
 							)}
 							<div
@@ -204,8 +203,8 @@ function Body({ actions, choose }: { actions: PaletteActions; choose: (run: () =
 								</span>
 								<span className={cn("truncate", on && "font-medium")}>{e.label}</span>
 								{e.hint && <span className="min-w-0 flex-1 truncate text-[12px] text-fg-3">{e.hint}</span>}
-								{!grouped && <span className="ml-auto shrink-0 text-[11px] text-fg-3 max-sm:hidden">{GROUP_LABEL[e.group]}</span>}
-								{on && (e.group === "Module" || e.group === "Werte" || e.group === "Depots" ? <ArrowRight className="size-3.5 shrink-0 text-fg-3" aria-hidden /> : <CornerDownLeft className="size-3.5 shrink-0 text-fg-3" aria-hidden />)}
+								{!grouped && <span className="ml-auto shrink-0 text-[11px] text-fg-3 max-sm:hidden">{de.palette.group[e.group]}</span>}
+								{on && (e.group === "modules" || e.group === "symbols" || e.group === "depots" ? <ArrowRight className="size-3.5 shrink-0 text-fg-3" aria-hidden /> : <CornerDownLeft className="size-3.5 shrink-0 text-fg-3" aria-hidden />)}
 							</div>
 						</div>
 					);
@@ -214,13 +213,13 @@ function Body({ actions, choose }: { actions: PaletteActions; choose: (run: () =
 			<div className="flex items-center gap-3 border-t border-line px-4 py-2 text-[11.5px] text-fg-3 max-sm:hidden">
 				<span className="flex items-center gap-1">
 					<Kbd>↑</Kbd>
-					<Kbd>↓</Kbd> wählen
+					<Kbd>↓</Kbd> {de.palette.choose}
 				</span>
 				<span className="flex items-center gap-1">
-					<Kbd>Eingabe</Kbd> öffnen
+					<Kbd>{de.shell.keys.enter}</Kbd> {de.palette.open}
 				</span>
 				<span className="ml-auto flex items-center gap-1">
-					<Kbd>Strg</Kbd>+<Kbd>K</Kbd> öffnet die Palette überall
+					<Kbd>{de.shell.keys.ctrl}</Kbd>+<Kbd>K</Kbd> {de.palette.everywhere}
 				</span>
 			</div>
 		</>

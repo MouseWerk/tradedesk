@@ -8,6 +8,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bell, BellOff, ChevronRight, ListChecks, LogOut, MessageSquare, Moon, OctagonX, Radio, Search, Sun } from "lucide-react";
+import { de } from "@/i18n/de";
 import { MODULES, moduleForPath } from "@/modules/registry";
 import { AUTH_EVENT, notifyEnabled, send, setNotify, setSessionToken, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
 import { ago, eur, hhmm, pct, quoteFeedNote, tone } from "@/lib/format";
@@ -169,10 +170,10 @@ export function Shell() {
 	return (
 		<div className="flex h-dvh gap-2 bg-bg p-2 text-[13px] text-fg max-md:gap-1 max-md:p-1 max-sm:flex-col max-sm:gap-0 max-sm:px-[max(4px,env(safe-area-inset-left))] max-sm:pt-[max(4px,env(safe-area-inset-top))] max-sm:pb-0">
 			<a href="#main" className="sr-only rounded-lg bg-primary px-3 py-2 text-[13px] font-medium text-primary-fg focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[70]" onClick={(e) => (e.preventDefault(), document.getElementById("main")?.focus())}>
-				Zum Inhalt
+				{de.shell.skipToContent}
 			</a>
 			{!phone && (
-				<Boundary name="Navigation" compact>
+				<Boundary name={de.shell.navigation} compact>
 					<Sidebar status={status} rail={rail} />
 				</Boundary>
 			)}
@@ -184,7 +185,7 @@ export function Shell() {
 				</div>
 			</main>
 			{phone && (
-				<Boundary name="Navigation" compact>
+				<Boundary name={de.shell.navigation} compact>
 					<PhoneNav menu={{ palette: () => setPalette(true), chat: toggleChat, theme: toggleTheme, logout: () => void logout(), dark, notify: notify.can ? { on: notify.on, toggle: () => void notify.toggle() } : undefined, status: status.text }} />
 				</Boundary>
 			)}
@@ -195,7 +196,7 @@ export function Shell() {
 				</Suspense>
 			)}
 			{wide && chatWide && (
-				<Boundary name="Chat" compact>
+				<Boundary name={de.shell.chat} compact>
 					<ChatPanel onSeen={markSeen} />
 				</Boundary>
 			)}
@@ -214,8 +215,8 @@ export function Shell() {
 							document.querySelector<HTMLElement>('[data-testid="chat-toggle"]')?.focus();
 						}}
 					>
-						<Dialog.Title className="sr-only">Chat</Dialog.Title>
-						<Boundary name="Chat" compact>
+						<Dialog.Title className="sr-only">{de.shell.chat}</Dialog.Title>
+						<Boundary name={de.shell.chat} compact>
 							<ChatPanel className="w-full shadow-2xl" onClose={() => setDrawer(false)} onSeen={markSeen} />
 						</Boundary>
 					</Dialog.Content>
@@ -229,23 +230,23 @@ export function Shell() {
 function useStatus(live: LiveState): { text: string; icon: string; title?: string } {
 	const { data, error, dataUpdatedAt } = useOverview();
 	useEffect(() => {
-		document.title = data?.pending ? `(${data.pending}) Tradedesk` : "Tradedesk";
+		document.title = data?.pending ? de.shell.titlePending(data.pending) : de.shell.product;
 	}, [data?.pending]);
 	// Daten da, aber der letzte Abruf schlug fehl: sagen, wie alt sie sind, statt still alte Kurse zu zeigen
 	const stale = !!error;
 	const status = stale
 		? data
-			? `Server nicht erreichbar · Stand ${hhmm(dataUpdatedAt)}`
-			: "Server nicht erreichbar"
+			? de.shell.status.unreachableSince(hhmm(dataUpdatedAt))
+			: de.shell.status.unreachable
 		: live !== "live"
 			? live === "connecting"
-				? "Verbinde…"
-				: "Offline – verbinde neu…"
+				? de.shell.status.connecting
+				: de.shell.status.offline
 			: data?.market === "error"
-				? "Kurse gestört"
+				? de.shell.status.quotesBroken
 				: data?.market === "off"
-					? "Kurse aus"
-					: `Kurse ${ago(data?.quotesAt ?? null)}`;
+					? de.shell.status.quotesOff
+					: de.shell.status.quotesAt(ago(data?.quotesAt ?? null));
 	const icon = !stale && live === "live" && data?.market !== "error" ? "text-ok" : !stale && live === "connecting" ? "text-warn" : "text-err";
 	return { text: status, icon, title: data?.marketError ?? undefined };
 }
@@ -256,7 +257,7 @@ function Sidebar({ status, rail }: { status: ReturnType<typeof useStatus>; rail:
 	const { data } = useOverview();
 	const mine = data?.accounts.filter((a) => a.owner === "user") ?? [];
 	return (
-		<aside className={cn("flex shrink-0 flex-col py-1.5", rail ? "w-12 px-0.5" : "w-[232px] px-2")} aria-label="Navigation" data-rail={rail || undefined}>
+		<aside className={cn("flex shrink-0 flex-col py-1.5", rail ? "w-12 px-0.5" : "w-[232px] px-2")} aria-label={de.shell.navigation} data-rail={rail || undefined}>
 			<div className="flex h-10 items-center gap-2.5 px-2">
 				<span className="grid size-6 shrink-0 place-items-center rounded-md bg-primary text-primary-fg" aria-hidden>
 					<svg viewBox="0 0 16 16" className="size-3.5">
@@ -264,12 +265,12 @@ function Sidebar({ status, rail }: { status: ReturnType<typeof useStatus>; rail:
 					</svg>
 				</span>
 				<div className={cn("min-w-0 leading-tight", rail && "hidden")}>
-					<div className="truncate text-[13px] font-semibold">Tradedesk</div>
-					<div className="truncate text-[11px] text-fg-3">{data ? `${data.user} · ${data.accounts.length - mine.length} Agenten` : "lokal"}</div>
+					<div className="truncate text-[13px] font-semibold">{de.shell.product}</div>
+					<div className="truncate text-[11px] text-fg-3">{data ? de.shell.userLine(data.user, data.accounts.length - mine.length) : de.shell.local}</div>
 				</div>
 			</div>
-			<nav className="mt-5 flex flex-col gap-px" aria-label="Module">
-				<div className={cn("mb-1 px-2 text-[11px] font-medium text-fg-3", rail && "sr-only")}>Module</div>
+			<nav className="mt-5 flex flex-col gap-px" aria-label={de.shell.modules}>
+				<div className={cn("mb-1 px-2 text-[11px] font-medium text-fg-3", rail && "sr-only")}>{de.shell.modules}</div>
 				{MODULES.map((m) => {
 					const on = m.id === active;
 					return (
@@ -286,7 +287,7 @@ function Sidebar({ status, rail }: { status: ReturnType<typeof useStatus>; rail:
 							</span>
 							<span className={cn(rail && "sr-only")}>{m.title}</span>
 							{m.id === "orders" && !!data?.pending ? (
-								<Badge variant="warn" className={cn("ml-auto tnum", rail && "sr-only")} data-testid="pending-badge" title={`${data.pending} Vorschläge warten auf dich`}>
+								<Badge variant="warn" className={cn("ml-auto tnum", rail && "sr-only")} data-testid="pending-badge" title={de.shell.pendingTitle(data.pending)}>
 									{data.pending}
 								</Badge>
 							) : (
@@ -298,14 +299,14 @@ function Sidebar({ status, rail }: { status: ReturnType<typeof useStatus>; rail:
 			</nav>
 			{!rail && (
 				<>
-					<div className="mt-6 px-2 text-[11px] font-medium text-fg-3">Deine Depots</div>
+					<div className="mt-6 px-2 text-[11px] font-medium text-fg-3">{de.shell.myDepots}</div>
 					<div className="mt-1 flex flex-col gap-px">
 						{mine.map((a) => (
 							<Link key={a.id} to="/portfolio" search={{ account: a.id }} className="flex flex-col gap-0.5 rounded-lg px-2 py-1.5 hover:bg-surface-2">
 								<span className="truncate text-fg-2">{a.name}</span>
 								<span className="flex items-baseline gap-2 tnum">
 									<span className="font-medium">{eur(a.equityCents, { short: true })}</span>
-									<span className={cn("ml-auto text-[11.5px]", tone(a.dayChangeCents))} title="heute">
+									<span className={cn("ml-auto text-[11.5px]", tone(a.dayChangeCents))} title={de.shell.today}>
 										{a.dayChangeCents === null || a.depositsCents === 0 ? "" : pct((a.dayChangeCents / Math.max(1, a.equityCents - a.dayChangeCents)) * 100)}
 									</span>
 								</span>
@@ -331,9 +332,9 @@ function KillBanner() {
 	return (
 		<div className="flex items-center gap-2 bg-err/10 px-5 py-2 text-[12.5px] text-err max-md:px-3" role="alert" data-testid="kill-banner">
 			<OctagonX className="size-4 shrink-0" aria-hidden />
-			<span className="min-w-0 flex-1">Not-Aus ist an: keine Freigaben, keine Ausführungen, offene Limits ruhen.</span>
+			<span className="min-w-0 flex-1">{de.shell.killBanner}</span>
 			<Link to="/risk" className="shrink-0 font-medium underline underline-offset-2">
-				Zum Risiko
+				{de.shell.toRisk}
 			</Link>
 		</div>
 	);
@@ -358,10 +359,10 @@ function useNotify() {
 	const toggle = async () => {
 		const r = await setNotify(!on);
 		if (r === "blocked") {
-			toast({ text: "Benachrichtigungen sind im Browser blockiert – in den Website-Einstellungen für diese Seite erlauben.", tone: "error" });
+			toast({ text: de.shell.notifyBlocked, tone: "error" });
 			return setOn(false);
 		}
-		if (!on && !r) toast({ text: "Benachrichtigungen nicht erlaubt – der Browser hat nicht zugestimmt.", tone: "error" });
+		if (!on && !r) toast({ text: de.shell.notifyDenied, tone: "error" });
 		setOn(r === true);
 	};
 	return { on, can, toggle };
@@ -389,23 +390,23 @@ function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread, onPalette, on
 	return (
 		<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-5 max-md:px-3 max-sm:h-14 max-sm:gap-1 max-sm:pr-1.5">
 			<span className="flex min-w-0 items-center gap-2">
-				<span className="text-fg-3 max-sm:hidden">Tradedesk</span>
+				<span className="text-fg-3 max-sm:hidden">{de.shell.product}</span>
 				<ChevronRight className="size-3.5 text-fg-3 max-sm:hidden" aria-hidden />
-				<span className="truncate font-medium max-sm:text-[15px]">{mod?.title ?? "Übersicht"}</span>
+				<span className="truncate font-medium max-sm:text-[15px]">{mod?.title ?? de.nav.overview}</span>
 			</span>
 			<div className="ml-auto flex items-center gap-1.5 max-sm:gap-0.5">
 				<button
 					type="button"
 					onClick={onPalette}
 					className="inline-flex h-8 items-center gap-2 rounded-lg border border-line bg-bg-2 pr-1.5 pl-2.5 text-[12.5px] text-fg-3 hover:border-line-strong hover:text-fg-2 max-lg:size-8 max-lg:justify-center max-lg:border-0 max-lg:bg-transparent max-lg:p-0 max-sm:size-11"
-					aria-label={`Suchen und Befehle (${MAC ? "Cmd" : "Strg"}+K)`}
-					title={`Suchen und Befehle (${MAC ? "⌘K" : "Strg+K"})`}
+					aria-label={de.shell.searchCommandsKey(`${MAC ? de.shell.keys.cmd : de.shell.keys.ctrl}+K`)}
+					title={de.shell.searchCommandsKey(MAC ? "⌘K" : `${de.shell.keys.ctrl}+K`)}
 					aria-haspopup="dialog"
 					data-testid="palette-button"
 				>
 					<Search className="size-4 shrink-0" aria-hidden />
-					<span className="max-lg:hidden">Suchen…</span>
-					<Kbd className="ml-4 max-lg:hidden">{MAC ? "⌘K" : "Strg K"}</Kbd>
+					<span className="max-lg:hidden">{de.shell.search}</span>
+					<Kbd className="ml-4 max-lg:hidden">{MAC ? "⌘K" : `${de.shell.keys.ctrl} K`}</Kbd>
 				</button>
 				{notify.can && !phone && (
 					<Button
@@ -413,8 +414,8 @@ function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread, onPalette, on
 						size="icon"
 						onClick={() => void notify.toggle()}
 						aria-pressed={notify.on}
-						aria-label={notify.on ? "Benachrichtigungen aus" : "Benachrichtigungen an (Vorschläge, Alarme, Stops, wenn das Fenster im Hintergrund ist)"}
-						title={notify.on ? "Benachrichtigungen aus" : "Benachrichtigungen an"}
+						aria-label={notify.on ? de.shell.notifyOff : de.shell.notifyOnLong}
+						title={notify.on ? de.shell.notifyOff : de.shell.notifyOn}
 						data-testid="notify-toggle"
 					>
 						{notify.on ? <Bell className="size-4" /> : <BellOff className="size-4" />}
@@ -422,21 +423,21 @@ function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread, onPalette, on
 				)}
 				{!phone && (
 					<>
-						<Button variant="ghost" size="icon" onClick={onLogout} aria-label="Abmelden" title="Abmelden – danach nur mit PIN wieder an Freigaben">
+						<Button variant="ghost" size="icon" onClick={onLogout} aria-label={de.shell.logout} title={de.shell.logoutTitle}>
 							<LogOut className="size-4" />
 						</Button>
-						<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={dark ? "Helles Design" : "Dunkles Design"} title={dark ? "Helles Design" : "Dunkles Design"}>
+						<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={dark ? de.shell.lightTheme : de.shell.darkTheme} title={dark ? de.shell.lightTheme : de.shell.darkTheme}>
 							{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
 						</Button>
 					</>
 				)}
-				<Button variant="ghost" size="icon" onClick={toggleChat} aria-pressed={chatOpen} aria-label={unread ? `Chat (C), ${unread} ungelesen` : "Chat (C)"} title="Chat (C)" className={cn("relative", icon)} data-testid="chat-toggle">
+				<Button variant="ghost" size="icon" onClick={toggleChat} aria-pressed={chatOpen} aria-label={unread ? de.shell.chatUnread(unread) : de.shell.chatToggle} title={de.shell.chatToggle} className={cn("relative", icon)} data-testid="chat-toggle">
 					<MessageSquare className="size-4 max-sm:size-5" />
 					{unread > 0 && <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warn px-1 text-[10px] font-semibold text-primary-fg tnum max-sm:top-1 max-sm:right-1">{unread > 99 ? "99+" : unread}</span>}
 				</Button>
-				<Link to="/orders" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-fg hover:opacity-90 max-sm:ml-1 max-sm:h-11 max-sm:min-w-11 max-sm:justify-center" aria-label={data ? `Vorschläge, ${data.pending} warten auf dich` : "Vorschläge"} data-testid="pending-link">
+				<Link to="/orders" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-fg hover:opacity-90 max-sm:ml-1 max-sm:h-11 max-sm:min-w-11 max-sm:justify-center" aria-label={data ? de.shell.proposalsWaiting(data.pending) : de.shell.proposals} data-testid="pending-link">
 					<ListChecks className="size-4 sm:hidden" aria-hidden />
-					<span className="max-sm:hidden">Vorschläge</span>
+					<span className="max-sm:hidden">{de.shell.proposals}</span>
 					<span className="tnum">{pending}</span>
 				</Link>
 			</div>

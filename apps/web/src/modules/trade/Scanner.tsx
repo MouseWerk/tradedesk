@@ -6,6 +6,7 @@ import type { ScanRow } from "@desk/shared";
 import { pct, price, tone } from "@/lib/format";
 import { quoteLabel } from "@/lib/quotes";
 import { Card, Segmented, cn } from "@/ui/kit";
+import { de } from "@/i18n/de";
 import { SessionDot } from "./parts";
 
 export type Sort = "change" | "gap" | "relvol" | "atr";
@@ -29,16 +30,16 @@ export function Scanner({ rows, sort, onSort, selected, onSelect, listClassName 
 		else if (top + row.offsetHeight > ul.scrollTop + ul.clientHeight) ul.scrollTop = top + row.offsetHeight - ul.clientHeight;
 	}, [selected, sort]);
 	return (
-		<Card title="Scanner" pad={false} aside={`${rows.length} Werte`} className="flex flex-col">
+		<Card title={de.scanner.title} pad={false} aside={de.scanner.values(rows.length)} className="flex flex-col">
 			<div className="border-b border-line px-3 py-2">
 				<Segmented
-					label="Sortieren nach"
-					items={[{ id: "change", label: "Änderung" }, { id: "gap", label: "Gap" }, { id: "relvol", label: "Rel. Vol." }, { id: "atr", label: "ATR" }]}
+					label={de.scanner.sortBy}
+					items={[{ id: "change", label: de.scanner.sorts.change }, { id: "gap", label: de.scanner.sorts.gap }, { id: "relvol", label: de.scanner.sorts.relvol }, { id: "atr", label: de.scanner.sorts.atr }]}
 					value={sort}
 					onChange={onSort}
 				/>
 			</div>
-			<ul ref={list} className={cn("scroll-thin relative max-h-[calc(100vh-260px)] min-h-40 overflow-y-auto py-1", listClassName)} aria-label="Werte im Scanner – Pfeil hoch und runter wechselt den Wert" data-scanner>
+			<ul ref={list} className={cn("scroll-thin relative max-h-[calc(100vh-260px)] min-h-40 overflow-y-auto py-1", listClassName)} aria-label={de.scanner.list} data-scanner>
 				{rows.map((r) => {
 					const on = r.symbol === selected;
 					const q = quoteLabel(r.quote, r.quoteStale);
@@ -58,22 +59,22 @@ export function Scanner({ rows, sort, onSort, selected, onSelect, listClassName 
 									<span className={cn("min-w-0 truncate", on ? "font-semibold" : "font-medium")} title={`${r.symbol} – ${r.name}`}>
 										{r.symbol}
 									</span>
-									{r.held && <Wallet className="size-3 shrink-0 text-fg-3" aria-label="im Depot" />}
-									{r.alerts > 0 && <Bell className="size-3 shrink-0 text-fg-3" aria-label="Alarm gesetzt" />}
+									{r.held && <Wallet className="size-3 shrink-0 text-fg-3" aria-label={de.scanner.held} />}
+									{r.alerts > 0 && <Bell className="size-3 shrink-0 text-fg-3" aria-label={de.scanner.alert} />}
 									{/* Beträge brechen nie um; weichen muss das Symbol (mit Tooltip) */}
 									{/* Herkunft und Alter im Tooltip; ein alter Kurs ist gedimmt (nie ein farbiger Rahmen) */}
 									<span className={cn("ml-auto shrink-0 whitespace-nowrap tnum", q.stale && "text-fg-3")} title={q.title} data-testid="scan-price" data-stale={q.stale || undefined}>
 										{price(r.price, r.currency)}
-										{q.stale && <span className="sr-only"> (veraltet)</span>}
+										{q.stale && <span className="sr-only">{de.scanner.stale}</span>}
 									</span>
 									<span className={cn("w-[60px] shrink-0 text-right whitespace-nowrap tnum", q.stale ? "text-fg-3" : tone(r.changePct))}>{pct(r.changePct)}</span>
 								</span>
 								<span className="flex w-full items-center gap-3 text-[11px] whitespace-nowrap text-fg-3 tnum">
-									<span title="Gap: Eröffnung gegen Vortagesschluss">Gap {pct(r.gapPct)}</span>
-									<span title="Volumen gegen den Schnitt der letzten 20 Tage, zeitanteilig" className={cn((r.relVolume ?? 0) >= 2 && "font-semibold text-fg-2")}>
-										RV {r.relVolume === null ? "–" : `${r.relVolume.toLocaleString("de-DE", { maximumFractionDigits: 1 })}×`}
+									<span title={de.scanner.gapTitle}>{de.scanner.sorts.gap} {pct(r.gapPct)}</span>
+									<span title={de.scanner.relVolTitle} className={cn((r.relVolume ?? 0) >= 2 && "font-semibold text-fg-2")}>
+										{de.scanner.relVol} {r.relVolume === null ? "–" : `${r.relVolume.toLocaleString("de-DE", { maximumFractionDigits: 1 })}×`}
 									</span>
-									<span title="Durchschnittliche Tagesspanne (ATR 14) in % des Kurses">ATR {pct(r.atrPct, { signed: false })}</span>
+									<span title={de.scanner.atrTitle}>{de.scanner.sorts.atr} {pct(r.atrPct, { signed: false })}</span>
 									<RangeBar pos={r.rangePos} />
 								</span>
 							</button>
@@ -89,7 +90,7 @@ export function Scanner({ rows, sort, onSort, selected, onSelect, listClassName 
 export function RangeBar({ pos, className }: { pos: number | null; className?: string }) {
 	if (pos === null) return <span className={cn("ml-auto w-14 shrink-0", className)} />;
 	return (
-		<span className={cn("relative ml-auto h-1.5 w-14 shrink-0 rounded-full bg-surface-3", className)} role="meter" aria-label="Lage im Tagesbereich" aria-valuenow={Math.round(pos * 100)} aria-valuemin={0} aria-valuemax={100} title={`${Math.round(pos * 100)} % zwischen Tagestief und -hoch`}>
+		<span className={cn("relative ml-auto h-1.5 w-14 shrink-0 rounded-full bg-surface-3", className)} role="meter" aria-label={de.scanner.range} aria-valuenow={Math.round(pos * 100)} aria-valuemin={0} aria-valuemax={100} title={de.scanner.rangeTitle(Math.round(pos * 100))}>
 			<span className="absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fg" style={{ left: `${pos * 100}%` }} />
 		</span>
 	);

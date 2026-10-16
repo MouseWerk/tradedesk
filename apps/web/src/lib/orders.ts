@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Check, Cockpit, Proposal, ProposalStatus } from "@desk/shared";
 import { riskToStopCents, statusLabel } from "@desk/shared";
+import { de } from "../i18n/de";
 import { request } from "./api";
 
 export interface OrderBody {
@@ -31,9 +32,9 @@ export function useDryRun(body: OrderBody | null, delay = 250): { check: Check |
 			request("/api/proposals?dryRun=1", { method: "POST", headers: { "Content-Type": "application/json" }, body: key, signal: ctl.signal })
 				.then(async (r) => {
 					const j = (await r.json().catch(() => ({}))) as { check?: Check; msg?: string };
-					setRes({ key, check: j.check ?? null, failed: j.check ? null : (j.msg ?? `Prüfung nicht möglich (${r.status}).`) });
+					setRes({ key, check: j.check ?? null, failed: j.check ? null : (j.msg ?? de.orderResult.dryRun.failed(String(r.status))) });
 				})
-				.catch((e: Error) => e.name !== "AbortError" && setRes({ key, check: null, failed: "Prüfung nicht möglich – Desk nicht erreichbar." }));
+				.catch((e: Error) => e.name !== "AbortError" && setRes({ key, check: null, failed: de.orderResult.dryRun.unreachable }));
 		}, delay);
 		return () => {
 			clearTimeout(t);
@@ -48,20 +49,20 @@ export function useDryRun(body: OrderBody | null, delay = 250): { check: Check |
 export function orderResultText(r: { status: ProposalStatus; reason: string }, o: { label: string; broker?: string; kind: "paper" | "broker" | "manual"; filled?: string }): string {
 	switch (r.status) {
 		case "filled":
-			return o.filled ?? `${o.label} ausgeführt.`;
+			return o.filled ?? de.orderResult.filled(o.label);
 		case "rejected":
-			return `${o.label} abgelehnt: ${r.reason || "Risikoprüfung"}`;
+			return de.orderResult.rejected(o.label, r.reason || de.orderResult.riskCheck);
 		case "confirm":
-			return `${o.label}: ${o.broker ?? "Der Broker"} fragt nach – unter Orders bestätigen oder stornieren.`;
+			return de.orderResult.confirm(o.label, o.broker ?? de.orderResult.theBroker);
 		case "placed":
 		case "sending":
-			return o.kind === "manual" ? `${o.label} freigegeben – jetzt in ${o.broker ?? "deinem Broker"} ausführen und eintragen.` : `${o.label} an ${o.broker ?? "den Broker"} gesendet, Ausführung folgt.`;
+			return o.kind === "manual" ? de.orderResult.placedManual(o.label, o.broker ?? de.proposal.yourBroker) : de.orderResult.placed(o.label, o.broker ?? de.orderResult.theBrokerAcc);
 		case "open":
-			return `${o.label}: Limit angelegt.`;
+			return de.orderResult.open(o.label);
 		case "stale":
-			return `${o.label} nicht ausgeführt: ${r.reason || "Kurs hat sich zu stark bewegt."}`;
+			return de.orderResult.stale(o.label, r.reason || de.orderResult.movedTooMuch);
 		default:
-			return `${o.label}: ${statusLabel[r.status]}${r.reason ? ` – ${r.reason}` : ""}.`;
+			return de.orderResult.other(o.label, statusLabel[r.status], r.reason);
 	}
 }
 
@@ -88,12 +89,12 @@ export function fxFromCheck(check: Check | null, qty: number, unit: number): num
  * setzen“ (auch ohne Wechselkurs oder bei zu kleinem Budget kam der).
  */
 export function sizingReason(i: { fx: number | null; currency: string; entry: number; stop: number; budgetCents: number; feeCents: number; cashCents: number }): string {
-	if (!(i.entry > 0)) return "Einstieg eintragen.";
-	if (!(i.stop > 0) || i.stop >= i.entry) return "Stop unter dem Einstieg setzen.";
-	if (!i.fx) return `Kein Wechselkurs ${i.currency}/EUR – Stück selbst eintragen.`;
-	if (!(i.budgetCents > 2 * i.feeCents)) return "Risiko-Budget deckt nicht einmal die Gebühren.";
-	if (i.cashCents <= i.feeCents) return "Kein Cash im Depot.";
-	return "Budget reicht nicht für 1 Stück – Stop näher setzen oder Budget erhöhen.";
+	if (!(i.entry > 0)) return de.orderResult.sizing.entry;
+	if (!(i.stop > 0) || i.stop >= i.entry) return de.orderResult.sizing.stop;
+	if (!i.fx) return de.orderResult.sizing.noFx(i.currency);
+	if (!(i.budgetCents > 2 * i.feeCents)) return de.orderResult.sizing.budgetFees;
+	if (i.cashCents <= i.feeCents) return de.orderResult.sizing.noCash;
+	return de.orderResult.sizing.budgetShort;
 }
 
 const unitPrice = (p: Proposal) => p.limitPrice ?? p.price ?? p.quotePrice;

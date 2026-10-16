@@ -3,6 +3,7 @@
 import type { LucideIcon } from "lucide-react";
 import { Activity, Bot, CandlestickChart, ChartColumn, LayoutDashboard, ListChecks, ShieldAlert, Wallet } from "lucide-react";
 import type { ComponentType } from "react";
+import { de } from "@/i18n/de";
 
 export interface WebModule {
 	id: string;
@@ -16,14 +17,14 @@ export interface WebModule {
 }
 
 export const MODULES: WebModule[] = [
-	{ id: "overview", title: "Übersicht", icon: LayoutDashboard, hotkey: "1", path: "/", phone: true, keywords: ["Start", "Vermögen"], load: () => import("./overview/OverviewView") },
-	{ id: "trade", title: "Trading", icon: Activity, hotkey: "2", path: "/trade", phone: true, keywords: ["Cockpit", "Scanner", "Chart"], load: () => import("./trade/TradeView") },
-	{ id: "orders", title: "Orders", icon: ListChecks, hotkey: "3", path: "/orders", phone: true, keywords: ["Vorschläge", "Freigabe"], load: () => import("./orders/OrdersView") },
-	{ id: "portfolio", title: "Depots", icon: Wallet, hotkey: "4", path: "/portfolio", phone: true, keywords: ["Positionen", "Konto"], load: () => import("./portfolio/PortfolioView") },
-	{ id: "analytics", title: "Auswertung", icon: ChartColumn, hotkey: "5", path: "/analytics", keywords: ["Statistik", "Trefferquote", "Drawdown", "Journal"], load: () => import("./analytics/AnalyticsView") },
-	{ id: "market", title: "Markt", icon: CandlestickChart, hotkey: "6", path: "/market", phone: true, keywords: ["Watchlist", "Alarme", "Suche"], load: () => import("./market/MarketView") },
-	{ id: "agents", title: "Agenten", icon: Bot, hotkey: "7", path: "/agents", keywords: ["Journal", "Vergleich"], load: () => import("./agents/AgentsView") },
-	{ id: "risk", title: "Risiko", icon: ShieldAlert, hotkey: "8", path: "/risk", keywords: ["Grenzen", "Not-Aus", "Limits"], load: () => import("./risk/RiskView") },
+	{ id: "overview", title: de.nav.overview, icon: LayoutDashboard, hotkey: "1", path: "/", phone: true, keywords: de.nav.keywords.overview, load: () => import("./overview/OverviewView") },
+	{ id: "trade", title: de.nav.trade, icon: Activity, hotkey: "2", path: "/trade", phone: true, keywords: de.nav.keywords.trade, load: () => import("./trade/TradeView") },
+	{ id: "orders", title: de.nav.orders, icon: ListChecks, hotkey: "3", path: "/orders", phone: true, keywords: de.nav.keywords.orders, load: () => import("./orders/OrdersView") },
+	{ id: "portfolio", title: de.nav.portfolio, icon: Wallet, hotkey: "4", path: "/portfolio", phone: true, keywords: de.nav.keywords.portfolio, load: () => import("./portfolio/PortfolioView") },
+	{ id: "analytics", title: de.nav.analytics, icon: ChartColumn, hotkey: "5", path: "/analytics", keywords: de.nav.keywords.analytics, load: () => import("./analytics/AnalyticsView") },
+	{ id: "market", title: de.nav.market, icon: CandlestickChart, hotkey: "6", path: "/market", phone: true, keywords: de.nav.keywords.market, load: () => import("./market/MarketView") },
+	{ id: "agents", title: de.nav.agents, icon: Bot, hotkey: "7", path: "/agents", keywords: de.nav.keywords.agents, load: () => import("./agents/AgentsView") },
+	{ id: "risk", title: de.nav.risk, icon: ShieldAlert, hotkey: "8", path: "/risk", keywords: de.nav.keywords.risk, load: () => import("./risk/RiskView") },
 ];
 
 export function moduleForPath(pathname: string): WebModule | undefined {

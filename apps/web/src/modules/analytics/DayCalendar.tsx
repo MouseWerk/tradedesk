@@ -6,12 +6,13 @@ import type { DayResult } from "@desk/shared";
 import { addDays, calendarMonths, heatScale, LEVELS, type HeatCell } from "@/lib/heatmap";
 import { dayLabel, signedEur, signedEurShort, tone } from "@/lib/format";
 import { cn } from "@/ui/kit";
+import { de } from "@/i18n/de";
 
 export type DayMode = "result" | "realized";
 
 const POS = ["bg-div-pos-1", "bg-div-pos-2", "bg-div-pos-3", "bg-div-pos-4"];
 const NEG = ["bg-div-neg-1", "bg-div-neg-2", "bg-div-neg-3", "bg-div-neg-4"];
-const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const WEEKDAYS = de.analytics.calendar.weekdays;
 const NO_DATA = "shadow-[inset_0_0_0_1px_var(--line-strong)]";
 
 export function levelClass(cell: Pick<HeatCell, "value" | "level">): string {
@@ -68,7 +69,7 @@ export function DayCalendar({ days, from, to, mode }: { days: DayResult[]; from:
 				className="relative flex flex-wrap gap-x-6 gap-y-4 outline-none focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
 				tabIndex={0}
 				role="group"
-				aria-label={`Kalender ${mode === "result" ? "Ergebnis" : "realisiertes Ergebnis"} je Tag, ${dayLabel(from)} bis ${dayLabel(to)} – Pfeiltasten wählen einen Tag`}
+				aria-label={de.analytics.calendar.label(mode === "realized", dayLabel(from), dayLabel(to))}
 				onKeyDown={onKey}
 				onBlur={() => setActive(null)}
 				onPointerLeave={() => setActive(null)}
@@ -113,20 +114,20 @@ export function DayCalendar({ days, from, to, mode }: { days: DayResult[]; from:
 					>
 						<div className="mb-1 text-fg-3">{longDay(active.day)}</div>
 						{v === null ? (
-							<div className="text-fg-2">{mode === "result" ? "Kein Tagesstand gespeichert" : "Kein Wert"}</div>
+							<div className="text-fg-2">{mode === "result" ? de.analytics.calendar.noSnapshot : de.analytics.calendar.noValue}</div>
 						) : (
 							<div className="flex items-baseline gap-2">
 								<span className={cn("font-semibold tnum", tone(v))}>{signedEur(v)}</span>
-								<span className="text-fg-3">{mode === "result" ? "Ergebnis" : "realisiert"}</span>
+								<span className="text-fg-3">{mode === "result" ? de.analytics.col.result : de.analytics.calendar.realized}</span>
 							</div>
 						)}
 						{d && (d.trades > 0 || mode === "result") && (
 							<div className="mt-0.5 text-fg-2 tnum">
-								{d.trades === 0 ? "kein Trade geschlossen" : `${d.trades === 1 ? "1 Trade" : `${d.trades} Trades`} geschlossen, ${signedEur(d.realizedCents)}`}
+								{d.trades === 0 ? de.analytics.calendar.noTradeClosed : de.analytics.calendar.tradesClosed(d.trades, signedEur(d.realizedCents))}
 							</div>
 						)}
-						{mode === "result" && d?.unrealizedChangeCents !== null && d?.unrealizedChangeCents !== undefined && <div className="text-fg-2 tnum">offene Positionen {signedEur(d.unrealizedChangeCents)}</div>}
-						{mode === "result" && d?.sinceDay && d.sinceDay !== addDays(d.day, -1) && <div className="text-fg-3">seit dem Stand vom {dayLabel(d.sinceDay)}</div>}
+						{mode === "result" && d?.unrealizedChangeCents !== null && d?.unrealizedChangeCents !== undefined && <div className="text-fg-2 tnum">{de.analytics.calendar.openPositions(signedEur(d.unrealizedChangeCents))}</div>}
+						{mode === "result" && d?.sinceDay && d.sinceDay !== addDays(d.day, -1) && <div className="text-fg-3">{de.analytics.calendar.since(dayLabel(d.sinceDay))}</div>}
 					</div>
 				)}
 			</div>
@@ -137,9 +138,9 @@ export function DayCalendar({ days, from, to, mode }: { days: DayResult[]; from:
 
 function Legend({ max }: { max: number }) {
 	return (
-		<div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11.5px] text-fg-3" aria-label="Legende">
+		<div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11.5px] text-fg-3" aria-label={de.analytics.legend}>
 			<span className="flex items-center gap-1.5">
-				<span className="tnum">{max ? `${signedEurShort(-max)} und weniger` : "Verlust"}</span>
+				<span className="tnum">{max ? de.analytics.calendar.andLess(signedEurShort(-max)) : de.analytics.calendar.loss}</span>
 				<span className="flex gap-[3px]" aria-hidden>
 					{[...NEG].reverse().map((c) => (
 						<span key={c} className={cn("size-3 rounded-[3px]", c)} />
@@ -149,7 +150,7 @@ function Legend({ max }: { max: number }) {
 						<span key={c} className={cn("size-3 rounded-[3px]", c)} />
 					))}
 				</span>
-				<span className="tnum">{max ? `${signedEurShort(max)} und mehr` : "Gewinn"}</span>
+				<span className="tnum">{max ? de.analytics.calendar.andMore(signedEurShort(max)) : de.analytics.calendar.gain}</span>
 			</span>
 			<span className="flex items-center gap-1.5">
 				<span className="size-3 rounded-[3px] bg-div-mid" aria-hidden />
@@ -157,9 +158,9 @@ function Legend({ max }: { max: number }) {
 			</span>
 			<span className="flex items-center gap-1.5">
 				<span className={cn("size-3 rounded-[3px]", NO_DATA)} aria-hidden />
-				kein Tagesstand
+				{de.analytics.calendar.noData}
 			</span>
-			<span className="sr-only">{LEVELS} Stufen je Richtung</span>
+			<span className="sr-only">{de.analytics.calendar.levels(LEVELS)}</span>
 		</div>
 	);
 }
