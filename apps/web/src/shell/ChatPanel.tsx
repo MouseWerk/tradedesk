@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowDown, Bot, Send, X } from "lucide-react";
 import type { ChatMessage } from "@desk/shared";
+import { de } from "@/i18n/de";
 import { useAgents, useChat, useOverview } from "@/lib/api";
 import { Button, Segmented, cn } from "@/ui/kit";
 import { useAction } from "@/modules/common";
@@ -108,22 +109,22 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 	};
 
 	return (
-		<aside className={cn("flex w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)] min-[1600px]:w-[360px]", className)} aria-label="Chat" data-testid="chat">
+		<aside className={cn("flex w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)] min-[1600px]:w-[360px]", className)} aria-label={de.shell.chat} data-testid="chat">
 			<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
-				<h2 className="font-medium">Chat</h2>
-				<span className="text-[12px] text-fg-3">{names.length ? `${names.length} im Raum` : ""}</span>
+				<h2 className="font-medium">{de.shell.chat}</h2>
+				<span className="text-[12px] text-fg-3">{names.length ? de.chat.inRoom(names.length) : ""}</span>
 				{onClose && (
-					<Button variant="ghost" size="iconSm" className="ml-auto" onClick={onClose} aria-label="Chat schließen">
+					<Button variant="ghost" size="iconSm" className="ml-auto" onClick={onClose} aria-label={de.chat.close}>
 						<X className="size-4" />
 					</Button>
 				)}
 			</header>
 			<div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-				<Segmented label="Nachrichten filtern" items={[{ id: "all", label: "Alle" }, { id: "mine", label: "An mich" }, { id: "agents", label: "Agenten" }]} value={filter} onChange={setFilter} />
+				<Segmented label={de.chat.filterLabel} items={[{ id: "all", label: de.chat.filter.all }, { id: "mine", label: de.chat.filter.mine }, { id: "agents", label: de.chat.filter.agents }]} value={filter} onChange={setFilter} />
 			</div>
 			<div className="relative flex min-h-0 flex-1 flex-col">
-				<ol ref={list} onScroll={onScroll} className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3" aria-live="polite" aria-label="Nachrichten" data-testid="chat-list">
-					{shown.length === 0 && <li className="px-2 py-6 text-center text-[12.5px] text-fg-3">Noch keine Nachrichten. Agenten schreiben mit „python cli/desk.py say“.</li>}
+				<ol ref={list} onScroll={onScroll} className="scroll-thin flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3" aria-live="polite" aria-label={de.chat.list} data-testid="chat-list">
+					{shown.length === 0 && <li className="px-2 py-6 text-center text-[12.5px] text-fg-3">{de.chat.empty}</li>}
 					{shown.map((m) => (
 						<Message key={m.id} m={m} mine={m.author === user} names={names} />
 					))}
@@ -132,7 +133,7 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 					<div className="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
 						<Button size="sm" variant="outline" className="pointer-events-auto shadow-[var(--shadow)]" onClick={jumpDown} data-testid="chat-jump">
 							<ArrowDown className="size-3.5" aria-hidden />
-							{newBelow === 1 ? "1 neue Nachricht" : `${newBelow} neue Nachrichten`}
+							{de.chat.newBelow(newBelow)}
 						</Button>
 					</div>
 				)}
@@ -155,15 +156,15 @@ export function ChatPanel({ className, onClose, onSeen }: { className?: string; 
 						onKeyDown={onKey}
 						rows={2}
 						maxLength={4000}
-						placeholder="Nachricht an alle oder @Agent…"
-						aria-label="Nachricht"
+						placeholder={de.chat.placeholder}
+						aria-label={de.chat.input}
 						className="scroll-thin min-h-10 flex-1 resize-none rounded-lg border border-line bg-bg-2 px-2.5 py-2 text-[13px] leading-snug placeholder:text-fg-3 hover:border-line-strong"
 					/>
-					<Button variant="primary" size="icon" onClick={() => void send()} disabled={busy || !text.trim()} aria-label="Senden (Eingabe)" title="Senden (Eingabe, Umschalt+Eingabe für neue Zeile)">
+					<Button variant="primary" size="icon" onClick={() => void send()} disabled={busy || !text.trim()} aria-label={de.chat.send} title={de.chat.sendTitle}>
 						<Send className="size-4" />
 					</Button>
 				</div>
-				<p className="mt-1.5 text-[11px] text-fg-3">Freigaben nur über die Schaltflächen bei den Vorschlägen – nie per Chat.</p>
+				<p className="mt-1.5 text-[11px] text-fg-3">{de.chat.note}</p>
 			</div>
 		</aside>
 	);

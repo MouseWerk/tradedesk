@@ -4,6 +4,8 @@
 import { useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import type { AccountSummary, OrderType, Proposal, Side } from "@desk/shared";
+import { sideLabel } from "@desk/shared";
+import { de } from "@/i18n/de";
 import { useWatchlist } from "@/lib/api";
 import { eur, numberError, parseDe, price, qty as fmtQty } from "@/lib/format";
 import { orderResultText, useDryRun } from "@/lib/orders";
@@ -48,31 +50,29 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 	const body = selected && sym && qtyNum > 0 && (type === "market" || limitNum > 0) ? { accountId: selected.id, symbol: sym, side, qty: qtyNum, orderType: type, limitPrice: type === "limit" ? limitNum : undefined } : null;
 	const { check, pending, failed } = useDryRun(open ? body : null);
 	const broker = selected?.kind === "broker";
-	const label = `${side === "buy" ? "Kauf" : "Verkauf"} ${Number.isFinite(qtyNum) ? fmtQty(qtyNum) : "–"} ${sym}`;
+	const label = `${sideLabel[side]} ${Number.isFinite(qtyNum) ? fmtQty(qtyNum) : "–"} ${sym}`;
 
 	const submit = async () => {
-		if (!selected) return errs.fail(null, "Kein Depot gewählt.");
-		if (!(qtyNum > 0)) return errs.fail("qty", numberError(qtyText) ?? "Stückzahl größer als 0 eintragen.");
-		if (type === "limit" && !(limitNum > 0)) return errs.fail("limit", numberError(limitText) ?? "Limitkurs eintragen.");
-		if (!body || pending || !check) return errs.fail(null, "Die Prüfung läuft noch – gleich noch einmal.");
-		if (!check.ok) return errs.fail(null, check.violations[0] ?? "Die Risikoprüfung lässt diese Order nicht zu.");
+		if (!selected) return errs.fail(null, de.orders.ticket.noAccount);
+		if (!(qtyNum > 0)) return errs.fail("qty", numberError(qtyText) ?? de.proposal.qtyPositive);
+		if (type === "limit" && !(limitNum > 0)) return errs.fail("limit", numberError(limitText) ?? de.orders.ticket.limitMissing);
+		if (!body || pending || !check) return errs.fail(null, de.orders.ticket.checkRunning);
+		if (!check.ok) return errs.fail(null, check.violations[0] ?? de.orders.ticket.checkBlocked);
 		const sent = body;
 		if (broker) {
 			const ok = await confirm({
-				title: `${label} an ${selected.broker} senden?`,
+				title: de.proposal.send.title(label, selected.broker),
 				body: (
 					<span className="flex flex-col gap-1.5 tnum" data-testid="broker-confirm">
 						<span>
-							{label} · {type === "limit" ? `Limit ${price(limitNum, item?.currency)}` : "Market"}-Tagesorder in „{selected.name}“
+							{label} · {de.proposal.send.dayOrder(type === "limit" ? de.proposal.limitAt(price(limitNum, item?.currency)) : de.proposal.orderType.market, selected.name)}
 						</span>
-						<span>
-							geschätzt {eur(check.estimateCents)} + {eur(check.feeCents)} Gebühr
-						</span>
-						{side === "buy" && <span>ohne Stop – setze ihn im Order-Rechner im Cockpit, wenn du einen willst</span>}
-						{selected.live ? <span className="font-medium text-err">Echtes Geld: Die Order geht sofort an die Börse.</span> : <span className="text-fg-3">Papierkonto bei {selected.broker}.</span>}
+						<span>{de.proposal.send.estimate(eur(check.estimateCents), eur(check.feeCents))}</span>
+						{side === "buy" && <span>{de.orders.ticket.noStop}</span>}
+						{selected.live ? <span className="font-medium text-err">{de.proposal.send.liveNow}</span> : <span className="text-fg-3">{de.proposal.send.paperAt(selected.broker)}</span>}
 					</span>
 				),
-				confirm: selected.live ? "Mit echtem Geld senden" : `An ${selected.broker} senden`,
+				confirm: selected.live ? de.common.sendLive : de.proposal.send.to(selected.broker),
 				danger: selected.live,
 			});
 			if (!ok) return;
@@ -84,8 +84,8 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 
 	if (!tradable.length)
 		return (
-			<FormDialog open={open} onOpenChange={onOpenChange} title="Neue Order" submit="OK" onSubmit={() => onOpenChange(false)}>
-				<p className="text-[13px] text-fg-2">Du hast kein eigenes Papier- oder Broker-Depot. Lege eines in config.json an („kind“: „paper“). Für Trade Republic erfasst du ausgeführte Trades unter Depots.</p>
+			<FormDialog open={open} onOpenChange={onOpenChange} title={de.orders.ticket.title} submit={de.orders.ticket.ok} onSubmit={() => onOpenChange(false)}>
+				<p className="text-[13px] text-fg-2">{de.orders.ticket.noDepot}</p>
 			</FormDialog>
 		);
 
@@ -93,32 +93,32 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 		<FormDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title={broker ? `Neue Order an ${selected!.broker}` : "Neue Order (Papier)"}
+			title={broker ? de.orders.ticket.titleBroker(selected!.broker) : de.orders.ticket.titlePaper}
 			description={
 				broker
-					? `Geht als Tagesorder an ${selected!.broker}${selected!.live ? " – echtes Geld" : " (Papierkonto)"}. Vor dem Senden fragt der Desk noch einmal nach.`
-					: "Wird sofort zum aktuellen Kurs ausgeführt, eine Limit-Order sobald das Limit erreicht ist."
+					? de.orders.ticket.descBroker(selected!.broker, selected!.live)
+					: de.orders.ticket.descPaper
 			}
-			submit={broker ? `An ${selected!.broker} senden…` : side === "buy" ? "Kaufen" : "Verkaufen"}
+			submit={broker ? de.proposal.send.toEllipsis(selected!.broker) : side === "buy" ? de.orders.ticket.buy : de.orders.ticket.sell}
 			submitVariant={selected?.live ? "danger" : "primary"}
 			onSubmit={() => void submit()}
 			busy={busy || !selected || pending || (check !== null && !check.ok)}
 			error={errs.general}
 		>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-				<Field label="Depot">
+				<Field label={de.orders.ticket.depot}>
 					{(id, a) => (
 						<Select id={id} {...a} value={acc} onChange={(e) => setAcc(e.target.value)} data-testid="ticket-account">
 							{tradable.map((x) => (
 								<option key={x.id} value={x.id}>
 									{x.name}
-									{x.live ? " – echtes Geld" : ""}
+									{x.live ? de.orders.ticket.liveSuffix : ""}
 								</option>
 							))}
 						</Select>
 					)}
 				</Field>
-				<Field label="Wertpapier" hint={item ? `${item.name} · ${price(item.price, item.currency)}` : "Nur Werte von der Watchlist"}>
+				<Field label={de.orders.ticket.security} hint={item ? `${item.name} · ${price(item.price, item.currency)}` : de.orders.ticket.watchlistOnly}>
 					{(id, a) => (
 						<Select id={id} {...a} value={sym} onChange={(e) => setSymbol(e.target.value)}>
 							{(watch ?? []).map((w) => (
@@ -131,29 +131,27 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 				</Field>
 			</div>
 			<div className="flex flex-wrap gap-3">
-				<Segmented label="Seite" items={[{ id: "buy", label: "Kauf" }, { id: "sell", label: "Verkauf" }]} value={side} onChange={setSide} />
-				<Segmented label="Orderart" items={[{ id: "market", label: "Market" }, { id: "limit", label: "Limit" }]} value={type} onChange={setType} />
+				<Segmented label={de.orders.ticket.side} items={[{ id: "buy", label: sideLabel.buy }, { id: "sell", label: sideLabel.sell }]} value={side} onChange={setSide} />
+				<Segmented label={de.orders.ticket.orderType} items={[{ id: "market", label: de.proposal.orderType.market }, { id: "limit", label: de.proposal.orderType.limit }]} value={type} onChange={setType} />
 			</div>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-				<Field label="Stück" error={errs.at("qty")}>
+				<Field label={de.proposal.qty} error={errs.at("qty")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={qtyText} onChange={(e) => setQtyText(e.target.value)} autoFocus />}
 				</Field>
 				{type === "limit" && (
-					<Field label={`Limit (${item?.currency ?? "EUR"})`} error={errs.at("limit")}>
+					<Field label={de.orders.ticket.limit(item?.currency ?? "EUR")} error={errs.at("limit")}>
 						{(id, a) => <Input id={id} {...a} inputMode="decimal" value={limitText} onChange={(e) => setLimitText(e.target.value)} />}
 					</Field>
 				)}
 			</div>
 			<div className="flex min-h-[38px] flex-col gap-1.5 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px]" data-testid="order-check" aria-live="polite">
 				{!body ? (
-					<span className="text-fg-3">Stückzahl{type === "limit" ? " und Limit" : ""} eintragen – dann prüft der Desk die Order.</span>
+					<span className="text-fg-3">{de.orders.ticket.enterQty(type === "limit")}</span>
 				) : pending || !check ? (
-					<span className="text-fg-3">{failed ?? "Prüfe die Order…"}</span>
+					<span className="text-fg-3">{failed ?? de.orders.ticket.checking}</span>
 				) : (
 					<>
-						<span className="tnum">
-							Orderwert ≈ {eur(check.estimateCents)} + {eur(check.feeCents)} Gebühr
-						</span>
+						<span className="tnum">{de.orders.ticket.orderValue(eur(check.estimateCents), eur(check.feeCents))}</span>
 						{[...check.violations, ...check.warnings].map((v, i) => (
 							<span key={v} className={i < check.violations.length ? "flex gap-2 text-err" : "flex gap-2 text-warn"}>
 								<TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />

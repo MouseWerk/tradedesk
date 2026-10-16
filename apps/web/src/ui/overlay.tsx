@@ -3,6 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { de } from "../i18n/de";
 import { Button, cn } from "./kit";
 import { pushToast, type Toast } from "./toasts";
 
@@ -79,10 +80,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 						<div className="mt-5 flex flex-wrap justify-end gap-2">
 							{/* Abbrechen hat den Fokus: Eingabe führt nichts Folgenreiches aus */}
 							<Button variant="ghost" onClick={() => close(false)} autoFocus className={THUMB}>
-								Abbrechen
+								{de.common.cancel}
 							</Button>
 							<Button variant={ask?.danger ? "danger" : "primary"} onClick={() => close(true)} className={THUMB}>
-								{ask?.confirm ?? "Ausführen"}
+								{ask?.confirm ?? de.ui.confirm.run}
 							</Button>
 						</div>
 					</Dialog.Content>
@@ -138,7 +139,7 @@ export function FormDialog({ open, onOpenChange, title, description, children, o
 								{description ? <Dialog.Description className="mt-1 text-[12.5px] text-fg-3">{description}</Dialog.Description> : <Dialog.Description className="sr-only">{title}</Dialog.Description>}
 							</div>
 							<Dialog.Close asChild>
-								<Button variant="ghost" size="iconSm" className="-mt-1 ml-auto" aria-label="Schließen">
+								<Button variant="ghost" size="iconSm" className="-mt-1 ml-auto" aria-label={de.common.close}>
 									<X className="size-4" />
 								</Button>
 							</Dialog.Close>
@@ -152,7 +153,7 @@ export function FormDialog({ open, onOpenChange, title, description, children, o
 						<div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">
 							<Dialog.Close asChild>
 								<Button variant="ghost" className={THUMB}>
-									Abbrechen
+									{de.common.cancel}
 								</Button>
 							</Dialog.Close>
 							<Button type="submit" variant={submitVariant} disabled={busy} className={THUMB}>
@@ -230,7 +231,7 @@ function ToastItem({ toast, onDone }: { toast: Toast; onDone: (id: number) => vo
 					{toast.action.label}
 				</Button>
 			)}
-			<button type="button" className="-mr-1 rounded p-0.5 text-fg-3 hover:text-fg" onClick={() => onDone(toast.id)} aria-label="Meldung schließen">
+			<button type="button" className="-mr-1 rounded p-0.5 text-fg-3 hover:text-fg" onClick={() => onDone(toast.id)} aria-label={de.ui.toast.close}>
 				<X className="size-3.5" />
 			</button>
 		</div>

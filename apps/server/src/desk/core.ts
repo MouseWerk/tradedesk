@@ -10,6 +10,7 @@ import { fxSymbol, type Market } from "../market.ts";
 import type { Broker } from "../broker.ts";
 import { OwnerAuth } from "../auth.ts";
 import { MarketFeed, type QuoteFeed } from "../feed.ts";
+import { de } from "../i18n/de.ts";
 
 export class DeskError extends Error {
 	readonly status: number;
@@ -46,22 +47,22 @@ export const MIN_TRADE_TIME = new Date(1990, 0, 1).getTime(); // davor erfasst n
 export const dateText = (t: number) => new Date(t).toLocaleDateString("de-DE");
 
 /** Stückzahl aus einer Eingabe: endlich, > 0, höchstens MAX_QTY und 6 Nachkommastellen – sonst 400. */
-export function parseQty(v: unknown, what = "Stückzahl"): number {
+export function parseQty(v: unknown, what = de.core.qty): number {
 	const r = QtySchema.safeParse(v);
-	if (!r.success || roundQty(r.data) <= 0) throw new DeskError(`${what}: größer als 0, höchstens 10 Mio. und höchstens 6 Nachkommastellen.`);
+	if (!r.success || roundQty(r.data) <= 0) throw new DeskError(de.core.qtyInvalid(what));
 	return roundQty(r.data);
 }
 
-export function parsePrice(v: unknown, what = "Kurs"): number {
+export function parsePrice(v: unknown, what = de.core.price): number {
 	const r = PriceSchema.safeParse(v);
-	if (!r.success) throw new DeskError(`${what}: größer als 0, höchstens 10 Mio. und höchstens 8 Nachkommastellen.`);
+	if (!r.success) throw new DeskError(de.core.priceInvalid(what));
 	return r.data;
 }
 
 /** Betrag in EUR mit höchstens zwei Nachkommastellen → Cent; fehlt er, gilt fallback. */
 export function parseFeeCents(v: unknown, fallback: number): number {
 	if (v === undefined || v === null) return fallback;
-	if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > MAX_FEE_EUR || decimals(v) > 2) throw new DeskError(`Gebühr in EUR zwischen 0 und ${MAX_FEE_EUR.toLocaleString("de-DE")}, höchstens 2 Nachkommastellen.`);
+	if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > MAX_FEE_EUR || decimals(v) > 2) throw new DeskError(de.core.feeInvalid(MAX_FEE_EUR.toLocaleString("de-DE")));
 	return cents(v);
 }
 
@@ -105,7 +106,7 @@ export abstract class DeskCore extends EventEmitter {
 
 	account(id: string): Account {
 		const a = this.cfg.accounts.find((x) => x.id === id);
-		if (!a) throw new DeskError(`Unbekanntes Depot ${id}.`, 404);
+		if (!a) throw new DeskError(de.core.unknownDepot(id), 404);
 		return a;
 	}
 

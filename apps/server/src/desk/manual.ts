@@ -3,11 +3,12 @@ import type { Account, CashMove, ImportResult, Side, Trade } from "@desk/shared"
 import { MAX_EUR, cents, decimals, parseTradesCsv, sideLabel } from "@desk/shared";
 import { DeskError, MIN_TRADE_TIME, dateText, parseQty, parsePrice, parseFeeCents, num, type TradeRow } from "./core.ts";
 import { DeskBroker } from "./broker.ts";
+import { de } from "../i18n/de.ts";
 
 export abstract class DeskManual extends DeskBroker {
 	protected manual(accountId: string): Account {
 		const a = this.account(accountId);
-		if (a.kind !== "manual") throw new DeskError(`${a.name} ist ein Papierdepot – dort gibt es Orders statt erfasster Trades.`);
+		if (a.kind !== "manual") throw new DeskError(de.manual.notManual(a.name));
 		return a;
 	}
 
@@ -15,7 +16,7 @@ export abstract class DeskManual extends DeskBroker {
 		const a = this.manual(accountId);
 		const symbol = this.normalizeSymbol(body.symbol);
 		const side = body.side === "sell" ? "sell" : body.side === "buy" ? "buy" : null;
-		if (!side) throw new DeskError("Kauf oder Verkauf?");
+		if (!side) throw new DeskError(de.manual.sideMissing);
 		const qty = parseQty(body.qty);
 		const price = parsePrice(body.price);
 		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
@@ -23,12 +24,12 @@ export abstract class DeskManual extends DeskBroker {
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		if (!this.instrument(symbol) && this.market.kind !== "off") await this.refresh([symbol]); // Name und Kurs, wenn Yahoo das Symbol kennt
 		const id = this.db.tx(() => {
-			if (side === "sell" && (this.book(a.id).holdings.get(symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${symbol}.`);
+			if (side === "sell" && (this.book(a.id).holdings.get(symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(de.core.fewerShares(num(qty), symbol));
 			// auch zurückdatiert: ein Verkauf vor dem Kauf würde Geld erzeugen, das es nie gab
 			if (this.newOversells(a.id, [{ id: Number.MAX_SAFE_INTEGER, symbol, side, qty, time }]).size)
-				throw new DeskError(side === "sell" ? `Am ${dateText(time)} waren weniger als ${num(qty)} Stück ${symbol} im Depot – Zeitpunkt prüfen.` : `Dieser Trade lässt einen späteren Verkauf ungedeckt.`);
+				throw new DeskError(side === "sell" ? de.core.fewerSharesAt(dateText(time), num(qty), symbol) : de.manual.laterSellUncovered);
 			const id = this.insertTrade(a, { symbol, side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "manual", proposalId: null, note });
-			this.event("trade.manual", this.cfg.user, `${sideLabel[side]} ${num(qty)} ${symbol} zu ${num(price)} € erfasst (${a.name})`);
+			this.event("trade.manual", this.cfg.user, de.manual.recorded(sideLabel[side], num(qty), symbol, num(price), a.name));
 			return id;
 		});
 		this.emit("tick", { at: this.now() });
@@ -40,14 +41,14 @@ export abstract class DeskManual extends DeskBroker {
 		const a = this.manual(accountId);
 		// ein Kauf, an dem spätere Verkäufe hängen, bleibt; ein gelöschter Verkauf kommt nur zurück, wenn er gedeckt ist
 		const row = this.db.get<TradeRow>("SELECT * FROM trade WHERE id = ? AND account_id = ?", id, a.id);
-		if (row && !restore && row.deleted_at === null && this.newOversells(a.id, [], id).size) throw new DeskError("Spätere Verkäufe hängen an diesem Kauf – zuerst den Verkauf löschen.", 409);
-		if (row && restore && row.deleted_at !== null && this.newOversells(a.id, [row]).size) throw new DeskError(`Der Verkauf vom ${dateText(row.time)} wäre nicht mehr gedeckt – nicht wiederhergestellt.`, 409);
+		if (row && !restore && row.deleted_at === null && this.newOversells(a.id, [], id).size) throw new DeskError(de.manual.buyHasSells, 409);
+		if (row && restore && row.deleted_at !== null && this.newOversells(a.id, [row]).size) throw new DeskError(de.manual.restoreUncovered(dateText(row.time)), 409);
 		const { changes } = this.db.run(
 			restore ? "UPDATE trade SET deleted_at = NULL WHERE id = ? AND account_id = ? AND deleted_at IS NOT NULL" : "UPDATE trade SET deleted_at = ? WHERE id = ? AND account_id = ? AND deleted_at IS NULL AND source IN ('manual','import')",
 			...(restore ? [id, a.id] : [this.now(), id, a.id]),
 		);
-		if (!changes) throw new DeskError(restore ? "Nichts zum Wiederherstellen." : "Nur selbst erfasste oder importierte Trades lassen sich löschen.", 404);
-		this.event(restore ? "trade.restore" : "trade.delete", this.cfg.user, `Trade ${id} in ${a.name} ${restore ? "wiederhergestellt" : "gelöscht"}`);
+		if (!changes) throw new DeskError(restore ? de.manual.nothingToRestore : de.manual.onlyOwnTrades, 404);
+		this.event(restore ? "trade.restore" : "trade.delete", this.cfg.user, de.manual.tradeDeleted(id, a.name, restore));
 		this.emit("tick", { at: this.now() });
 	}
 
@@ -56,13 +57,13 @@ export abstract class DeskManual extends DeskBroker {
 		const v = body.amountEur;
 		// endlich, nicht 0, höchstens 100 Mio. € und ganze Cent: -0,004 € ist keine Auszahlung, 1e308 € kein Kontostand
 		if (typeof v !== "number" || !Number.isFinite(v) || v === 0 || Math.abs(v) > MAX_EUR || decimals(v) > 2)
-			throw new DeskError("Betrag in EUR mit höchstens 2 Nachkommastellen (bis 100 Mio.), positiv für Einzahlung, negativ für Auszahlung.");
+			throw new DeskError(de.manual.amountInvalid);
 		const amount = cents(v);
-		if (amount < 0 && this.summary(a).cashCents + amount < 0) throw new DeskError("Auszahlung größer als das Cash im Depot.");
+		if (amount < 0 && this.summary(a).cashCents + amount < 0) throw new DeskError(de.manual.overdraw);
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		const time = this.now();
 		const { lastId } = this.db.run("INSERT INTO cash_move (account_id, amount_cents, time, note) VALUES (?,?,?,?)", a.id, amount, time, note);
-		this.event("cash", this.cfg.user, `${amount > 0 ? "Einzahlung" : "Auszahlung"} ${(Math.abs(amount) / 100).toLocaleString("de-DE", { minimumFractionDigits: 2 })} € (${a.name})`);
+		this.event("cash", this.cfg.user, de.manual.cashMoved(amount > 0, (Math.abs(amount) / 100).toLocaleString("de-DE", { minimumFractionDigits: 2 }), a.name));
 		this.emit("tick", { at: time });
 		return { id: lastId, accountId: a.id, amountCents: amount, time, note };
 	}
@@ -89,7 +90,7 @@ export abstract class DeskManual extends DeskBroker {
 				}
 			}
 			if (!drop.size) break;
-			for (const k of keep) if (drop.has(k.id)) errors.push(`Zeile ${k.r.line}: Verkauf ${num(k.r.qty)} ${k.r.symbol} am ${dateText(k.r.time)} – zu dem Zeitpunkt nicht genug Stück im Depot.`);
+			for (const k of keep) if (drop.has(k.id)) errors.push(de.manual.csvUncovered(k.r.line, num(k.r.qty), k.r.symbol, dateText(k.r.time)));
 			keep = keep.filter((k) => !drop.has(k.id));
 		}
 		return keep.map((k) => k.r);
@@ -97,14 +98,14 @@ export abstract class DeskManual extends DeskBroker {
 
 	async importCsv(accountId: string, text: unknown): Promise<ImportResult> {
 		const a = this.manual(accountId);
-		if (typeof text !== "string" || !text.trim()) throw new DeskError("Leere Datei.");
-		if (text.length > 2_000_000) throw new DeskError("Datei zu groß (höchstens 2 MB).");
+		if (typeof text !== "string" || !text.trim()) throw new DeskError(de.manual.emptyFile);
+		if (text.length > 2_000_000) throw new DeskError(de.manual.fileTooLarge);
 		const parsed = parseTradesCsv(text);
 		const errors = parsed.errors;
 		// keine Zeilen aus der Zukunft oder von vor 1990
 		const dated = parsed.rows.filter((r) => {
-			const bad = r.time > this.now() + 60_000 ? "liegt in der Zukunft" : r.time < MIN_TRADE_TIME ? "liegt vor 1990" : null;
-			if (bad) errors.push(`Zeile ${r.line}: Datum ${bad}.`);
+			const bad = r.time > this.now() + 60_000 ? de.manual.inFuture : r.time < MIN_TRADE_TIME ? de.manual.before1990 : null;
+			if (bad) errors.push(de.manual.badDate(r.line, bad));
 			return !bad;
 		});
 		const unknown = [...new Set(dated.map((r) => r.symbol))].filter((s) => !this.instrument(s));
@@ -124,7 +125,7 @@ export abstract class DeskManual extends DeskBroker {
 				if (id) imported++;
 				else skipped++;
 			}
-			if (imported) this.event("trade.import", this.cfg.user, `${imported} Trades in ${a.name} importiert${skipped ? `, ${skipped} schon vorhanden` : ""}`);
+			if (imported) this.event("trade.import", this.cfg.user, de.manual.imported(imported, a.name, skipped));
 		});
 		this.emit("tick", { at: this.now() });
 		return { imported, skipped, errors };

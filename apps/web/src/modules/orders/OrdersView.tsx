@@ -1,6 +1,7 @@
 // Orders: was auf dich wartet (Vorschläge, Broker-Orders, offene Limits) und der Verlauf aller Entscheidungen.
 import { useState } from "react";
 import { ShoppingCart } from "lucide-react";
+import { de } from "@/i18n/de";
 import { useOverview, useProposals } from "@/lib/api";
 import { Button, Card, Empty, Segmented, Select, Skeleton } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
@@ -23,26 +24,26 @@ export default function OrdersView() {
 	return (
 		<Page>
 			<PageHead
-				title="Orders"
-				sub="Agenten schlagen vor, du entscheidest. Für Trade Republic führst du freigegebene Orders selbst in der App aus."
+				title={de.orders.title}
+				sub={de.orders.sub}
 				aside={
 					<Button variant="primary" onClick={() => setTicket(true)} disabled={!ov}>
 						<ShoppingCart className="size-4" aria-hidden />
-						Neue Order…
+						{de.orders.newOrder}
 					</Button>
 				}
 			/>
 			<div className="flex flex-wrap items-center gap-2">
-				<Segmented label="Ansicht" items={[{ id: "open", label: `Offen (${data ? active.length : "–"})` }, { id: "history", label: "Verlauf" }]} value={tab} onChange={setTab} />
-				<Select aria-label="Nach Autor filtern" value={author} onChange={(e) => setAuthor(e.target.value)} className="w-44">
-					<option value="">Alle Autoren</option>
+				<Segmented label={de.orders.view} items={[{ id: "open", label: de.orders.open(data ? String(active.length) : "–") }, { id: "history", label: de.orders.history }]} value={tab} onChange={setTab} />
+				<Select aria-label={de.orders.filterAuthor} value={author} onChange={(e) => setAuthor(e.target.value)} className="w-44">
+					<option value="">{de.orders.allAuthors}</option>
 					{authors.map((a) => (
 						<option key={a} value={a}>
 							{a}
 						</option>
 					))}
 				</Select>
-				{tab === "open" && pending > 0 && <span className="text-[12.5px] text-fg-3">{pending === 1 ? "1 Vorschlag wartet auf deine Entscheidung" : `${pending} Vorschläge warten auf deine Entscheidung`}</span>}
+				{tab === "open" && pending > 0 && <span className="text-[12.5px] text-fg-3">{de.orders.pending(pending)}</span>}
 			</div>
 			{(error && !data) || (ovError && !ov) ? (
 				<LoadError error={error ?? ovError} onRetry={() => void (refetch(), refetchOv())} />
@@ -59,7 +60,7 @@ export default function OrdersView() {
 				</div>
 			) : (
 				<Card>
-					<Empty>{tab === "open" ? "Nichts offen. Agenten schlagen mit „python cli/desk.py propose“ vor." : "Noch keine Entscheidungen."}</Empty>
+					<Empty>{tab === "open" ? de.orders.emptyOpen : de.orders.emptyHistory}</Empty>
 				</Card>
 			)}
 			{ov && <OrderTicket open={ticket} onOpenChange={setTicket} accounts={ov.accounts} />}

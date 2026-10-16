@@ -9,9 +9,11 @@ import { LineChart, Sparkline, type LineSeries } from "@/ui/charts";
 import { Badge, Card, Empty, Select, Skeleton, cn } from "@/ui/kit";
 import { Page, PageHead } from "../common";
 import { LoadError } from "@/ui/boundary";
+import { de } from "@/i18n/de";
 
 const SERIES = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)"];
-const KIND = { note: "Notiz", thesis: "These", review: "Rückblick" } as const;
+/** Eintrag für config.json im leeren Zustand, wörtlich (Einstellung, kein Text) */
+const AGENT_EXAMPLE = '[{"name": "Atlas", "startCashEur": 10000}]';
 
 const ret = (p: CurvePoint) => (p.depositsCents > 0 ? ((p.equityCents - p.depositsCents) / p.depositsCents) * 100 : null);
 
@@ -40,22 +42,22 @@ export default function AgentsView() {
 		return p ? ret(p) : null;
 	};
 	const series: LineSeries[] = [
-		{ id: "you", label: `${ov.user} (deine Depots)`, color: SERIES[0], values: days.map((d) => at(you, d)) },
+		{ id: "you", label: de.agents.you(ov.user), color: SERIES[0], values: days.map((d) => at(you, d)) },
 		...data.agents.slice(0, 4).map((a, i) => ({ id: a.name, label: a.name, color: SERIES[i + 1], values: days.map((d) => at(a.curve, d)) })),
 	];
 	const journal = data.journal.filter((j) => !who || j.author === who);
 	return (
 		<Page>
-			<PageHead title="Agenten" sub="Jeder Agent handelt ein eigenes Papierdepot und schlägt dir vor. Hier siehst du, wer gut entscheidet." />
+			<PageHead title={de.agents.title} sub={de.agents.sub} />
 			{data.agents.length === 0 ? (
 				<Card>
-					<Empty>Noch keine Agenten. In config.json unter „agents“ eintragen, z. B. [{"{"}"name": "Atlas", "startCashEur": 10000{"}"}], dann den Desk neu starten.</Empty>
+					<Empty>{de.agents.empty(AGENT_EXAMPLE)}</Empty>
 				</Card>
 			) : (
 				<>
-					<Card title="Rendite im Vergleich" aside="seit Start, in %">
-						<LineChart label="Rendite in Prozent je Tag: du und die Agenten" xs={days} xLabel={dayLabel} series={series} format={(v) => pct(v, { digits: 1 })} baseline={0} height={260} />
-						<ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12px]" aria-label="Legende">
+					<Card title={de.agents.compareTitle} aside={de.agents.compareAside}>
+						<LineChart label={de.agents.chartLabel} xs={days} xLabel={dayLabel} series={series} format={(v) => pct(v, { digits: 1 })} baseline={0} height={260} />
+						<ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[12px]" aria-label={de.agents.legend}>
 							{series.map((s) => {
 								const last = [...s.values].reverse().find((v) => v !== null) ?? null;
 								return (
@@ -71,40 +73,40 @@ export default function AgentsView() {
 					{/* auto-fit: wenige Agenten füllen die Reihe statt 40 % davon */}
 					<div className="grid grid-cols-[repeat(auto-fit,minmax(min(300px,100%),1fr))] gap-4">
 						{data.agents.map((a, i) => (
-							<Card key={a.name} title={a.name} icon={<Bot className="size-4" />} aside={a.lastActive ? `aktiv ${ago(a.lastActive)}` : "noch nie aktiv"}>
+							<Card key={a.name} title={a.name} icon={<Bot className="size-4" />} aside={a.lastActive ? de.agents.active(ago(a.lastActive)) : de.agents.neverActive}>
 								<div className="flex items-end gap-3">
 									<div className="min-w-0">
 										<div className="text-[22px] font-semibold tnum">
 											<span className={tone(a.returnPct)}>{pct(a.returnPct)}</span>
 										</div>
-										<div className="text-[12px] text-fg-3 tnum">{eur(a.equityCents)} Depotwert</div>
+										<div className="text-[12px] text-fg-3 tnum">{de.agents.equity(eur(a.equityCents))}</div>
 									</div>
 									<Sparkline values={a.curve.map((p) => p.equityCents)} color={i < 4 ? SERIES[i + 1] : "var(--fg-2)"} className="ml-auto h-10 w-32" />
 								</div>
 								<dl className="mt-4 grid grid-cols-3 gap-3 text-[12px]">
 									<div>
-										<dt className="text-fg-3">Trefferquote</dt>
+										<dt className="text-fg-3">{de.agents.winRate}</dt>
 										<dd className="font-medium tnum">{a.winRate === null ? "–" : pct(a.winRate, { signed: false, digits: 0 })}</dd>
-										<dd className="text-fg-3 tnum">{a.closed} geschlossen</dd>
+										<dd className="text-fg-3 tnum">{de.agents.closed(a.closed)}</dd>
 									</div>
 									<div>
-										<dt className="text-fg-3">Freigegeben</dt>
+										<dt className="text-fg-3">{de.agents.approved}</dt>
 										<dd className="font-medium tnum">{a.approved}</dd>
-										<dd className="text-fg-3 tnum">{a.rejected} abgelehnt</dd>
+										<dd className="text-fg-3 tnum">{de.agents.rejected(a.rejected)}</dd>
 									</div>
 									<div>
-										<dt className="text-fg-3">Offen</dt>
+										<dt className="text-fg-3">{de.agents.pending}</dt>
 										<dd className="font-medium tnum">{a.pending}</dd>
-										<dd className="text-fg-3 tnum">{a.trades} Trades</dd>
+										<dd className="text-fg-3 tnum">{de.agents.trades(a.trades)}</dd>
 									</div>
 								</dl>
 								<div className="mt-4 flex gap-3 text-[12.5px]">
 									<Link to="/portfolio" search={{ account: a.accountId }} className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
-										Depot ansehen
+										{de.agents.viewDepot}
 									</Link>
 									{a.pending > 0 && (
 										<Link to="/orders" className="font-medium text-fg underline decoration-line-strong underline-offset-2 hover:decoration-fg">
-											{a.pending} offene Vorschläge
+											{de.agents.pendingProposals(a.pending)}
 										</Link>
 									)}
 								</div>
@@ -114,9 +116,9 @@ export default function AgentsView() {
 				</>
 			)}
 			<div className="grid grid-cols-[minmax(0,1fr)_420px] gap-4 @max-[1100px]:grid-cols-1">
-				<Card title="Journal" icon={<NotebookPen className="size-4" />} pad={false} aside={
-					<Select aria-label="Journal nach Autor filtern" value={who} onChange={(e) => setWho(e.target.value)} className="h-7 w-40 text-[12px]">
-						<option value="">Alle</option>
+				<Card title={de.agents.journal.title} icon={<NotebookPen className="size-4" />} pad={false} aside={
+					<Select aria-label={de.agents.journal.filter} value={who} onChange={(e) => setWho(e.target.value)} className="h-7 w-40 text-[12px]">
+						<option value="">{de.overview.waiting.all}</option>
 						{data.agents.map((a) => (
 							<option key={a.name} value={a.name}>
 								{a.name}
@@ -130,7 +132,7 @@ export default function AgentsView() {
 								<li key={j.id} className="px-4 py-3 text-[12.5px]">
 									<div className="flex flex-wrap items-center gap-2">
 										<span className="font-medium">{j.author}</span>
-										<Badge>{KIND[j.kind]}</Badge>
+										<Badge>{de.agents.journal.kind[j.kind]}</Badge>
 										{j.symbol && (
 											<Link to="/market" search={{ symbol: j.symbol }} className="text-fg-2 hover:underline">
 												{j.symbol}
@@ -143,20 +145,17 @@ export default function AgentsView() {
 							))}
 						</ol>
 					) : (
-						<Empty>Noch keine Einträge.</Empty>
+						<Empty>{de.agents.journal.empty}</Empty>
 					)}
 				</Card>
-				<Card title="Agenten anbinden" icon={<Terminal className="size-4" />}>
+				<Card title={de.agents.connect.title} icon={<Terminal className="size-4" />}>
 					<div className="flex flex-col gap-3 text-[12.5px] leading-relaxed text-fg-2">
-						<p>Agenten sind Claude-Code-Sitzungen. Öffne Claude Code im Ordner des Tradedesk und starte je Agent:</p>
+						<p>{de.agents.connect.intro}</p>
 						<pre className={cn("scroll-thin overflow-x-auto rounded-lg bg-bg-2 p-3 font-mono text-[11.5px] text-fg")}>
-							{`/desk-agent Atlas
-
-# den ganzen Tag im Takt:
-/loop 10m /desk-agent Atlas`}
+							{de.agents.connect.snippet}
 						</pre>
-						<p>Der Agent holt sich mit „desk.py brief“ alles Nötige, schreibt dir im Chat, schlägt mit Stop vor und wartet mit „desk.py wait“, bis du antwortest. Regeln: docs/AGENTS.md.</p>
-						<p className="text-fg-3">Freigeben, bei IBKR bestätigen und stornieren kannst nur du hier im Browser.</p>
+						<p>{de.agents.connect.howItWorks}</p>
+						<p className="text-fg-3">{de.agents.connect.ownerOnly}</p>
 					</div>
 				</Card>
 			</div>

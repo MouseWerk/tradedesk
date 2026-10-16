@@ -3,6 +3,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { RotateCcw, TriangleAlert } from "lucide-react";
+import { de } from "../i18n/de";
 import { Button } from "./kit";
 
 function Fallback({ title, error, onRetry, compact }: { title: string; error: unknown; onRetry: () => void; compact?: boolean }) {
@@ -14,7 +15,7 @@ function Fallback({ title, error, onRetry, compact }: { title: string; error: un
 				<p className="mt-1 text-[12.5px] break-words text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
 				<Button variant="outline" size="sm" className="mt-3" onClick={onRetry}>
 					<RotateCcw className="size-3.5" />
-					Neu laden
+					{de.ui.boundary.reload}
 				</Button>
 			</div>
 		</div>
@@ -27,7 +28,7 @@ export function ModuleError({ error, reset }: ErrorComponentProps) {
 	const qc = useQueryClient();
 	return (
 		<Fallback
-			title="Daten nicht verfügbar"
+			title={de.ui.boundary.unavailable}
 			error={error}
 			onRetry={() => {
 				void qc.invalidateQueries();
@@ -43,7 +44,7 @@ export function ModuleError({ error, reset }: ErrorComponentProps) {
  * Skeletts, das nie verschwindet.
  */
 export function LoadError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
-	return <Fallback title="Daten nicht verfügbar" error={error} onRetry={onRetry} />;
+	return <Fallback title={de.ui.boundary.unavailable} error={error} onRetry={onRetry} />;
 }
 
 /** Für feste Teile des Rahmens (Seitenleiste, Chat). */
@@ -56,7 +57,7 @@ export class Boundary extends Component<{ name: string; children: ReactNode; com
 		console.warn(`desk: ${this.props.name} ausgefallen`, error, info.componentStack);
 	}
 	render() {
-		if (this.state.error) return <Fallback compact={this.props.compact} title={`${this.props.name}: Daten nicht verfügbar`} error={this.state.error} onRetry={() => this.setState({ error: null })} />;
+		if (this.state.error) return <Fallback compact={this.props.compact} title={de.ui.boundary.unavailableIn(this.props.name)} error={this.state.error} onRetry={() => this.setState({ error: null })} />;
 		return this.props.children;
 	}
 }

@@ -3,6 +3,7 @@
 import type { Cockpit, CockpitPosition } from "@desk/shared";
 import { cents, dayKey, orderValueCents, rMultiple } from "@desk/shared";
 import { DeskAnalytics } from "./analytics.ts";
+import { de } from "../i18n/de.ts";
 
 const BROKER_KEEPALIVE_MS = 60_000; // IBKR empfiehlt etwa einmal je Minute /tickle, unabhängig vom Kurstakt
 
@@ -66,7 +67,7 @@ export class Desk extends DeskAnalytics {
 			this.db.run("INSERT INTO setting (key, value) VALUES (?, '1')", key);
 			const open = this.cockpit().positions.filter((p) => p.openedToday && this.instrument(p.symbol)?.exchange === s.exchange);
 			if (open.length)
-				this.event("close", "Desk", `${s.exchange} schließt in 15 Minuten – heute eröffnet und noch offen: ${open.map((p) => `${p.symbol} (${this.account(p.accountId).name})`).join(", ")}.`, { ref: null });
+				this.event("close", "Desk", de.desk.closeReminder(s.exchange, open.map((p) => `${p.symbol} (${this.account(p.accountId).name})`).join(", ")), { ref: null });
 		}
 	}
 

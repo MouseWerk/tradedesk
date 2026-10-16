@@ -5,6 +5,7 @@
 import { HttpError, localJson } from "./http.ts";
 import type { Broker } from "./broker.ts";
 import type { Market, QuoteData, QuoteSource } from "./market.ts";
+import { de } from "./i18n/de.ts";
 
 export interface QuoteResult {
 	quotes: QuoteData[];
@@ -142,7 +143,7 @@ export class IbkrQuoteFeed implements QuoteFeed {
 			this.lastError = null;
 		} catch (e) {
 			if (e instanceof HttpError && e.status === 401) this.ready = false;
-			this.lastError = `IBKR-Kurse: ${(e as Error).message}`;
+			this.lastError = de.feed.ibkrQuotes((e as Error).message);
 			return base;
 		}
 		const bySymbol = new Map<string, IbkrSnapshotItem>();

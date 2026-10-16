@@ -7,6 +7,7 @@ import { useState, type ReactNode } from "react";
 import { Bot, Check, Clock, OctagonX, Radio, TriangleAlert, User, X } from "lucide-react";
 import type { AccountSummary, Proposal, ProposalStatus, QuoteInfo } from "@desk/shared";
 import { movePct, sideLabel, statusLabel } from "@desk/shared";
+import { de } from "@/i18n/de";
 import { live, refreshable, send } from "@/lib/api";
 import { ago, dateTime, eur, inputNumber, num, numberError, parseDe, pct, price, qty as fmtQty } from "@/lib/format";
 import { orderResultText, proposalRisk } from "@/lib/orders";
@@ -70,8 +71,8 @@ export function useKillSwitch() {
 	const confirm = useConfirm();
 	const toggle = async (isOn: boolean) => {
 		const on = !isOn;
-		if (on && !(await confirm({ title: "Not-Aus einschalten?", body: "Keine Freigaben und keine Ausführungen mehr, offene Limits ruhen. Vorschläge kommen weiter an.", confirm: "Not-Aus einschalten", danger: true }))) return;
-		await run("/api/risk/kill", "PUT", { on }, on ? "Not-Aus ist an." : "Not-Aus ist aus.");
+		if (on && !(await confirm({ title: de.proposal.kill.title, body: de.proposal.kill.body, confirm: de.proposal.kill.confirm, danger: true }))) return;
+		await run("/api/risk/kill", "PUT", { on }, on ? de.proposal.kill.on : de.proposal.kill.off);
 	};
 	return { toggle, busy };
 }
@@ -103,7 +104,7 @@ export const isActive = (p: Proposal) => (ACTIVE as readonly string[]).includes(
 /** Was deine Entscheidung braucht: freigeben, beim Broker bestätigen oder eine Ausführung eintragen. */
 export const needsYou = (p: Proposal, accounts: AccountSummary[]) => p.status === "pending" || p.status === "confirm" || (p.status === "placed" && accounts.find((a) => a.id === p.accountId)?.kind === "manual");
 
-const orderKind = (p: Proposal) => (p.orderType === "limit" ? `Limit ${price(p.limitPrice, p.currency)}` : "Market");
+const orderKind = (p: Proposal) => (p.orderType === "limit" ? de.proposal.limitAt(price(p.limitPrice, p.currency)) : de.proposal.orderType.market);
 
 /** Freigeben, ablehnen, eintragen, bestätigen, stornieren – für Karte und Zeile dieselbe Logik und dieselben Dialoge. */
 function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
@@ -127,30 +128,28 @@ function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
 	const kind = (acc?.kind ?? "paper") as "paper" | "broker" | "manual";
 
 	const approve = async () => {
-		if (!(qtyNum > 0) || qtyNum > p.qty) return errs.fail("qty", numberError(qtyText) ?? `Zwischen 0 und ${fmtQty(p.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
+		if (!(qtyNum > 0) || qtyNum > p.qty) return errs.fail("qty", numberError(qtyText) ?? de.proposal.qtyRange(fmtQty(p.qty)));
 		const doneLabel = `${sideLabel[p.side]} ${fmtQty(qtyNum)} ${p.symbol}`;
 		if (broker) {
 			const r = risk(qtyNum);
 			const ok = await confirm({
-				title: `${doneLabel} an ${acc?.broker} senden?`,
+				title: de.proposal.send.title(doneLabel, acc?.broker ?? ""),
 				body: (
 					<span className="flex flex-col gap-1.5 tnum" data-testid="broker-confirm">
 						<span>
-							{doneLabel} · {p.orderType === "limit" ? `Limit ${price(p.limitPrice, p.currency)}` : "Market"}-Tagesorder in „{acc?.name}“
+							{doneLabel} · {de.proposal.send.dayOrder(orderKind(p), acc?.name ?? "")}
 						</span>
-						<span>
-							geschätzt {eur(estimate(qtyNum))} + {eur(acc?.feeCents ?? 0)} Gebühr
-						</span>
+						<span>{de.proposal.send.estimate(eur(estimate(qtyNum)), eur(acc?.feeCents ?? 0))}</span>
 						{p.side === "buy" && (
 							<span>
-								{p.stopLoss ? `Stop ${price(p.stopLoss, p.currency)}` : "ohne Stop"}
-								{r ? ` · Risiko bis Stop ≈ ${eur(r.riskCents)} inkl. Gebühren${r.pctOfAccount !== null ? ` (${pct(r.pctOfAccount, { signed: false, digits: 2 })} des Depots)` : ""}` : ""}
+								{p.stopLoss ? de.proposal.send.stopAt(price(p.stopLoss, p.currency)) : de.proposal.send.noStop}
+								{r ? de.proposal.send.risk(eur(r.riskCents), r.pctOfAccount !== null ? pct(r.pctOfAccount, { signed: false, digits: 2 }) : null) : ""}
 							</span>
 						)}
-						{liveMoney ? <span className="font-medium text-err">Echtes Geld: Die Order geht sofort an die Börse.</span> : <span className="text-fg-3">Papierkonto bei {acc?.broker}.</span>}
+						{liveMoney ? <span className="font-medium text-err">{de.proposal.send.liveNow}</span> : <span className="text-fg-3">{de.proposal.send.paperAt(acc?.broker ?? "")}</span>}
 					</span>
 				),
-				confirm: liveMoney ? "Mit echtem Geld senden" : `An ${acc?.broker} senden`,
+				confirm: liveMoney ? de.common.sendLive : de.proposal.send.to(acc?.broker ?? ""),
 				danger: liveMoney,
 			});
 			if (!ok) return;
@@ -161,44 +160,44 @@ function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
 		if (r) setDialog(null);
 	};
 	const reject = async () => {
-		if (await run(`/api/proposals/${p.id}/reject`, "POST", { reason }, `${label} abgelehnt.`)) setDialog(null);
+		if (await run(`/api/proposals/${p.id}/reject`, "POST", { reason }, de.proposal.rejected(label))) setDialog(null);
 	};
 	const fill = async () => {
 		const pr = parseDe(fillPrice);
 		const fee = parseDe(fillFee || "0");
-		if (!(qtyNum > 0)) return errs.fail("fillQty", numberError(qtyText) ?? "Stückzahl größer als 0 eintragen.");
-		if (!(pr > 0)) return errs.fail("fillPrice", numberError(fillPrice) ?? "Ausführungskurs in EUR eintragen, wie in der Abrechnung.");
-		if (fillFee && !(fee >= 0)) return errs.fail("fillFee", numberError(fillFee) ?? "Gebühr 0 oder mehr.");
-		if (await run(`/api/proposals/${p.id}/fill`, "POST", { qty: qtyNum, price: pr, feeEur: Number.isFinite(fee) ? fee : undefined }, `${label} als ausgeführt eingetragen.`)) setDialog(null);
+		if (!(qtyNum > 0)) return errs.fail("fillQty", numberError(qtyText) ?? de.proposal.qtyPositive);
+		if (!(pr > 0)) return errs.fail("fillPrice", numberError(fillPrice) ?? de.proposal.fill.priceError);
+		if (fillFee && !(fee >= 0)) return errs.fail("fillFee", numberError(fillFee) ?? de.proposal.fill.feeError);
+		if (await run(`/api/proposals/${p.id}/fill`, "POST", { qty: qtyNum, price: pr, feeEur: Number.isFinite(fee) ? fee : undefined }, de.proposal.filledRecorded(label))) setDialog(null);
 	};
 	const cancel = async () => {
 		const ok = await confirm({
-			title: `${label} stornieren?`,
+			title: de.proposal.cancel.title(label),
 			body:
 				broker && (p.status === "placed" || p.status === "confirm")
-					? `Der Desk schickt die Stornierung an ${acc?.broker}. Ist die Order dort schon ausgeführt, bleibt sie ausgeführt.`
+					? de.proposal.cancel.broker(acc?.broker ?? "")
 					: manual
-						? `Nur im Desk. Hast du die Order schon in ${acc?.broker} aufgegeben, storniere sie dort selbst.`
-						: "Das offene Limit wird gelöscht, es wird nichts ausgeführt.",
-			confirm: "Stornieren",
+						? de.proposal.cancel.manual(acc?.broker ?? "")
+						: de.proposal.cancel.limit,
+			confirm: de.proposal.cancel.confirm,
 			danger: true,
 		});
-		if (ok) await run(`/api/proposals/${p.id}/cancel`, "POST", {}, broker && p.status === "placed" ? `${label}: Storno an ${acc?.broker} gesendet.` : `${label} storniert.`);
+		if (ok) await run(`/api/proposals/${p.id}/cancel`, "POST", {}, broker && p.status === "placed" ? de.proposal.cancel.sentToBroker(label, acc?.broker ?? "") : de.proposal.cancel.done(label));
 	};
 	const confirmBroker = async () => {
 		const ok = await confirm({
-			title: `${label} bei ${acc?.broker} bestätigen?`,
+			title: de.proposal.confirmBroker.title(label, acc?.broker ?? ""),
 			body: (
 				<span className="flex flex-col gap-2">
-					<span>{acc?.broker} fragt:</span>
+					<span>{de.proposal.confirmBroker.asks(acc?.broker ?? "")}</span>
 					<span className="font-medium text-fg">„{p.brokerMessage}“</span>
-					{liveMoney && <span className="font-medium text-err">Echtes Geld: Die Order geht danach an die Börse.</span>}
+					{liveMoney && <span className="font-medium text-err">{de.proposal.confirmBroker.liveAfter}</span>}
 				</span>
 			),
-			confirm: "Bestätigen und senden",
+			confirm: de.proposal.confirmBroker.confirm,
 			danger: liveMoney,
 		});
-		if (ok) await run(`/api/proposals/${p.id}/confirm`, "POST", {}, `${label} an ${acc?.broker} gesendet.`);
+		if (ok) await run(`/api/proposals/${p.id}/confirm`, "POST", {}, de.proposal.sent(label, acc?.broker ?? ""));
 	};
 	const open = (d: "approve" | "reject" | "fill") => {
 		setQtyText(inputNumber(shownQty, shownQty % 1 ? 6 : 0));
@@ -212,44 +211,42 @@ function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
 			<FormDialog
 				open={dialog === "approve"}
 				onOpenChange={(o) => !o && setDialog(null)}
-				title={`${sideLabel[p.side]} ${p.symbol} freigeben`}
+				title={de.proposal.approve.title(sideLabel[p.side], p.symbol)}
 				description={
 					manual
-						? `Der Desk führt nichts aus: Danach gibst du die Order selbst in ${acc?.broker} auf.`
+						? de.proposal.approve.manual(acc?.broker ?? "")
 						: broker
-							? `Geht als ${p.orderType === "limit" ? "Limit" : "Market"}-Tagesorder an ${acc?.broker}${liveMoney ? " – echtes Geld" : " (Papierkonto)"}. Vor dem Senden fragt der Desk noch einmal nach.`
-							: `Wird sofort in „${acc?.name ?? "Papierdepot"}“ ausgeführt${p.orderType === "limit" ? ", sobald das Limit erreicht ist" : " zum aktuellen Kurs"}.`
+							? de.proposal.approve.broker(de.proposal.orderType[p.orderType], acc?.broker ?? "", liveMoney)
+							: de.proposal.approve.paper(acc?.name ?? de.common.paperDepot, p.orderType === "limit")
 				}
-				submit={manual ? "Freigeben" : broker ? `An ${acc?.broker} senden…` : p.orderType === "limit" ? "Limit freigeben" : "Freigeben und ausführen"}
+				submit={manual ? de.proposal.approve.submit : broker ? de.proposal.send.toEllipsis(acc?.broker ?? "") : p.orderType === "limit" ? de.proposal.approve.submitLimit : de.proposal.approve.submitExecute}
 				submitVariant={liveMoney ? "danger" : "primary"}
 				onSubmit={() => void approve()}
 				busy={busy}
 				error={errs.general}
 			>
-				<Field label="Stück" hint={`Höchstens ${fmtQty(p.qty)} – du kannst nur verkleinern.`} error={errs.at("qty")}>
+				<Field label={de.proposal.qty} hint={de.proposal.approve.qtyHint(fmtQty(p.qty))} error={errs.at("qty")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={qtyText} onChange={(e) => setQtyText(e.target.value)} autoFocus />}
 				</Field>
 				<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12.5px] tnum" data-testid="approve-facts">
-					<dt className="text-fg-3">Art</dt>
+					<dt className="text-fg-3">{de.proposal.kind}</dt>
 					<dd>{orderKind(p)}</dd>
-					<dt className="text-fg-3">Kurs jetzt</dt>
+					<dt className="text-fg-3">{de.proposal.approve.priceNow}</dt>
 					<dd>{price(p.price, p.currency)}</dd>
-					<dt className="text-fg-3">Geschätzt</dt>
-					<dd>
-						{eur(estimate(qtyNum))} + {eur(acc?.feeCents ?? 0)} Gebühr
-					</dd>
+					<dt className="text-fg-3">{de.proposal.approve.estimated}</dt>
+					<dd>{de.proposal.approve.plusFee(eur(estimate(qtyNum)), eur(acc?.feeCents ?? 0))}</dd>
 					{p.side === "buy" && (
 						<>
-							<dt className="text-fg-3">Stop / Ziel</dt>
-							<dd>{p.stopLoss || p.takeProfit ? `${price(p.stopLoss, p.currency)} / ${price(p.takeProfit, p.currency)}` : "kein Stop – Risiko nicht begrenzt"}</dd>
+							<dt className="text-fg-3">{de.proposal.stopTarget}</dt>
+							<dd>{p.stopLoss || p.takeProfit ? `${price(p.stopLoss, p.currency)} / ${price(p.takeProfit, p.currency)}` : de.proposal.approve.noStop}</dd>
 						</>
 					)}
 					{r && (
 						<>
-							<dt className="text-fg-3">Risiko bis Stop</dt>
+							<dt className="text-fg-3">{de.proposal.riskToStop}</dt>
 							<dd data-testid="approve-risk">
-								≈ {eur(r.riskCents)} inkl. Gebühren{r.pctOfAccount !== null ? ` · ${pct(r.pctOfAccount, { signed: false, digits: 2 })} des Depots` : ""}
-								{r.targetR !== null ? ` · Ziel ${num(r.targetR, 1)} R` : ""}
+								{de.proposal.approve.risk(eur(r.riskCents), r.pctOfAccount !== null ? pct(r.pctOfAccount, { signed: false, digits: 2 }) : null)}
+								{r.targetR !== null ? de.proposal.targetR(num(r.targetR, 1)) : ""}
 							</dd>
 						</>
 					)}
@@ -257,27 +254,27 @@ function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
 				{p.warnings.length > 0 && <Warnings items={p.warnings} />}
 				{p.thesis && p.author !== "" && (
 					<div className="flex flex-col gap-1">
-						<span className="text-[12px] font-medium text-fg-2">These von {p.author}</span>
+						<span className="text-[12px] font-medium text-fg-2">{de.proposal.approve.thesisBy(p.author)}</span>
 						<p className="scroll-thin max-h-32 overflow-y-auto rounded-lg bg-surface-2 px-3 py-2 text-[12.5px] leading-relaxed whitespace-pre-line text-fg-2">{p.thesis}</p>
 					</div>
 				)}
 			</FormDialog>
 
-			<FormDialog open={dialog === "reject"} onOpenChange={(o) => !o && setDialog(null)} title={`Vorschlag von ${p.author} ablehnen`} description={label} submit="Ablehnen" onSubmit={() => void reject()} busy={busy} error={errs.general}>
-				<Field label="Begründung (optional)" hint="Der Agent liest sie über cli/desk.py und lernt daraus.">
+			<FormDialog open={dialog === "reject"} onOpenChange={(o) => !o && setDialog(null)} title={de.proposal.reject.title(p.author)} description={label} submit={de.proposal.reject.submit} onSubmit={() => void reject()} busy={busy} error={errs.general}>
+				<Field label={de.proposal.reject.reason} hint={de.proposal.reject.reasonHint}>
 					{(id, a) => <Textarea id={id} {...a} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} autoFocus />}
 				</Field>
 			</FormDialog>
 
-			<FormDialog open={dialog === "fill"} onOpenChange={(o) => !o && setDialog(null)} title={`Ausführung in ${acc?.broker ?? "deinem Broker"} eintragen`} description={`${label} – Werte aus der Abrechnung, in EUR.`} submit="Eintragen" onSubmit={() => void fill()} busy={busy} error={errs.general}>
+			<FormDialog open={dialog === "fill"} onOpenChange={(o) => !o && setDialog(null)} title={de.proposal.fill.title(acc?.broker ?? de.proposal.yourBroker)} description={de.proposal.fill.description(label)} submit={de.proposal.fill.submit} onSubmit={() => void fill()} busy={busy} error={errs.general}>
 				<div className="grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-					<Field label="Stück" error={errs.at("fillQty")}>
+					<Field label={de.proposal.qty} error={errs.at("fillQty")}>
 						{(id, a) => <Input id={id} {...a} inputMode="decimal" value={qtyText} onChange={(e) => setQtyText(e.target.value)} />}
 					</Field>
-					<Field label="Kurs (EUR)" error={errs.at("fillPrice")}>
-						{(id, a) => <Input id={id} {...a} inputMode="decimal" value={fillPrice} placeholder="z. B. 104,50" onChange={(e) => setFillPrice(e.target.value)} autoFocus />}
+					<Field label={de.proposal.fill.price} error={errs.at("fillPrice")}>
+						{(id, a) => <Input id={id} {...a} inputMode="decimal" value={fillPrice} placeholder={de.proposal.fill.pricePlaceholder} onChange={(e) => setFillPrice(e.target.value)} autoFocus />}
 					</Field>
-					<Field label="Gebühr (EUR)" error={errs.at("fillFee")}>
+					<Field label={de.proposal.fill.fee} error={errs.at("fillFee")}>
 						{(id, a) => <Input id={id} {...a} inputMode="decimal" value={fillFee} onChange={(e) => setFillFee(e.target.value)} />}
 					</Field>
 				</div>
@@ -296,7 +293,7 @@ function Thesis({ text }: { text: string }) {
 			<p className={cn("text-[12.5px] leading-relaxed whitespace-pre-line text-fg-2", long && !open && "max-sm:line-clamp-3")}>{text}</p>
 			{long && (
 				<button type="button" className="hidden h-8 text-[12px] text-fg-3 underline underline-offset-2 max-sm:block" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-					{open ? "These kürzen" : "These ganz lesen"}
+					{open ? de.proposal.thesis.less : de.proposal.thesis.more}
 				</button>
 			)}
 		</div>
@@ -325,28 +322,28 @@ function Actions({ p, a, size }: { p: Proposal; a: ReturnType<typeof useProposal
 		<>
 			{p.status === "pending" && (
 				<>
-					<Button size={size} className={THUMB} variant="primary" onClick={() => a.open("approve")} disabled={a.busy} aria-label={`${a.label} freigeben…`}>
+					<Button size={size} className={THUMB} variant="primary" onClick={() => a.open("approve")} disabled={a.busy} aria-label={de.proposal.actions.approveAria(a.label)}>
 						<Check className="size-3.5" aria-hidden />
-						Freigeben…
+						{de.proposal.actions.approve}
 					</Button>
-					<Button size={size} className={THUMB} onClick={() => a.open("reject")} disabled={a.busy} aria-label={`${a.label} ablehnen…`}>
-						Ablehnen…
+					<Button size={size} className={THUMB} onClick={() => a.open("reject")} disabled={a.busy} aria-label={de.proposal.actions.rejectAria(a.label)}>
+						{de.proposal.actions.reject}
 					</Button>
 				</>
 			)}
 			{p.status === "placed" && a.manual && (
-				<Button size={size} className={THUMB} variant="primary" onClick={() => a.open("fill")} disabled={a.busy} aria-label={`Ausführung von ${a.label} eintragen…`}>
-					Ausführung eintragen…
+				<Button size={size} className={THUMB} variant="primary" onClick={() => a.open("fill")} disabled={a.busy} aria-label={de.proposal.actions.fillAria(a.label)}>
+					{de.proposal.actions.fill}
 				</Button>
 			)}
 			{p.status === "confirm" && a.question && (
-				<Button size={size} className={THUMB} variant={a.liveMoney ? "danger" : "primary"} onClick={() => void a.confirmBroker()} disabled={a.busy} aria-label={`${a.label} bei ${a.acc?.broker ?? "Broker"} bestätigen…`}>
-					Bei {a.acc?.broker ?? "Broker"} bestätigen…
+				<Button size={size} className={THUMB} variant={a.liveMoney ? "danger" : "primary"} onClick={() => void a.confirmBroker()} disabled={a.busy} aria-label={de.proposal.actions.confirmAria(a.label, a.acc?.broker ?? de.proposal.broker)}>
+					{de.proposal.actions.confirm(a.acc?.broker ?? de.proposal.broker)}
 				</Button>
 			)}
 			{(p.status === "placed" || p.status === "open" || p.status === "confirm") && (
-				<Button size={size} className={THUMB} variant="ghost" onClick={() => void a.cancel()} disabled={a.busy} aria-label={`${a.label} stornieren…`}>
-					Stornieren…
+				<Button size={size} className={THUMB} variant="ghost" onClick={() => void a.cancel()} disabled={a.busy} aria-label={de.proposal.actions.cancelAria(a.label)}>
+					{de.proposal.actions.cancel}
 				</Button>
 			)}
 		</>
@@ -360,12 +357,12 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 	const isAgent = p.author !== user;
 
 	return (
-		<article className="flex min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface p-4 shadow-[var(--shadow)]" aria-label={`${label} von ${p.author}`} data-testid="proposal" data-id={p.id}>
+		<article className="flex min-w-0 flex-col gap-3 rounded-xl border border-line bg-surface p-4 shadow-[var(--shadow)]" aria-label={de.proposal.card.aria(label, p.author)} data-testid="proposal" data-id={p.id}>
 			<header className="flex flex-wrap items-center gap-2">
 				<span className="flex min-w-0 items-center gap-1.5 text-fg-2">
 					{isAgent ? <Bot className="size-3.5 shrink-0 text-fg-3" aria-hidden /> : <User className="size-3.5 shrink-0 text-fg-3" aria-hidden />}
 					<span className="font-medium text-fg">{p.author}</span>
-					<span className="truncate text-fg-3">für {acc?.name ?? p.accountId}</span>
+					<span className="truncate text-fg-3">{de.proposal.card.forAccount(acc?.name ?? p.accountId)}</span>
 				</span>
 				<span className="ml-auto flex items-center gap-2">
 					<StatusBadge status={p.status} />
@@ -383,11 +380,11 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 			</div>
 			<dl className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-x-4 gap-y-2 text-[12px]">
 				<div>
-					<dt className="text-fg-3">Art</dt>
+					<dt className="text-fg-3">{de.proposal.kind}</dt>
 					<dd className="tnum">{orderKind(p)}</dd>
 				</div>
 				<div>
-					<dt className="text-fg-3">Kurs Vorschlag → jetzt</dt>
+					<dt className="text-fg-3">{de.proposal.card.quoteMove}</dt>
 					<dd className="tnum">
 						{price(p.quotePrice, p.currency)} → {price(p.price, p.currency)}
 						{p.status === "pending" && moved > 0.5 && <span className="ml-1 text-warn">({pct(moved, { signed: false })})</span>}
@@ -395,23 +392,23 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 				</div>
 				{isAgent && (
 					<div>
-						<dt className="text-fg-3">Zuversicht</dt>
+						<dt className="text-fg-3">{de.proposal.card.confidence}</dt>
 						<dd className="tnum">{Math.round(p.confidence * 100)} %</dd>
 					</div>
 				)}
 				{p.riskCents !== null && (
 					<div data-testid="proposal-risk">
-						<dt className="text-fg-3">Risiko bis Stop</dt>
+						<dt className="text-fg-3">{de.proposal.riskToStop}</dt>
 						<dd className="tnum">
 							{eur(p.riskCents)}
 							{p.riskPct !== null ? ` · ${pct(p.riskPct, { signed: false, digits: 2 })}` : ""}
-							{p.targetR !== null ? ` · Ziel ${num(p.targetR, 1)} R` : ""}
+							{p.targetR !== null ? de.proposal.targetR(num(p.targetR, 1)) : ""}
 						</dd>
 					</div>
 				)}
 				{(p.stopLoss || p.takeProfit) && (
 					<div>
-						<dt className="text-fg-3">Stop / Ziel</dt>
+						<dt className="text-fg-3">{de.proposal.stopTarget}</dt>
 						<dd className="tnum">
 							{price(p.stopLoss, p.currency)} / {price(p.takeProfit, p.currency)}
 						</dd>
@@ -419,7 +416,7 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 				)}
 				{p.fillPrice !== null && (
 					<div>
-						<dt className="text-fg-3">Ausgeführt zu</dt>
+						<dt className="text-fg-3">{de.proposal.card.filledAt}</dt>
 						<dd className="tnum">{price(p.fillPrice, a.manual ? "EUR" : p.currency)}</dd>
 					</div>
 				)}
@@ -430,24 +427,24 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 			{p.status === "placed" && !broker && (
 				<p className="flex gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-fg-2">
 					<OctagonX className="mt-0.5 size-3.5 shrink-0 text-fg-3" aria-hidden />
-					Öffne {acc?.broker ?? "deinen Broker"}, führe „{label}“ dort aus und trage danach Kurs und Gebühr aus der Abrechnung ein.
+					{de.proposal.card.manualHint(acc?.broker ?? de.proposal.yourBrokerAcc, label)}
 				</p>
 			)}
 			{p.status === "placed" && broker && (
 				<p className="rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-fg-2">
-					Bei {acc?.broker} in Arbeit{p.brokerOrderId ? ` (Order ${p.brokerOrderId})` : ""}. Die Ausführung kommt automatisch.
+					{de.proposal.card.brokerWorking(acc?.broker ?? "", p.brokerOrderId)}
 				</p>
 			)}
 			{p.status === "confirm" && (
 				<div className="flex flex-col gap-1 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-fg" data-testid="broker-question">
-					<span className="font-medium text-warn">{acc?.broker} fragt nach:</span>
-					{a.question ? <span className="break-words">„{a.question}“</span> : <span>Rückfrage ohne Text – bitte im Gateway von {acc?.broker ?? "deinem Broker"} prüfen. Bestätigen geht hier nicht, nur stornieren.</span>}
+					<span className="font-medium text-warn">{de.proposal.card.brokerAsks(acc?.broker ?? "")}</span>
+					{a.question ? <span className="break-words">„{a.question}“</span> : <span>{de.proposal.card.noQuestion(acc?.broker ?? de.proposal.yourBroker)}</span>}
 				</div>
 			)}
 			{isActive(p) && p.status !== "sending" && (
 				<footer className="flex flex-wrap gap-2">
 					<Actions p={p} a={a} />
-					<span className="ml-auto self-center text-[11.5px] text-fg-3 max-sm:order-first max-sm:ml-0 max-sm:basis-full">gilt bis {dateTime(p.expiresAt)}</span>
+					<span className="ml-auto self-center text-[11.5px] text-fg-3 max-sm:order-first max-sm:ml-0 max-sm:basis-full">{de.proposal.card.validUntil(dateTime(p.expiresAt))}</span>
 				</footer>
 			)}
 			{a.dialogs}
@@ -470,8 +467,8 @@ export function ProposalRow({ p, accounts }: { p: Proposal; accounts: AccountSum
 						{p.status !== "pending" && <StatusBadge status={p.status} />}
 						<span className="ml-auto shrink-0 text-[12px] whitespace-nowrap text-fg-2 tnum">≈ {eur(p.estimateCents)}</span>
 					</span>
-					<span className="truncate text-[11.5px] text-fg-3" title={`${p.author} für ${a.acc?.name ?? p.accountId}`}>
-						{p.author} für {a.acc?.name ?? p.accountId}
+					<span className="truncate text-[11.5px] text-fg-3" title={de.proposal.card.authorFor(p.author, a.acc?.name ?? p.accountId)}>
+						{de.proposal.card.authorFor(p.author, a.acc?.name ?? p.accountId)}
 					</span>
 				</span>
 				<span className="flex shrink-0 flex-wrap gap-1.5 max-sm:gap-2">

@@ -15,8 +15,8 @@ import { FormDialog, useFormErrors } from "@/ui/overlay";
 import { Page, PageHead, useAction } from "../common";
 import { OrderTicket } from "../orders/OrderTicket";
 import { BrokerPanel } from "./BrokerPanel";
+import { de } from "@/i18n/de";
 
-const SOURCE: Record<Trade["source"], string> = { manual: "erfasst", import: "Import", proposal: "Vorschlag", order: "Order" };
 /** 5 Kennzahlen ohne leere Lücke: jede Reihe füllt sich ganz (4 + 1 breit statt 3 + 2 mit Loch). */
 // fünf Kennzahlen ohne leere Plätze: eine Reihe, darunter 3 + 2, auf dem Handy 2 + 2 + 1 über die ganze Breite
 const STATS = "grid grid-cols-5 gap-3 @max-[900px]:grid-cols-6 @max-[480px]:grid-cols-2";
@@ -50,29 +50,31 @@ export default function PortfolioView() {
 	return (
 		<Page>
 			<PageHead
-				title={a?.name ?? "Depots"}
+				title={a?.name ?? de.portfolio.title}
 				sub={
 					a
 						? a.kind === "manual"
-							? `${a.broker} · manuell geführt: du handelst in der App des Brokers und trägst hier ein`
+							? de.portfolio.subManual(a.broker)
 							: a.kind === "broker"
-								? `${a.broker} · Orders gehen nach deiner Freigabe über die API an den Broker${a.live ? " – echtes Geld" : " (Papierkonto)"}`
+								? a.live
+									? de.portfolio.subBrokerLive(a.broker)
+									: de.portfolio.subBrokerPaper(a.broker)
 								: a.owner === "user"
-									? "Papierdepot · Orders werden mit echten Kursen simuliert"
-									: `Papierdepot von Agent ${a.owner}`
+									? de.portfolio.subPaper
+									: de.portfolio.agentPaperDepot(a.owner)
 						: undefined
 				}
 				aside={
 					<>
-						<Select aria-label="Depot wählen" value={accountId ?? ""} onChange={(e) => void navigate({ to: "/portfolio", search: { account: e.target.value } })} className="w-56">
-							<optgroup label="Deine Depots">
+						<Select aria-label={de.portfolio.pickAccount} value={accountId ?? ""} onChange={(e) => void navigate({ to: "/portfolio", search: { account: e.target.value } })} className="w-56">
+							<optgroup label={de.portfolio.groupMine}>
 								{accounts.filter((x) => x.owner === "user").map((x) => (
 									<option key={x.id} value={x.id}>
 										{x.name}
 									</option>
 								))}
 							</optgroup>
-							<optgroup label="Agenten">
+							<optgroup label={de.agents.title}>
 								{accounts.filter((x) => x.owner !== "user").map((x) => (
 									<option key={x.id} value={x.id}>
 										{x.name}
@@ -84,24 +86,24 @@ export default function PortfolioView() {
 							<>
 								<Button variant="primary" onClick={() => setDialog("trade")}>
 									<Plus className="size-4" aria-hidden />
-									Trade erfassen…
+									{de.portfolio.recordTrade}
 								</Button>
-								<Button onClick={() => setDialog("import")} title="CSV importieren…" aria-label="CSV importieren…">
+								<Button onClick={() => setDialog("import")} title={de.portfolio.importCsv} aria-label={de.portfolio.importCsv}>
 									<FileUp className="size-4" aria-hidden />
-									<span className="@max-[1000px]:sr-only">CSV importieren…</span>
+									<span className="@max-[1000px]:sr-only">{de.portfolio.importCsv}</span>
 								</Button>
 							</>
 						)}
 						{(a?.kind === "paper" || a?.kind === "broker") && a.owner === "user" && (
 							<Button variant="primary" onClick={() => setDialog("order")}>
 								<ShoppingCart className="size-4" aria-hidden />
-								Order…
+								{de.portfolio.order}
 							</Button>
 						)}
 						{a?.owner === "user" && (
-							<Button onClick={() => setDialog("cash")} title="Ein- oder Auszahlung…" aria-label="Ein- oder Auszahlung…">
+							<Button onClick={() => setDialog("cash")} title={de.portfolio.cashMoveLong} aria-label={de.portfolio.cashMoveLong}>
 								<Landmark className="size-4" aria-hidden />
-								<span className="@max-[1000px]:sr-only">Ein-/Auszahlung…</span>
+								<span className="@max-[1000px]:sr-only">{de.portfolio.cashMoveShort}</span>
 							</Button>
 						)}
 					</>
@@ -109,9 +111,9 @@ export default function PortfolioView() {
 			/>
 			{unknown && (
 				<p className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[12.5px] text-fg-2" role="status">
-					Depot „{unknown}“ gibt es nicht – du siehst {a?.name ?? "das erste Depot"}.
+					{de.portfolio.unknownAccount(unknown, a?.name ?? de.portfolio.firstAccount)}
 					<button type="button" className="ml-auto text-fg-3 underline underline-offset-2 hover:text-fg" onClick={() => setUnknown(null)}>
-						Ausblenden
+						{de.portfolio.dismiss}
 					</button>
 				</p>
 			)}
@@ -146,33 +148,33 @@ function Detail({ d }: { d: AccountDetail }) {
 	const a = d.account;
 	const { run } = useAction();
 	const del = (t: Trade) =>
-		run(`/api/accounts/${a.id}/trades/${t.id}`, "DELETE", {}, `${sideLabel[t.side]} ${qty(t.qty)} ${t.symbol} gelöscht.`, {
-			label: "Rückgängig",
-			run: () => void run(`/api/accounts/${a.id}/trades/${t.id}/restore`, "POST", {}, "Wiederhergestellt."),
+		run(`/api/accounts/${a.id}/trades/${t.id}`, "DELETE", {}, de.portfolio.deleted(sideLabel[t.side], qty(t.qty), t.symbol), {
+			label: de.portfolio.undo,
+			run: () => void run(`/api/accounts/${a.id}/trades/${t.id}/restore`, "POST", {}, de.portfolio.restored),
 		});
 	return (
 		<>
 			<div className={STATS}>
-				<Stat className={STAT} label="Depotwert" value={eur(a.equityCents)} sub={<span className={tone(a.dayChangeCents)}>{a.dayChangeCents === null ? "–" : `${signedEur(a.dayChangeCents)} heute`}</span>} />
-				<Stat className={STAT} label="Cash" value={eur(a.cashCents)} sub={<span className="text-fg-3">{a.equityCents ? pct((a.cashCents / a.equityCents) * 100, { signed: false }) : "–"} des Depots</span>} />
-				<Stat className={STAT} label="Unrealisiert" value={<span className={tone(a.unrealizedCents)}>{signedEur(a.unrealizedCents)}</span>} sub={<span className="text-fg-3">auf {eur(a.costCents, { short: true })} Einstand</span>} />
-				<Stat className={STAT} label="Realisiert" value={<span className={tone(a.realizedCents)}>{signedEur(a.realizedCents)}</span>} sub={<span className="text-fg-3">nach Gebühren</span>} />
-				<Stat className={STAT} label="Gesamtrendite" value={<span className={tone(a.returnPct)}>{pct(a.returnPct)}</span>} sub={<span className="text-fg-3">Gebühren {eur(a.feesCents)}</span>} />
+				<Stat className={STAT} label={de.portfolio.stat.equity} value={eur(a.equityCents)} sub={<span className={tone(a.dayChangeCents)}>{a.dayChangeCents === null ? "–" : de.portfolio.today(signedEur(a.dayChangeCents))}</span>} />
+				<Stat className={STAT} label={de.portfolio.stat.cash} value={eur(a.cashCents)} sub={<span className="text-fg-3">{de.portfolio.stat.cashShare(a.equityCents ? pct((a.cashCents / a.equityCents) * 100, { signed: false }) : "–")}</span>} />
+				<Stat className={STAT} label={de.portfolio.stat.unrealized} value={<span className={tone(a.unrealizedCents)}>{signedEur(a.unrealizedCents)}</span>} sub={<span className="text-fg-3">{de.portfolio.stat.onCost(eur(a.costCents, { short: true }))}</span>} />
+				<Stat className={STAT} label={de.portfolio.stat.realized} value={<span className={tone(a.realizedCents)}>{signedEur(a.realizedCents)}</span>} sub={<span className="text-fg-3">{de.portfolio.stat.afterFees}</span>} />
+				<Stat className={STAT} label={de.portfolio.stat.totalReturn} value={<span className={tone(a.returnPct)}>{pct(a.returnPct)}</span>} sub={<span className="text-fg-3">{de.portfolio.stat.fees(eur(a.feesCents))}</span>} />
 			</div>
-			<Card title="Positionen" pad={false} aside={`${d.positions.length} Werte`}>
+			<Card title={de.portfolio.positions.title} pad={false} aside={de.portfolio.positions.count(d.positions.length)}>
 				{d.positions.length ? (
-					<Table label="Positionen">
+					<Table label={de.portfolio.positions.title}>
 						<thead>
 							<tr>
-								<th className={th}>Wertpapier</th>
-								<th className={cn(th, "text-right", hideBelow.md)}>Stück</th>
-								<th className={cn(th, "text-right", hideBelow.lg)}>Einstand (€)</th>
-								<th className={cn(th, "text-right", hideBelow.sm)}>Kurs (€)</th>
-								<th className={cn(th, "text-right", hideBelow.sm)}>Heute</th>
-								<th className={cn(th, "text-right")}>Wert</th>
-								<th className={cn(th, "text-right")}>G/V</th>
-								<th className={cn(th, "text-right", hideBelow.xl)}>Anteil</th>
-								<th className={cn(th, "text-right", hideBelow.lg)}>Stop / Ziel (€)</th>
+								<th className={th}>{de.portfolio.positions.security}</th>
+								<th className={cn(th, "text-right", hideBelow.md)}>{de.portfolio.positions.qty}</th>
+								<th className={cn(th, "text-right", hideBelow.lg)}>{de.portfolio.positions.cost}</th>
+								<th className={cn(th, "text-right", hideBelow.sm)}>{de.portfolio.positions.price}</th>
+								<th className={cn(th, "text-right", hideBelow.sm)}>{de.portfolio.positions.today}</th>
+								<th className={cn(th, "text-right")}>{de.portfolio.positions.value}</th>
+								<th className={cn(th, "text-right")}>{de.portfolio.positions.pnl}</th>
+								<th className={cn(th, "text-right", hideBelow.xl)}>{de.portfolio.positions.weight}</th>
+								<th className={cn(th, "text-right", hideBelow.lg)}>{de.portfolio.positions.stopTarget}</th>
 							</tr>
 						</thead>
 						<tbody>
@@ -194,7 +196,7 @@ function Detail({ d }: { d: AccountDetail }) {
 										<td className={cn(td, "text-right tnum text-fg-2", hideBelow.lg)}>{price(p.avgPrice)}</td>
 										<td className={cn(td, "text-right tnum", hideBelow.sm)}>
 											{p.price === null ? (
-												<Badge variant="warn">kein Kurs</Badge>
+												<Badge variant="warn">{de.portfolio.positions.noQuote}</Badge>
 											) : (
 												<span className="flex flex-col leading-tight">
 													<span>{price(p.price)}</span>
@@ -207,7 +209,7 @@ function Detail({ d }: { d: AccountDetail }) {
 											<span className="flex flex-col leading-tight">
 												<span className="font-medium">{eur(p.valueCents)}</span>
 												{/* schmal: „Heute“ wandert unter den Wert statt in eine eigene Spalte */}
-												<span className={cn("hidden text-[11px] @max-[560px]/table:block", tone(p.dayChangePct))}>{pct(p.dayChangePct)} heute</span>
+												<span className={cn("hidden text-[11px] @max-[560px]/table:block", tone(p.dayChangePct))}>{de.portfolio.today(pct(p.dayChangePct))}</span>
 											</span>
 										</td>
 										<td className={cn(td, "text-right tnum", tone(p.unrealizedCents))}>
@@ -239,49 +241,52 @@ function Detail({ d }: { d: AccountDetail }) {
 						</tbody>
 					</Table>
 				) : (
-					<Empty>Noch keine Positionen.{a.kind === "manual" ? " Trades erfassen oder per CSV importieren." : ""}</Empty>
+					<Empty>
+						{de.portfolio.positions.empty}
+						{a.kind === "manual" ? de.portfolio.positions.emptyManual : ""}
+					</Empty>
 				)}
 			</Card>
 			<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start gap-4 @max-[1100px]:grid-cols-1">
-				<Card title="Verlauf" icon={<LineIcon className="size-4" />}>
+				<Card title={de.portfolio.curve.title} icon={<LineIcon className="size-4" />}>
 					{d.curve.length > 1 ? (
-						<LineChart label={`Depotwert ${a.name} je Tag`} xs={d.curve.map((p) => p.day)} xLabel={dayLabel} series={[{ id: "eq", label: "Depotwert", color: "var(--fg)", values: d.curve.map((p) => p.equityCents) }]} format={(v) => eur(v, { short: true })} area height={240} />
+						<LineChart label={de.portfolio.curve.chartLabel(a.name)} xs={d.curve.map((p) => p.day)} xLabel={dayLabel} series={[{ id: "eq", label: de.portfolio.stat.equity, color: "var(--fg)", values: d.curve.map((p) => p.equityCents) }]} format={(v) => eur(v, { short: true })} area height={240} />
 					) : (
-						<Empty>Der Verlauf beginnt heute.</Empty>
+						<Empty>{de.portfolio.curve.empty}</Empty>
 					)}
 				</Card>
-				<Card title="Ein- und Auszahlungen" pad={false} aside={`Start ${eur(a.startCashCents, { short: true })}`}>
+				<Card title={de.portfolio.cash.title} pad={false} aside={de.portfolio.cash.start(eur(a.startCashCents, { short: true }))}>
 					{d.cashMoves.length ? (
 						<ul className="divide-y divide-line">
 							{d.cashMoves.map((c) => (
 								<li key={c.id} className="flex items-center gap-3 px-4 py-2.5 text-[12.5px]">
 									<span className="w-20 text-fg-3 tnum">{date(c.time)}</span>
-									<span className="min-w-0 flex-1 truncate text-fg-2">{c.note || (c.amountCents > 0 ? "Einzahlung" : "Auszahlung")}</span>
+									<span className="min-w-0 flex-1 truncate text-fg-2">{c.note || (c.amountCents > 0 ? de.portfolio.cash.deposit : de.portfolio.cash.withdrawal)}</span>
 									<span className={cn("tnum", tone(c.amountCents))}>{signedEur(c.amountCents)}</span>
 								</li>
 							))}
 						</ul>
 					) : (
-						<Empty>Keine Ein- oder Auszahlungen.</Empty>
+						<Empty>{de.portfolio.cash.empty}</Empty>
 					)}
 				</Card>
 			</div>
-			<Card title="Trades" pad={false} aside={`${d.trades.length}`}>
+			<Card title={de.portfolio.trades.title} pad={false} aside={`${d.trades.length}`}>
 				{d.trades.length ? (
-					<Table label="Trades">
+					<Table label={de.portfolio.trades.title}>
 						<thead>
 							<tr>
-								<th className={th}>Datum</th>
-								<th className={th}>Wertpapier</th>
-								<th className={cn(th, "text-right", hideBelow.sm)}>Stück</th>
-								<th className={cn(th, "text-right", hideBelow.md)}>Kurs</th>
-								<th className={cn(th, "text-right")}>Betrag</th>
-								<th className={cn(th, "text-right", hideBelow.lg)}>Gebühr</th>
-								<th className={cn(th, "text-right")}>Ergebnis</th>
-								<th className={cn(th, hideBelow.xl)}>Quelle</th>
+								<th className={th}>{de.portfolio.trades.date}</th>
+								<th className={th}>{de.portfolio.positions.security}</th>
+								<th className={cn(th, "text-right", hideBelow.sm)}>{de.portfolio.positions.qty}</th>
+								<th className={cn(th, "text-right", hideBelow.md)}>{de.portfolio.trades.price}</th>
+								<th className={cn(th, "text-right")}>{de.portfolio.trades.amount}</th>
+								<th className={cn(th, "text-right", hideBelow.lg)}>{de.portfolio.trades.fee}</th>
+								<th className={cn(th, "text-right")}>{de.portfolio.trades.result}</th>
+								<th className={cn(th, hideBelow.xl)}>{de.portfolio.trades.source}</th>
 								{a.kind === "manual" && (
 									<th className={th}>
-										<span className="sr-only">Aktionen</span>
+										<span className="sr-only">{de.portfolio.trades.actions}</span>
 									</th>
 								)}
 							</tr>
@@ -302,12 +307,12 @@ function Detail({ d }: { d: AccountDetail }) {
 									<td className={cn(td, "text-right tnum text-fg-3", hideBelow.lg)}>{eur(t.feeCents)}</td>
 									<td className={cn(td, "text-right tnum", tone(t.realizedCents))}>{t.realizedCents === null ? "" : signedEur(t.realizedCents)}</td>
 									<td className={cn(td, "text-fg-3", hideBelow.xl)} title={t.note || undefined}>
-										{SOURCE[t.source]}
+										{de.portfolio.source[t.source]}
 									</td>
 									{a.kind === "manual" && (
 										<td className={cn(td, "w-10 text-right")}>
 											{(t.source === "manual" || t.source === "import") && (
-												<Button variant="ghost" size="iconSm" aria-label={`${sideLabel[t.side]} ${t.symbol} vom ${date(t.time)} löschen`} title="Löschen (mit Rückgängig)" onClick={() => void del(t)}>
+												<Button variant="ghost" size="iconSm" aria-label={de.portfolio.trades.deleteLabel(sideLabel[t.side], t.symbol, date(t.time))} title={de.portfolio.trades.deleteTitle} onClick={() => void del(t)}>
 													<Trash2 className="size-3.5" />
 												</Button>
 											)}
@@ -318,7 +323,7 @@ function Detail({ d }: { d: AccountDetail }) {
 						</tbody>
 					</Table>
 				) : (
-					<Empty>Noch keine Trades.</Empty>
+					<Empty>{de.portfolio.trades.empty}</Empty>
 				)}
 			</Card>
 		</>
@@ -339,49 +344,49 @@ function TradeDialog({ open, onOpenChange, account }: { open: boolean; onOpenCha
 		const q = parseDe(f.qty);
 		const p = parseDe(f.price);
 		const fee = parseDe(f.fee || "0");
-		if (!f.symbol.trim()) return errs.fail("symbol", "Symbol fehlt (Yahoo-Schreibweise, z. B. SAP.DE).");
-		if (!(q > 0)) return errs.fail("qty", numberError(f.qty) ?? "Stückzahl größer als 0.");
-		if (!(p > 0)) return errs.fail("price", numberError(f.price) ?? "Kurs in EUR größer als 0.");
-		if (f.fee && !(fee >= 0)) return errs.fail("fee", numberError(f.fee) ?? "Gebühr 0 oder mehr.");
+		if (!f.symbol.trim()) return errs.fail("symbol", de.portfolio.tradeDialog.errSymbol);
+		if (!(q > 0)) return errs.fail("qty", numberError(f.qty) ?? de.portfolio.tradeDialog.errQty);
+		if (!(p > 0)) return errs.fail("price", numberError(f.price) ?? de.portfolio.tradeDialog.errPrice);
+		if (f.fee && !(fee >= 0)) return errs.fail("fee", numberError(f.fee) ?? de.portfolio.tradeDialog.errFee);
 		// ein geleertes Datum würde sonst als null gesendet und der Server bucht still „jetzt“
-		if (!/^\d{4}-\d{2}-\d{2}$/.test(f.day)) return errs.fail("day", "Datum fehlt.");
-		if (f.day > today()) return errs.fail("day", "Datum liegt in der Zukunft.");
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(f.day)) return errs.fail("day", de.portfolio.tradeDialog.errDateMissing);
+		if (f.day > today()) return errs.fail("day", de.portfolio.tradeDialog.errDateFuture);
 		const [y, m, d] = f.day.split("-").map(Number);
 		const time = f.day === today() ? Date.now() : new Date(y, m - 1, d, 12).getTime();
-		const r = await run("/api/accounts/" + account.id + "/trades", "POST", { symbol: f.symbol, side: f.side, qty: q, price: p, feeEur: Number.isFinite(fee) ? fee : 0, time, note: f.note }, `${f.side === "buy" ? "Kauf" : "Verkauf"} ${f.symbol.toUpperCase()} erfasst.`);
+		const r = await run("/api/accounts/" + account.id + "/trades", "POST", { symbol: f.symbol, side: f.side, qty: q, price: p, feeEur: Number.isFinite(fee) ? fee : 0, time, note: f.note }, de.portfolio.tradeDialog.recorded(f.side === "buy" ? de.portfolio.tradeDialog.buy : de.portfolio.tradeDialog.sell, f.symbol.toUpperCase()));
 		if (r) {
 			setF({ ...f, symbol: "", qty: "", price: "", note: "" });
 			onOpenChange(false);
 		}
 	};
 	return (
-		<FormDialog open={open} onOpenChange={onOpenChange} title={`Trade in ${account.name} erfassen`} description="Was du in der App des Brokers ausgeführt hast – Beträge in EUR wie in der Abrechnung." submit="Erfassen" onSubmit={() => void submit()} busy={busy} error={errs.general}>
+		<FormDialog open={open} onOpenChange={onOpenChange} title={de.portfolio.tradeDialog.title(account.name)} description={de.portfolio.tradeDialog.description} submit={de.portfolio.tradeDialog.submit} onSubmit={() => void submit()} busy={busy} error={errs.general}>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-				<Field label="Symbol" hint="Yahoo-Schreibweise: SAP.DE, AAPL, EUNL.DE, BTC-EUR" error={errs.at("symbol")}>
+				<Field label={de.portfolio.tradeDialog.symbol} hint={de.portfolio.tradeDialog.symbolHint} error={errs.at("symbol")}>
 					{(id, a) => <Input id={id} {...a} value={f.symbol} onChange={set("symbol")} autoFocus autoCapitalize="characters" />}
 				</Field>
-				<Field label="Art">
+				<Field label={de.portfolio.tradeDialog.kind}>
 					{(id, a) => (
 						<Select id={id} {...a} value={f.side} onChange={set("side")}>
-							<option value="buy">Kauf</option>
-							<option value="sell">Verkauf</option>
+							<option value="buy">{de.portfolio.tradeDialog.buy}</option>
+							<option value="sell">{de.portfolio.tradeDialog.sell}</option>
 						</Select>
 					)}
 				</Field>
-				<Field label="Stück" error={errs.at("qty")}>
+				<Field label={de.portfolio.positions.qty} error={errs.at("qty")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={f.qty} onChange={set("qty")} />}
 				</Field>
-				<Field label="Kurs je Stück (EUR)" error={errs.at("price")}>
+				<Field label={de.portfolio.tradeDialog.price} error={errs.at("price")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={f.price} onChange={set("price")} />}
 				</Field>
-				<Field label="Gebühr (EUR)" error={errs.at("fee")}>
+				<Field label={de.portfolio.tradeDialog.fee} error={errs.at("fee")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={f.fee} onChange={set("fee")} />}
 				</Field>
-				<Field label="Datum" error={errs.at("day")}>
+				<Field label={de.portfolio.trades.date} error={errs.at("day")}>
 					{(id, a) => <Input id={id} {...a} type="date" value={f.day} max={today()} onChange={set("day")} />}
 				</Field>
 			</div>
-			<Field label="Notiz (optional)">{(id, a) => <Input id={id} {...a} value={f.note} maxLength={200} onChange={set("note")} />}</Field>
+			<Field label={de.portfolio.tradeDialog.note}>{(id, a) => <Input id={id} {...a} value={f.note} maxLength={200} onChange={set("note")} />}</Field>
 		</FormDialog>
 	);
 }
@@ -395,8 +400,8 @@ function ImportDialog({ open, onOpenChange, account }: { open: boolean; onOpenCh
 		if (open) setReport(null);
 	}, [open]);
 	const submit = async () => {
-		if (!csv.trim()) return errs.fail("csv", "Datei wählen oder Zeilen einfügen.");
-		const r = await run<{ result: { imported: number; skipped: number; errors: string[] } }>(`/api/accounts/${account.id}/import`, "POST", { csv }, (r) => `${r.result.imported} Trades importiert${r.result.skipped ? `, ${r.result.skipped} schon vorhanden` : ""}.`);
+		if (!csv.trim()) return errs.fail("csv", de.portfolio.importDialog.errEmpty);
+		const r = await run<{ result: { imported: number; skipped: number; errors: string[] } }>(`/api/accounts/${account.id}/import`, "POST", { csv }, (r) => de.portfolio.importDialog.imported(r.result.imported, r.result.skipped));
 		if (r) {
 			setReport(r.result.errors);
 			if (!r.result.errors.length) {
@@ -406,8 +411,8 @@ function ImportDialog({ open, onOpenChange, account }: { open: boolean; onOpenCh
 		}
 	};
 	return (
-		<FormDialog open={open} onOpenChange={onOpenChange} title={`CSV in ${account.name} importieren`} description="Gleiche Zeilen werden beim zweiten Import erkannt und übersprungen." submit="Importieren" onSubmit={() => void submit()} busy={busy} error={errs.general} wide>
-			<Field label="Datei" error={errs.at("file")}>
+		<FormDialog open={open} onOpenChange={onOpenChange} title={de.portfolio.importDialog.title(account.name)} description={de.portfolio.importDialog.description} submit={de.portfolio.importDialog.submit} onSubmit={() => void submit()} busy={busy} error={errs.general} wide>
+			<Field label={de.portfolio.importDialog.file} error={errs.at("file")}>
 				{(id, a) => (
 					<Input
 						id={id}
@@ -418,15 +423,15 @@ function ImportDialog({ open, onOpenChange, account }: { open: boolean; onOpenCh
 						onChange={(e) => {
 							const file = e.target.files?.[0];
 							if (!file) return;
-							if (file.size > 2_000_000) return errs.fail("file", "Datei größer als 2 MB.");
+							if (file.size > 2_000_000) return errs.fail("file", de.portfolio.importDialog.errTooLarge);
 							errs.clear();
 							void file.text().then(setCsv);
 						}}
 					/>
 				)}
 			</Field>
-			<Field label="Inhalt" hint="Kopfzeile Pflicht. Datum TT.MM.JJJJ oder JJJJ-MM-TT, Seite kauf/verkauf, Kurs je Stück in EUR." error={errs.at("csv")}>
-				{(id, a) => <Textarea id={id} {...a} value={csv} onChange={(e) => setCsv(e.target.value)} className="font-mono text-[12px]" placeholder={"datum;symbol;seite;stueck;kurs;gebuehr;notiz\n02.03.2026;SAP.DE;kauf;3;181,40;1,00;Sparplan"} rows={8} />}
+			<Field label={de.portfolio.importDialog.content} hint={de.portfolio.importDialog.contentHint} error={errs.at("csv")}>
+				{(id, a) => <Textarea id={id} {...a} value={csv} onChange={(e) => setCsv(e.target.value)} className="font-mono text-[12px]" placeholder={de.portfolio.importDialog.placeholder} rows={8} />}
 			</Field>
 			{report && report.length > 0 && (
 				<ul className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn">
@@ -447,8 +452,8 @@ function CashDialog({ open, onOpenChange, account }: { open: boolean; onOpenChan
 	const { run, busy } = useAction();
 	const submit = async () => {
 		const v = parseDe(amount);
-		if (!(v > 0)) return errs.fail("amount", numberError(amount) ?? "Betrag größer als 0.");
-		if (await run(`/api/accounts/${account.id}/cash`, "POST", { amountEur: kind === "in" ? v : -v, note }, `${kind === "in" ? "Einzahlung" : "Auszahlung"} von ${eur(Math.round(v * 100))} erfasst.`)) {
+		if (!(v > 0)) return errs.fail("amount", numberError(amount) ?? de.portfolio.cashDialog.errAmount);
+		if (await run(`/api/accounts/${account.id}/cash`, "POST", { amountEur: kind === "in" ? v : -v, note }, de.portfolio.cashDialog.recorded(kind === "in" ? de.portfolio.cash.deposit : de.portfolio.cash.withdrawal, eur(Math.round(v * 100))))) {
 			setAmount("");
 			setNote("");
 			onOpenChange(false);
@@ -456,21 +461,21 @@ function CashDialog({ open, onOpenChange, account }: { open: boolean; onOpenChan
 	};
 	const v = parseDe(amount);
 	return (
-		<FormDialog open={open} onOpenChange={onOpenChange} title={`Ein- oder Auszahlung – ${account.name}`} description={`Cash jetzt ${eur(account.cashCents)}.`} submit="Erfassen" onSubmit={() => void submit()} busy={busy} error={errs.general}>
+		<FormDialog open={open} onOpenChange={onOpenChange} title={de.portfolio.cashDialog.title(account.name)} description={de.portfolio.cashDialog.description(eur(account.cashCents))} submit={de.portfolio.tradeDialog.submit} onSubmit={() => void submit()} busy={busy} error={errs.general}>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-				<Field label="Art">
+				<Field label={de.portfolio.tradeDialog.kind}>
 					{(id, a) => (
 						<Select id={id} {...a} value={kind} onChange={(e) => setKind(e.target.value as "in" | "out")}>
-							<option value="in">Einzahlung</option>
-							<option value="out">Auszahlung</option>
+							<option value="in">{de.portfolio.cash.deposit}</option>
+							<option value="out">{de.portfolio.cash.withdrawal}</option>
 						</Select>
 					)}
 				</Field>
-				<Field label="Betrag (EUR)" hint={v > 0 ? `= ${eur(Math.round(v * 100))}` : "z. B. 1.000,00"} error={errs.at("amount")}>
+				<Field label={de.portfolio.cashDialog.amount} hint={v > 0 ? `= ${eur(Math.round(v * 100))}` : de.portfolio.cashDialog.amountExample} error={errs.at("amount")}>
 					{(id, a) => <Input id={id} {...a} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />}
 				</Field>
 			</div>
-			<Field label="Notiz (optional)">{(id, a) => <Input id={id} {...a} value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} />}</Field>
+			<Field label={de.portfolio.tradeDialog.note}>{(id, a) => <Input id={id} {...a} value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} />}</Field>
 		</FormDialog>
 	);
 }

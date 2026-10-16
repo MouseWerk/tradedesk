@@ -3,6 +3,7 @@
 // Text in Texttönen, Farbe nur in den Linien und Kerzenkörpern.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Candle } from "@desk/shared";
+import { de } from "../i18n/de";
 import { cn } from "./kit";
 import { niceScale, tickCount } from "./scale";
 
@@ -265,7 +266,7 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 					{volume && (
 						<g aria-hidden>
 							<text x={pad.l + iw + 6} y={volTop + 9} fontSize={10.5} fill="var(--fg-3)">
-								Volumen
+								{de.ui.chart.volume}
 							</text>
 							{candles.map((k, i) => {
 								const h = Math.max(1, (k.v / maxVol) * volH);
@@ -299,7 +300,7 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 						const above = r.value > hi;
 						return (
 							<text key={`${r.label}-${r.value}-${k}`} x={pad.l + iw - 4} y={pad.t + 12 + k * 14} fontSize={11} fill="var(--fg-2)" textAnchor="end">
-								{r.label} {format(r.value)} ({above ? "außerhalb, höher" : "außerhalb, tiefer"})
+								{r.label} {format(r.value)} ({above ? de.ui.chart.outsideAbove : de.ui.chart.outsideBelow})
 							</text>
 						);
 					})}
@@ -310,17 +311,17 @@ export function CandleChart({ candles, format, timeLabel, height = 320, refs = [
 				<Tooltip x={x(idx)} width={width}>
 					<div className="mb-1 text-fg-3">{timeLabel(c.t, true)}</div>
 					<div className="grid grid-cols-[auto_auto] gap-x-3 tnum">
-						<span className="text-fg-3">Eröffnung</span>
+						<span className="text-fg-3">{de.ui.chart.open}</span>
 						<span className="text-right">{format(c.o)}</span>
-						<span className="text-fg-3">Hoch</span>
+						<span className="text-fg-3">{de.ui.chart.high}</span>
 						<span className="text-right">{format(c.h)}</span>
-						<span className="text-fg-3">Tief</span>
+						<span className="text-fg-3">{de.ui.chart.low}</span>
 						<span className="text-right">{format(c.l)}</span>
-						<span className="text-fg-3">Schluss</span>
+						<span className="text-fg-3">{de.ui.chart.close}</span>
 						<span className="text-right font-semibold">{format(c.c)}</span>
 						{volume && (
 							<>
-								<span className="text-fg-3">Volumen</span>
+								<span className="text-fg-3">{de.ui.chart.volume}</span>
 								<span className="text-right">{c.v.toLocaleString("de-DE")}</span>
 							</>
 						)}

@@ -6,8 +6,9 @@ import { ArrowDown, ArrowUp } from "lucide-react";
 import type { AccountSummary, ClosedTrade, TradeStats } from "@desk/shared";
 import { dateTime, duration, eur, num, pct, price, qtyShort, signedEur, tone } from "@/lib/format";
 import { Button, Table, cn, hideBelow, td, th } from "@/ui/kit";
+import { de } from "@/i18n/de";
 
-export const rText = (r: number | null | undefined) => (r === null || r === undefined ? "–" : `${r > 0 ? "+" : r < 0 ? "−" : "±"}${num(Math.abs(r), 2)} R`);
+export const rText = (r: number | null | undefined) => (r === null || r === undefined ? "–" : de.analytics.rValue(`${r > 0 ? "+" : r < 0 ? "−" : "±"}${num(Math.abs(r), 2)}`));
 export const pfText = (s: TradeStats) => (s.profitFactor === null ? (s.wins ? "∞" : "–") : num(s.profitFactor, 2));
 
 /** Kennzahlen je Gruppe (Autor oder Wert); Gruppen ohne Trades bleiben stehen, mit Strichen. */
@@ -17,12 +18,12 @@ export function GroupTable<T extends TradeStats>({ rows, label, name, testId }: 
 			<thead>
 				<tr>
 					<th className={th}>{label}</th>
-					<th className={cn(th, "text-right")}>Trades</th>
-					<th className={cn(th, "text-right", hideBelow.sm)}>Treffer</th>
-					<th className={cn(th, "text-right")}>Ergebnis</th>
-					<th className={cn(th, "text-right", hideBelow.md)}>Profit-Faktor</th>
-					<th className={cn(th, "text-right", hideBelow.md)}>Ø R</th>
-					<th className={cn(th, "text-right", hideBelow.lg)}>Ø Haltedauer</th>
+					<th className={cn(th, "text-right")}>{de.analytics.col.trades}</th>
+					<th className={cn(th, "text-right", hideBelow.sm)}>{de.analytics.col.hits}</th>
+					<th className={cn(th, "text-right")}>{de.analytics.col.result}</th>
+					<th className={cn(th, "text-right", hideBelow.md)}>{de.analytics.col.profitFactor}</th>
+					<th className={cn(th, "text-right", hideBelow.md)}>{de.analytics.col.avgR}</th>
+					<th className={cn(th, "text-right", hideBelow.lg)}>{de.analytics.col.avgHold}</th>
 				</tr>
 			</thead>
 			<tbody data-testid={testId}>
@@ -46,7 +47,7 @@ export function GroupTable<T extends TradeStats>({ rows, label, name, testId }: 
 							<td className={cn(td, "text-right tnum", hideBelow.sm)}>{r.winRate === null ? "–" : pct(r.winRate, { signed: false, digits: 0 })}</td>
 							<td className={cn(td, "text-right font-medium tnum", tone(r.pnlCents))}>{r.trades ? signedEur(r.pnlCents) : "–"}</td>
 							<td className={cn(td, "text-right tnum", hideBelow.md)}>{r.trades ? pfText(r) : "–"}</td>
-							<td className={cn(td, "text-right tnum", hideBelow.md)} title={r.rTrades ? `${r.rTrades} von ${r.trades} Trades mit Stop` : undefined}>
+							<td className={cn(td, "text-right tnum", hideBelow.md)} title={r.rTrades ? de.analytics.withStop(r.rTrades, r.trades) : undefined}>
 								{rText(r.expectancyR)}
 							</td>
 							<td className={cn(td, "text-right tnum text-fg-2", hideBelow.lg)}>{duration(r.avgHoldMs)}</td>
@@ -60,16 +61,16 @@ export function GroupTable<T extends TradeStats>({ rows, label, name, testId }: 
 
 type Key = "exit" | "symbol" | "author" | "account" | "qty" | "entryPrice" | "exitPrice" | "hold" | "pnl" | "r";
 const COLUMNS: { key: Key; label: string; right?: boolean; hide?: string }[] = [
-	{ key: "exit", label: "Ausstieg" },
-	{ key: "symbol", label: "Wert" },
-	{ key: "author", label: "Autor", hide: hideBelow.md },
-	{ key: "account", label: "Depot", hide: hideBelow.xl },
-	{ key: "qty", label: "Stück", right: true, hide: hideBelow.lg },
-	{ key: "entryPrice", label: "Einstieg (€)", right: true, hide: hideBelow.lg },
-	{ key: "exitPrice", label: "Ausstieg (€)", right: true, hide: hideBelow.lg },
-	{ key: "hold", label: "Haltedauer", right: true, hide: hideBelow.md },
-	{ key: "pnl", label: "Ergebnis", right: true },
-	{ key: "r", label: "R", right: true, hide: hideBelow.sm },
+	{ key: "exit", label: de.analytics.col.exit },
+	{ key: "symbol", label: de.analytics.col.symbol },
+	{ key: "author", label: de.analytics.col.author, hide: hideBelow.md },
+	{ key: "account", label: de.analytics.col.depot, hide: hideBelow.xl },
+	{ key: "qty", label: de.analytics.col.qty, right: true, hide: hideBelow.lg },
+	{ key: "entryPrice", label: de.analytics.col.entryEur, right: true, hide: hideBelow.lg },
+	{ key: "exitPrice", label: de.analytics.col.exitEur, right: true, hide: hideBelow.lg },
+	{ key: "hold", label: de.analytics.col.hold, right: true, hide: hideBelow.md },
+	{ key: "pnl", label: de.analytics.col.result, right: true },
+	{ key: "r", label: de.analytics.r, right: true, hide: hideBelow.sm },
 ];
 const PAGE = 100;
 
@@ -120,7 +121,7 @@ export function TradesTable({ trades, total, accounts }: { trades: ClosedTrade[]
 	const toggle = (key: Key) => setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "symbol" || key === "author" || key === "account" ? "asc" : "desc" }));
 	return (
 		<>
-			<Table label="Geschlossene Trades">
+			<Table label={de.analytics.closedTrades}>
 				<thead>
 					<tr>
 						{COLUMNS.map((c) => {
@@ -139,7 +140,7 @@ export function TradesTable({ trades, total, accounts }: { trades: ClosedTrade[]
 				<tbody>
 					{rows.map((t) => (
 						<tr key={`${t.sellTradeId}-${t.buyTradeId}`} className="hover:bg-surface-2" data-testid="trade-row">
-							<td className={cn(td, "tnum text-fg-2")} title={`Einstieg ${dateTime(t.entryTime)}`}>
+							<td className={cn(td, "tnum text-fg-2")} title={de.analytics.table.entryAt(dateTime(t.entryTime))}>
 								{dateTime(t.exitTime)}
 							</td>
 							<td className={cn(td, "max-w-[180px] @max-[560px]/table:max-w-[110px]")}>
@@ -157,10 +158,10 @@ export function TradesTable({ trades, total, accounts }: { trades: ClosedTrade[]
 							<td className={cn(td, "text-right tnum", hideBelow.lg)}>{price(t.entryPrice)}</td>
 							<td className={cn(td, "text-right tnum", hideBelow.lg)}>{price(t.exitPrice)}</td>
 							<td className={cn(td, "text-right tnum text-fg-2", hideBelow.md)}>{duration(t.holdMs)}</td>
-							<td className={cn(td, "text-right font-medium tnum", tone(t.pnlCents))} title={`Einstand ${eur(t.costCents)} · Erlös ${eur(t.proceedsCents)} · Gebühren ${eur(t.feesCents)}`}>
+							<td className={cn(td, "text-right font-medium tnum", tone(t.pnlCents))} title={de.analytics.table.pnlTitle(eur(t.costCents), eur(t.proceedsCents), eur(t.feesCents))}>
 								{signedEur(t.pnlCents)}
 							</td>
-							<td className={cn(td, "text-right tnum", tone(t.r), hideBelow.sm)} title={t.riskCents !== null ? `Risiko bis Stop ${eur(t.riskCents)}` : "ohne Stop im Vorschlag – kein R"}>
+							<td className={cn(td, "text-right tnum", tone(t.r), hideBelow.sm)} title={t.riskCents !== null ? de.analytics.table.riskTitle(eur(t.riskCents)) : de.analytics.table.noStopTitle}>
 								{rText(t.r)}
 							</td>
 						</tr>
@@ -169,12 +170,12 @@ export function TradesTable({ trades, total, accounts }: { trades: ClosedTrade[]
 			</Table>
 			<div className="flex flex-wrap items-center gap-3 border-t border-line px-4 py-2.5 text-[12px] text-fg-3">
 				<span className="tnum">
-					{rows.length === trades.length ? `${trades.length === 1 ? "1 Trade" : `${trades.length.toLocaleString("de-DE")} Trades`}` : `${rows.length.toLocaleString("de-DE")} von ${trades.length.toLocaleString("de-DE")}`}
-					{total > trades.length ? ` · die neuesten ${trades.length.toLocaleString("de-DE")} von ${total.toLocaleString("de-DE")} im Zeitraum (Kennzahlen zählen alle)` : ""}
+					{rows.length === trades.length ? de.analytics.trades(trades.length) : de.analytics.table.shownOf(rows.length, trades.length)}
+					{total > trades.length ? de.analytics.table.newest(trades.length, total) : ""}
 				</span>
 				{rows.length < trades.length && (
 					<Button size="sm" className="ml-auto" onClick={() => setShown((n) => n + PAGE)} data-testid="trades-more">
-						{Math.min(PAGE, trades.length - rows.length)} weitere zeigen
+						{de.analytics.table.more(Math.min(PAGE, trades.length - rows.length))}
 					</Button>
 				)}
 			</div>

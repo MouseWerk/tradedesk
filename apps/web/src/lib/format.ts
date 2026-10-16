@@ -1,4 +1,5 @@
 // Zahlen und Daten auf Deutsch, an einer Stelle: Dezimalkomma, Tausenderpunkt, „€“ nachgestellt, Vorzeichen bei Änderungen.
+import { de } from "../i18n/de";
 
 const eurFmt = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" });
 const eurShort = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 });
@@ -64,7 +65,7 @@ export function qtyShort(v: number): string {
 
 /** Stückzahl mit richtigem Plural: „1 Stück“ ist im Deutschen gleich, also nur die Zahl. */
 export function shares(v: number): string {
-	return `${qty(v)} Stk.`;
+	return de.format.shares(qty(v));
 }
 
 export function tone(v: number | null | undefined): string {
@@ -88,13 +89,13 @@ export function dayLabel(day: string): string {
 export function ago(ms: number | null, now = Date.now()): string {
 	if (!ms) return "–";
 	const s = Math.max(0, Math.round((now - ms) / 1000));
-	if (s < 45) return "gerade eben";
+	if (s < 45) return de.quote.justNow;
 	const m = Math.round(s / 60);
-	if (m < 60) return `vor ${m} Min.`;
+	if (m < 60) return de.format.minutesAgo(m);
 	const h = Math.round(m / 60);
-	if (h < 36) return `vor ${h} Std.`;
+	if (h < 36) return de.format.hoursAgo(h);
 	const d = Math.round(h / 24);
-	return d === 1 ? "vor 1 Tag" : `vor ${d} Tagen`;
+	return de.format.daysAgo(d);
 }
 
 /**
@@ -124,14 +125,14 @@ export function parseDe(raw: string): number {
 /** Warum eine Eingabe keine Zahl ist – für die Fehlermeldung am Feld; null, wenn sie lesbar oder leer ist. */
 export function numberError(raw: string): string | null {
 	if (!raw.trim() || Number.isFinite(parseDe(raw))) return null;
-	return /\d,\d{3}\./.test(raw) || /\d\.\d+,\d+\./.test(raw) ? "Bitte deutsches Format: 1.234,50" : "Keine Zahl – z. B. 1.234,50";
+	return /\d,\d{3}\./.test(raw) || /\d\.\d+,\d+\./.test(raw) ? de.format.germanFormat : de.format.notANumber;
 }
 
 /** Große Zahlen kurz: 950, 12.400, 1,2 Mio., 3,4 Mrd. */
 export function compact(v: number | null | undefined): string {
 	if (v === null || v === undefined) return "–";
-	if (Math.abs(v) >= 1e9) return minus(`${(v / 1e9).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mrd.`);
-	if (Math.abs(v) >= 1e6) return minus(`${(v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 })} Mio.`);
+	if (Math.abs(v) >= 1e9) return minus(de.format.billion((v / 1e9).toLocaleString("de-DE", { maximumFractionDigits: 1 })));
+	if (Math.abs(v) >= 1e6) return minus(de.format.million((v / 1e6).toLocaleString("de-DE", { maximumFractionDigits: 1 })));
 	return minus(Math.round(v).toLocaleString("de-DE"));
 }
 
@@ -147,18 +148,18 @@ export function num(v: number | null | undefined, digits = 2): string {
 export function duration(ms: number | null | undefined): string {
 	if (ms === null || ms === undefined || !Number.isFinite(ms)) return "–";
 	const min = ms / 60_000;
-	if (min < 1) return "unter 1 Min.";
-	if (min < 60) return `${Math.round(min)} Min.`;
+	if (min < 1) return de.format.underMinute;
+	if (min < 60) return de.format.minutes(Math.round(min));
 	const h = min / 60;
-	if (h < 48) return `${h.toLocaleString("de-DE", { maximumFractionDigits: h < 10 ? 1 : 0 })} Std.`;
+	if (h < 48) return de.format.hours(h.toLocaleString("de-DE", { maximumFractionDigits: h < 10 ? 1 : 0 }));
 	const d = Math.round(h / 24);
-	return d === 1 ? "1 Tag" : `${d} Tage`;
+	return de.format.days(d);
 }
 
 /** Hinweis unter der Navigation: woher die Kurse kommen (config.json "quotes"). */
 export function quoteFeedNote(feed: string | undefined): string {
-	if (feed === "ibkr") return "Keine Anlageberatung. Kurse von Interactive Brokers, sonst Yahoo Finance.";
-	if (feed === "off") return "Keine Anlageberatung. Kurse sind ausgeschaltet.";
-	if (feed === "fake") return "Keine Anlageberatung. Testkurse aus der Fixture.";
-	return "Keine Anlageberatung. Kurse von Yahoo Finance, oft verzögert.";
+	if (feed === "ibkr") return de.format.feed.ibkr;
+	if (feed === "off") return de.format.feed.off;
+	if (feed === "fake") return de.format.feed.fake;
+	return de.format.feed.yahoo;
 }

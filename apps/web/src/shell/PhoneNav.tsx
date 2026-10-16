@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useRef, useState, type ReactNode } from "react";
 import { Bell, BellOff, Ellipsis, LogOut, MessageSquare, Moon, Search, Sun, X } from "lucide-react";
+import { de } from "@/i18n/de";
 import { MODULES, moduleForPath } from "@/modules/registry";
 import { useOverview } from "@/lib/api";
 import { quoteFeedNote } from "@/lib/format";
@@ -37,7 +38,7 @@ export function PhoneNav({ menu }: { menu: PhoneMenu }) {
 		setMore(false);
 	};
 	return (
-		<nav className="flex shrink-0 gap-1 px-[max(4px,env(safe-area-inset-left))] pt-1 pb-[max(4px,env(safe-area-inset-bottom))]" aria-label="Module" data-testid="phone-nav">
+		<nav className="flex shrink-0 gap-1 px-[max(4px,env(safe-area-inset-left))] pt-1 pb-[max(4px,env(safe-area-inset-bottom))]" aria-label={de.shell.modules} data-testid="phone-nav">
 			{main.map((m) => {
 				const on = m.id === active?.id;
 				return (
@@ -51,7 +52,7 @@ export function PhoneNav({ menu }: { menu: PhoneMenu }) {
 							)}
 						</span>
 						<span className="max-w-full truncate">{m.title}</span>
-						{m.id === "orders" && !!data?.pending && <span className="sr-only">, {data.pending} warten auf dich</span>}
+						{m.id === "orders" && !!data?.pending && <span className="sr-only">{de.phone.waiting(data.pending)}</span>}
 					</Link>
 				);
 			})}
@@ -59,7 +60,7 @@ export function PhoneNav({ menu }: { menu: PhoneMenu }) {
 				<Dialog.Trigger asChild>
 					<button type="button" className={cn(item, "h-14 text-fg-2", inRest || more ? "bg-surface-3 font-semibold text-fg" : "active:bg-surface-2")} aria-current={inRest ? "page" : undefined} data-testid="phone-more">
 						<Ellipsis className={cn("size-5", inRest ? "text-fg" : "text-fg-3")} strokeWidth={1.75} aria-hidden />
-						<span>{inRest ? active!.title : "Mehr"}</span>
+						<span>{inRest ? active!.title : de.phone.more}</span>
 					</button>
 				</Dialog.Trigger>
 				<Dialog.Portal>
@@ -77,9 +78,9 @@ export function PhoneNav({ menu }: { menu: PhoneMenu }) {
 						}}
 					>
 						<div className="flex h-14 items-center px-4">
-							<Dialog.Title className="text-[15px] font-semibold">Mehr</Dialog.Title>
+							<Dialog.Title className="text-[15px] font-semibold">{de.phone.more}</Dialog.Title>
 							<Dialog.Close asChild>
-								<Button variant="ghost" size="icon" className="ml-auto size-11" aria-label="Schließen">
+								<Button variant="ghost" size="icon" className="ml-auto size-11" aria-label={de.common.close}>
 									<X className="size-5" />
 								</Button>
 							</Dialog.Close>
@@ -93,21 +94,21 @@ export function PhoneNav({ menu }: { menu: PhoneMenu }) {
 							))}
 							<div className="my-1 border-t border-line" />
 							<SheetButton icon={<Search className="size-5" />} onClick={() => then(menu.palette)}>
-								Suchen und Befehle
+								{de.shell.searchCommands}
 							</SheetButton>
 							<SheetButton icon={<MessageSquare className="size-5" />} onClick={() => then(menu.chat)}>
-								Chat
+								{de.shell.chat}
 							</SheetButton>
 							<SheetButton icon={menu.dark ? <Sun className="size-5" /> : <Moon className="size-5" />} onClick={() => then(menu.theme)}>
-								{menu.dark ? "Helles Design" : "Dunkles Design"}
+								{menu.dark ? de.shell.lightTheme : de.shell.darkTheme}
 							</SheetButton>
 							{menu.notify && (
 								<SheetButton icon={menu.notify.on ? <Bell className="size-5" /> : <BellOff className="size-5" />} onClick={() => then(menu.notify!.toggle)} pressed={menu.notify.on}>
-									{menu.notify.on ? "Benachrichtigungen aus" : "Benachrichtigungen an"}
+									{menu.notify.on ? de.shell.notifyOff : de.shell.notifyOn}
 								</SheetButton>
 							)}
 							<SheetButton icon={<LogOut className="size-5" />} onClick={() => then(menu.logout)}>
-								Abmelden
+								{de.shell.logout}
 							</SheetButton>
 							<div className="mt-2 px-3 text-[12px] text-fg-3">{menu.status}</div>
 							<p className="px-3 pt-1 text-[11.5px] leading-snug text-fg-3">{quoteFeedNote(data?.quoteFeed)}</p>

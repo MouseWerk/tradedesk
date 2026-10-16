@@ -4,6 +4,7 @@ import type { Account, Analytics, ClosedTrade, CurvePoint } from "@desk/shared";
 import { closedTrade, combineCurves, dayKey, dayResults, drawdowns, groupStats, isoWeekday, rBuckets, tradeStats } from "@desk/shared";
 import { DeskError } from "./core.ts";
 import { DeskJournal } from "./journal.ts";
+import { de } from "../i18n/de.ts";
 
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const TRADE_LIST_MAX = 1000; // so viele geschlossene Trades stehen in der Liste; Kennzahlen zählen alle
@@ -13,7 +14,7 @@ function parseDay(v: unknown, what: string): string | null {
 	if (v === undefined || v === null || v === "") return null;
 	const m = typeof v === "string" ? DAY.exec(v) : null;
 	const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
-	if (!m || !d || d.getFullYear() !== Number(m[1]) || d.getMonth() !== Number(m[2]) - 1 || d.getDate() !== Number(m[3])) throw new DeskError(`${what}: Datum als JJJJ-MM-TT, z. B. 2026-10-01.`);
+	if (!m || !d || d.getFullYear() !== Number(m[1]) || d.getMonth() !== Number(m[2]) - 1 || d.getDate() !== Number(m[3])) throw new DeskError(de.analytics.badDate(what));
 	return v as string;
 }
 
@@ -65,7 +66,7 @@ export abstract class DeskAnalytics extends DeskJournal {
 		const accounts = this.scopeAccounts(scope);
 		const from = parseDay(q.from, "from");
 		const to = parseDay(q.to, "to") ?? dayKey(this.now());
-		if (from !== null && from > to) throw new DeskError("from liegt nach to.");
+		if (from !== null && from > to) throw new DeskError(de.analytics.fromAfterTo);
 		const inRange = (d: string) => (from === null || d >= from) && d <= to;
 		const all = this.closedTrades(accounts);
 		const trades = all.filter((t) => inRange(dayKey(t.exitTime)));

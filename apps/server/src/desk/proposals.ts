@@ -6,6 +6,7 @@ import { ProposalInputSchema, checkOrder, movePct, orderValueCents, roundQty, si
 import type { Broker } from "../broker.ts";
 import { DeskError, CONFIRM_TTL_MS, dateText, parseQty, parsePrice, parseFeeCents, num, type Origin, type ProposalRow } from "./core.ts";
 import { DeskMarket } from "./market.ts";
+import { de } from "../i18n/de.ts";
 
 const OPEN_LIMIT_DAYS = 30;
 const MARKET_WAIT_DAYS = 4; // eine Papier-Market-Order nach Börsenschluss wartet höchstens bis dahin auf die Eröffnung
@@ -47,7 +48,7 @@ export abstract class DeskProposals extends DeskMarket {
 
 	protected proposalRow(id: number): ProposalRow {
 		const r = this.db.get<ProposalRow>("SELECT * FROM proposal WHERE id = ?", id);
-		if (!r) throw new DeskError(`Unbekannter Vorschlag ${id}.`, 404);
+		if (!r) throw new DeskError(de.proposals.unknown(id), 404);
 		return r;
 	}
 
@@ -130,9 +131,9 @@ export abstract class DeskProposals extends DeskMarket {
 		const warnings = [...c.warnings];
 		const stale = this.quoteProblem(o.symbol);
 		if (stale) violations.unshift(stale);
-		if (o.side === "buy" && res.unpriced.length) violations.push(`Freigegebene Order ${res.unpriced.map((id) => `#${id}`).join(", ")} ohne Kurs oder Wechselkurs – das gebundene Cash ist nicht prüfbar.`);
-		if (o.side === "buy" && res.cashCents > 0) warnings.push(`Freigegebene, noch offene Orders binden ${eurText(res.cashCents)} – im verfügbaren Cash schon abgezogen.`);
-		if (o.side === "sell" && res.sellQty.get(o.symbol)) warnings.push(`${num(res.sellQty.get(o.symbol)!)} Stück ${o.symbol} sind schon in offenen Verkaufsorders gebunden.`);
+		if (o.side === "buy" && res.unpriced.length) violations.push(de.proposals.unpriced(res.unpriced.length, res.unpriced.map((id) => `#${id}`).join(", ")));
+		if (o.side === "buy" && res.cashCents > 0) warnings.push(de.proposals.reservedCash(eurText(res.cashCents)));
+		if (o.side === "sell" && res.sellQty.get(o.symbol)) warnings.push(de.proposals.reservedSell(num(res.sellQty.get(o.symbol)!), o.symbol));
 		return { ...c, ok: violations.length === 0, violations, warnings };
 	}
 
@@ -144,26 +145,26 @@ export abstract class DeskProposals extends DeskMarket {
 		const raw = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
 		// Tippfehler wie "stoploss" sind kein "ohne Stop": unbekannte Felder von Agenten werden abgewiesen
 		const unknown = origin === "cli" ? Object.keys(raw).filter((k) => !(k in ProposalInputSchema.shape)) : [];
-		if (unknown.length) throw new DeskError(`Ungültiger Vorschlag: unbekanntes Feld „${unknown[0].slice(0, 40)}“ – erlaubt: ${Object.keys(ProposalInputSchema.shape).join(", ")}.`);
-		const parsed = ProposalInputSchema.safeParse(origin === "web" ? { confidence: 1, thesis: "Eigene Order", ...raw, author: this.cfg.user } : raw);
+		if (unknown.length) throw new DeskError(de.proposals.unknownField(unknown[0].slice(0, 40), Object.keys(ProposalInputSchema.shape).join(", ")));
+		const parsed = ProposalInputSchema.safeParse(origin === "web" ? { confidence: 1, thesis: de.proposals.ownThesis, ...raw, author: this.cfg.user } : raw);
 		if (!parsed.success) {
 			const i = parsed.error.issues[0];
-			throw new DeskError(`Ungültiger Vorschlag: ${i.path.join(".") || "?"} – ${i.message}`);
+			throw new DeskError(de.proposals.invalid(i.path.join(".") || "?", i.message));
 		}
 		const input = parsed.data;
 		const isUser = origin === "web";
 		const author = isUser ? this.cfg.user : this.agentName(input.author);
-		if (!author) throw new DeskError(`Unbekannter Agent „${input.author}“ – in config.json unter "agents" eintragen.`, 403);
+		if (!author) throw new DeskError(de.core.unknownAgent(input.author), 403);
 		const a = this.account(input.accountId);
-		if (!isUser && a.owner !== "user" && a.owner !== author) throw new DeskError(`${author} darf nicht für ${a.name} vorschlagen – nur fürs eigene Papierdepot oder deine Depots.`, 403);
-		if (isUser && a.kind === "broker" && !this.brokers.has(a.id)) throw new DeskError(`${a.name}: keine Verbindung zum Broker eingerichtet.`);
-		if (isUser && a.kind === "manual") throw new DeskError(`${a.name} führst du beim Broker aus – dort ausgeführte Trades mit „Trade erfassen…“ eintragen.`);
+		if (!isUser && a.owner !== "user" && a.owner !== author) throw new DeskError(de.proposals.notAllowed(author, a.name), 403);
+		if (isUser && a.kind === "broker" && !this.brokers.has(a.id)) throw new DeskError(de.proposals.noBroker(a.name));
+		if (isUser && a.kind === "manual") throw new DeskError(de.proposals.manualDepot(a.name));
 		const symbol = this.normalizeSymbol(input.symbol);
 		const extra: string[] = [];
 		// die Allow-List: nur, was auf der Watchlist oder im Depot steht – nie ein erfundenes Symbol
-		if (!this.isWatched(symbol) && !this.book(a.id).holdings.has(symbol)) extra.push(`${symbol} steht nicht auf der Watchlist und nicht im Depot.`);
-		if (!isUser && input.confidence < this.cfg.minConfidence) extra.push(`Zuversicht ${Math.round(input.confidence * 100)} % liegt unter dem Mindestwert von ${Math.round(this.cfg.minConfidence * 100)} %.`);
-		if (input.orderType === "market" && input.limitPrice) extra.push("Market-Order mit Limitkurs – orderType \"limit\" verwenden oder den Limitkurs weglassen.");
+		if (!this.isWatched(symbol) && !this.book(a.id).holdings.has(symbol)) extra.push(de.proposals.notWatched(symbol));
+		if (!isUser && input.confidence < this.cfg.minConfidence) extra.push(de.proposals.lowConfidence(Math.round(input.confidence * 100), Math.round(this.cfg.minConfidence * 100)));
+		if (input.orderType === "market" && input.limitPrice) extra.push(de.proposals.marketWithLimit);
 		if (!extra.length) await this.ensureFresh(symbol);
 		// "je Autor": über alle Depots gezählt, sonst hielte ein Agent mit vier Depots viermal so viele offen
 		const openByAuthor = isUser ? undefined : this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM proposal WHERE author = ? AND status = 'pending'", author)!.n;
@@ -171,9 +172,9 @@ export abstract class DeskProposals extends DeskMarket {
 		const waiting = input.side === "buy" ? this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND side = 'buy' AND status = 'pending'", a.id) : [];
 		const waitingCents = waiting.reduce((sum, w) => sum + orderValueCents(w.qty, w.limit_price ?? w.quote_price, this.priced(w.symbol)?.fx ?? 1) + a.feeCents, 0);
 		if (waiting.length && c.ok && waitingCents + c.estimateCents + c.feeCents > this.summary(a).cashCents - this.reserved(a.id).cashCents)
-			c.warnings.push(`Zusammen mit ${waiting.length} wartenden Kaufvorschlägen reicht das Cash nicht für alle – bei der Freigabe wird neu geprüft.`);
+			c.warnings.push(de.proposals.waitingBuys(waiting.length));
 		const check: Check = { ...c, ok: c.ok && !extra.length, violations: [...extra, ...c.violations] };
-		if (!check.ok && !dryRun && !isUser) this.event("proposal.blocked", author, `Vorschlag ${sideLabel[input.side]} ${num(input.qty)} ${symbol} nicht angelegt: ${check.violations[0]}`);
+		if (!check.ok && !dryRun && !isUser) this.event("proposal.blocked", author, de.proposals.blocked(`${sideLabel[input.side]} ${num(input.qty)} ${symbol}`, check.violations[0]));
 		if (dryRun || !check.ok) return { ok: check.ok, check, proposal: null };
 		const now = this.now();
 		const id = this.db.tx(() => {
@@ -183,7 +184,7 @@ export abstract class DeskProposals extends DeskMarket {
 				a.id, author, symbol, input.side, roundQty(input.qty), input.orderType, input.limitPrice ?? null, input.side === "buy" ? (input.stopLoss ?? null) : null, input.side === "buy" ? (input.takeProfit ?? null) : null,
 				input.confidence, input.thesis, check.price ?? 0, JSON.stringify(check.warnings), now, now + this.cfg.proposalTtlHours * 3_600_000, JSON.stringify(raw).slice(0, 4000),
 			);
-			if (!isUser) this.event("proposal.new", author, `${author} schlägt vor: ${sideLabel[input.side]} ${num(input.qty)} ${symbol} (${a.name}) #${lastId}`, { to: [this.cfg.user], ref: `#${lastId}` });
+			if (!isUser) this.event("proposal.new", author, de.proposals.proposed(author, `${sideLabel[input.side]} ${num(input.qty)} ${symbol}`, a.name, lastId), { to: [this.cfg.user], ref: `#${lastId}` });
 			else this.execute(lastId, roundQty(input.qty), this.cfg.user);
 			return lastId;
 		});
@@ -200,9 +201,9 @@ export abstract class DeskProposals extends DeskMarket {
 		const a = this.account(r.account_id);
 		const p = this.priced(r.symbol);
 		if (r.author !== this.cfg.user && p && movePct(r.quote_price, p.price) > this.cfg.staleMovePct)
-			return { status: "stale", reason: `Kurs hat sich um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt. Agent soll neu vorschlagen.` };
+			return { status: "stale", reason: de.proposals.moved(pct(movePct(r.quote_price, p.price)), num(r.quote_price), num(p.price), p.currency) };
 		const check = this.check(a, { side: r.side, qty, orderType: r.order_type, limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, { byAgent: r.author !== this.cfg.user, exclude: r.id });
-		if (!check.ok) return { status: "rejected", reason: `Risikoprüfung vor dem Senden: ${check.violations.join(" ")}` };
+		if (!check.ok) return { status: "rejected", reason: de.proposals.riskBeforeSend(check.violations.join(" ")) };
 		return null;
 	}
 
@@ -218,7 +219,7 @@ export abstract class DeskProposals extends DeskMarket {
 				`UPDATE proposal SET status = ?, decided_at = ?, decided_by = ?, approved_qty = ?${cols.map((c) => `, ${c} = ?`).join("")} WHERE id = ? AND status = 'pending'`,
 				status, now, by, qty, ...cols.map((c) => fields[c]), id,
 			);
-			if (!changes) throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.proposal(id));
+			if (!changes) throw new DeskError(de.proposals.decided, 409, this.proposal(id));
 		};
 		const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id}`;
 		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
@@ -231,7 +232,7 @@ export abstract class DeskProposals extends DeskMarket {
 		if (a.kind === "broker") {
 			// echtes Geld nur mit Hauptschalter; Senden passiert nach der Transaktion (Netzwerk), hier nur reservieren
 			if (a.live && !this.cfg.liveTrading) {
-				const reason = `Live-Handel ist aus – in config.json "liveTrading": true setzen, um echte Orders an ${a.broker} zu senden.`;
+				const reason = de.proposals.liveOff(a.broker);
 				set("rejected", { reason });
 				this.event("proposal.rejected", by, `${label}: ${reason}`, notify);
 				return this.proposal(id);
@@ -241,39 +242,39 @@ export abstract class DeskProposals extends DeskMarket {
 		}
 		if (a.kind === "manual") {
 			set("placed", { expires_at: now + PLACED_DAYS * 86_400_000 });
-			this.event("proposal.placed", by, `${label} freigegeben – jetzt in ${a.broker} ausführen und die Ausführung eintragen.`, notify);
+			this.event("proposal.placed", by, de.proposals.manualApproved(label, a.broker), notify);
 			return this.proposal(id);
 		}
 		if (r.order_type === "limit" && r.limit_price && (!crossed(r.side, p!.price, r.limit_price) || !this.inSession(r.symbol))) {
 			set("open", { expires_at: now + OPEN_LIMIT_DAYS * 86_400_000 });
-			this.event("proposal.open", by, `${label} freigegeben – Limit ${num(r.limit_price)} ${p!.currency} offen.`, notify);
+			this.event("proposal.open", by, de.proposals.limitOpen(label, num(r.limit_price), p!.currency), notify);
 			return this.proposal(id);
 		}
 		if (!this.inSession(r.symbol)) {
 			// Papier füllt nur zur Handelszeit – sonst zum letzten Schlusskurs, mit dem Wissen von heute
-			set("open", { expires_at: now + MARKET_WAIT_DAYS * 86_400_000, reason: "wartet auf den Handelsbeginn" });
-			this.event("proposal.open", by, `${label} freigegeben – wartet auf den Handelsbeginn.`, notify);
+			set("open", { expires_at: now + MARKET_WAIT_DAYS * 86_400_000, reason: de.proposals.waitsForOpen });
+			this.event("proposal.open", by, de.proposals.approvedWaits(label), notify);
 			return this.proposal(id);
 		}
 		set("filled", { fill_price: p!.price });
 		this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p!.price, currency: p!.currency, fx: p!.fx, feeCents: a.feeCents, time: now, source: r.author === this.cfg.user ? "order" : "proposal", proposalId: id, note: "" });
-		this.event("trade.fill", by, `${label} zu ${num(p!.price)} ${p!.currency} ausgeführt (${a.name})`, notify);
+		this.event("trade.fill", by, de.proposals.filled(label, num(p!.price), p!.currency, a.name), notify);
 		return this.proposal(id);
 	}
 
 	/** Freigabe – nur von dir, nur verkleinern (weniger Stück), nie vergrößern. */
 	async approve(id: number, body: { qty?: unknown }): Promise<Proposal> {
 		const r = this.proposalRow(id);
-		if (r.status !== "pending") throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.toProposal(r));
+		if (r.status !== "pending") throw new DeskError(de.proposals.decided, 409, this.toProposal(r));
 		let qty = r.qty;
 		if (body.qty !== undefined) {
 			qty = parseQty(body.qty); // 0,0000001 wird nicht zu 0 gerundet und abgelehnt, sondern ist eine falsche Eingabe
-			if (qty > r.qty + 1e-9) throw new DeskError(`Freigeben darfst du höchstens ${num(r.qty)} Stück – mehr als vorgeschlagen geht nicht.`);
+			if (qty > r.qty + 1e-9) throw new DeskError(de.proposals.tooMany(num(r.qty)));
 		}
 		await this.refresh([r.symbol]); // direkt vor dem Schreiben neu lesen
 		// ein alter Kurs entscheidet nichts – der Vorschlag bleibt offen, du gibst später frei
 		const stale = this.quoteProblem(r.symbol);
-		if (stale) throw new DeskError(`${stale} Nichts ausgeführt, der Vorschlag wartet weiter.`, 409, this.toProposal(r));
+		if (stale) throw new DeskError(de.proposals.staleWaits(stale), 409, this.toProposal(r));
 		const out = this.db.tx(() => this.execute(id, qty, this.cfg.user));
 		if (out.status === "sending") await this.sendToBroker(id);
 		this.emit("tick", { at: this.now() });
@@ -283,9 +284,9 @@ export abstract class DeskProposals extends DeskMarket {
 	reject(id: number, reason: unknown): Proposal {
 		const r = this.proposalRow(id);
 		const why = typeof reason === "string" ? reason.trim().slice(0, 500) : "";
-		const { changes } = this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'", why || "von dir abgelehnt", this.now(), this.cfg.user, id);
-		if (!changes) throw new DeskError("Dieser Vorschlag wurde schon entschieden.", 409, this.toProposal(r));
-		this.event("proposal.rejected", this.cfg.user, `${sideLabel[r.side]} ${num(r.qty)} ${r.symbol} #${id} von ${r.author} abgelehnt${why ? `: ${why}` : ""}`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
+		const { changes } = this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, decided_at = ?, decided_by = ? WHERE id = ? AND status = 'pending'", why || de.proposals.rejectedByYou, this.now(), this.cfg.user, id);
+		if (!changes) throw new DeskError(de.proposals.decided, 409, this.toProposal(r));
+		this.event("proposal.rejected", this.cfg.user, de.proposals.rejected(`${sideLabel[r.side]} ${num(r.qty)} ${r.symbol} #${id}`, r.author, why), r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
 		return this.proposal(id);
 	}
 
@@ -297,39 +298,39 @@ export abstract class DeskProposals extends DeskMarket {
 			try {
 				await this.brokerOf(a.id).cancel(r.broker_order_id);
 			} catch (e) {
-				throw new DeskError(`Storno bei ${a.broker} fehlgeschlagen: ${(e as Error).message}`, 502);
+				throw new DeskError(de.proposals.cancelFailed(a.broker, (e as Error).message), 502);
 			}
-			this.db.run("UPDATE proposal SET reason = 'Storno beim Broker angefragt' WHERE id = ?", id);
-			this.event("proposal.cancel", this.cfg.user, `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}: Storno an ${a.broker} gesendet`);
+			this.db.run("UPDATE proposal SET reason = ? WHERE id = ?", de.proposals.cancelRequested, id);
+			this.event("proposal.cancel", this.cfg.user, de.proposals.cancelSent(`${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`, a.broker));
 			await this.pollBroker(a.id).catch(() => undefined);
 			return this.proposal(id);
 		}
-		const { changes } = this.db.run(`UPDATE proposal SET status = 'cancelled', reason = 'von dir storniert', decided_at = COALESCE(decided_at, ?), decided_by = COALESCE(decided_by, ?) WHERE id = ? AND status IN ('open','placed','confirm')`, this.now(), this.cfg.user, id);
-		if (!changes) throw new DeskError("Nur offene Limits, Broker-Rückfragen und noch nicht eingetragene Broker-Orders lassen sich stornieren.", 409, this.toProposal(r));
-		this.event("proposal.cancelled", this.cfg.user, `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} storniert`);
+		const { changes } = this.db.run(`UPDATE proposal SET status = 'cancelled', reason = ?, decided_at = COALESCE(decided_at, ?), decided_by = COALESCE(decided_by, ?) WHERE id = ? AND status IN ('open','placed','confirm')`, de.proposals.cancelledByYou, this.now(), this.cfg.user, id);
+		if (!changes) throw new DeskError(de.proposals.notCancellable, 409, this.toProposal(r));
+		this.event("proposal.cancelled", this.cfg.user, de.proposals.cancelled(`${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol}`));
 		return this.proposal(id);
 	}
 
 	/** Ausführung beim Broker eintragen (manuelles Depot): was dort wirklich passiert ist, in EUR. */
 	fill(id: number, body: { qty?: unknown; price?: unknown; feeEur?: unknown; time?: unknown }): Proposal {
 		const r = this.proposalRow(id);
-		if (r.status !== "placed") throw new DeskError("Nur freigegebene Broker-Orders lassen sich als ausgeführt eintragen.", 409, this.toProposal(r));
+		if (r.status !== "placed") throw new DeskError(de.proposals.fillOnlyPlaced, 409, this.toProposal(r));
 		const a = this.account(r.account_id);
-		if (a.kind !== "manual") throw new DeskError(`Ausführungen von ${a.broker} kommen automatisch über die API.`, 409, this.toProposal(r));
+		if (a.kind !== "manual") throw new DeskError(de.proposals.fillAutomatic(a.broker), 409, this.toProposal(r));
 		const max = r.approved_qty ?? r.qty;
 		const qty = body.qty === undefined || body.qty === null ? max : parseQty(body.qty);
-		if (qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
-		const price = parsePrice(body.price, "Ausführungskurs in EUR");
+		if (qty > max + 1e-9) throw new DeskError(de.proposals.fillQtyRange(num(max)));
+		const price = parsePrice(body.price, de.proposals.fillPrice);
 		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
 		const time = this.tradeTime(body.time);
-		if (r.side === "sell" && (this.book(a.id).holdings.get(r.symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${r.symbol}.`);
+		if (r.side === "sell" && (this.book(a.id).holdings.get(r.symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(de.core.fewerShares(num(qty), r.symbol));
 		if (r.side === "sell" && this.newOversells(a.id, [{ id: Number.MAX_SAFE_INTEGER, symbol: r.symbol, side: "sell", qty, time }]).size)
-			throw new DeskError(`Am ${dateText(time)} waren weniger als ${num(qty)} Stück ${r.symbol} im Depot – Zeitpunkt prüfen.`);
+			throw new DeskError(de.core.fewerSharesAt(dateText(time), num(qty), r.symbol));
 		this.db.tx(() => {
 			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", price, qty, id);
-			if (!changes) throw new DeskError("Schon eingetragen.", 409);
+			if (!changes) throw new DeskError(de.proposals.alreadyFilled, 409);
 			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "proposal", proposalId: id, note: "" });
-			this.event("trade.fill", this.cfg.user, `${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id} zu ${num(price)} € in ${a.broker} ausgeführt`, r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
+			this.event("trade.fill", this.cfg.user, de.proposals.filledAt(`${sideLabel[r.side]} ${num(qty)} ${r.symbol} #${id}`, num(price), a.broker), r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` });
 		});
 		this.emit("tick", { at: this.now() });
 		return this.proposal(id);
@@ -347,21 +348,21 @@ export abstract class DeskProposals extends DeskMarket {
 			const byAgent = r.author !== this.cfg.user;
 			const label = `${sideLabel[r.side]} ${num(qty)} ${r.symbol}`;
 			if (!r.limit_price && byAgent && movePct(r.quote_price, p.price) > this.cfg.staleMovePct) {
-				const reason = `Kurs hat sich bis zur Eröffnung um ${pct(movePct(r.quote_price, p.price))} bewegt (${num(r.quote_price)} → ${num(p.price)} ${p.currency}) – nichts ausgeführt.`;
+				const reason = de.proposals.movedAtOpen(pct(movePct(r.quote_price, p.price)), num(r.quote_price), num(p.price), p.currency);
 				if (this.db.run("UPDATE proposal SET status = 'stale', reason = ? WHERE id = ? AND status = 'open'", reason, r.id).changes) this.event("proposal.stale", "Desk", `${label} #${r.id}: ${reason}`, { to: [r.author], ref: `#${r.id}` });
 				continue;
 			}
 			// dieselbe Prüfung wie bei der Freigabe, mit Stop, Risiko je Trade und Stop-Pflicht – ohne sich selbst als Reservierung
 			const c = this.check(a, { side: r.side, qty, orderType: "market", stopLoss: r.stop_loss, takeProfit: r.take_profit, symbol: r.symbol }, { byAgent, exclude: r.id });
 			if (!c.ok) {
-				const what = r.limit_price ? "Limit erreicht" : "Börse offen";
-				this.db.run("UPDATE proposal SET status = 'cancelled', reason = ? WHERE id = ? AND status = 'open'", `${what}, aber Risikoprüfung: ${c.violations.join(" ")}`, r.id);
-				this.event("proposal.cancelled", "Desk", `${label}: ${what}, nicht ausgeführt – ${c.violations[0]}`, byAgent ? { to: [r.author], ref: `#${r.id}` } : undefined);
+				const what = r.limit_price ? de.proposals.limitReached : de.proposals.marketOpen;
+				this.db.run("UPDATE proposal SET status = 'cancelled', reason = ? WHERE id = ? AND status = 'open'", de.proposals.riskAfter(what, c.violations.join(" ")), r.id);
+				this.event("proposal.cancelled", "Desk", de.proposals.notFilledRisk(label, what, c.violations[0]), byAgent ? { to: [r.author], ref: `#${r.id}` } : undefined);
 				continue;
 			}
 			if (!this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, reason = '' WHERE id = ? AND status = 'open'", p.price, r.id).changes) continue;
-			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: r.limit_price ? "Limit" : "Eröffnung" });
-			this.event("trade.fill", "Desk", `${label} #${r.id} zu ${num(p.price)} ${p.currency} ausgeführt (${r.limit_price ? `Limit ${num(r.limit_price)}` : "zur Eröffnung"}, ${a.name})`, { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
+			this.insertTrade(a, { symbol: r.symbol, side: r.side, qty, price: p.price, currency: p.currency, fx: p.fx, feeCents: a.feeCents, time: this.now(), source: r.author === this.cfg.user ? "order" : "proposal", proposalId: r.id, note: r.limit_price ? de.proposals.noteLimit : de.proposals.noteOpening });
+			this.event("trade.fill", "Desk", de.proposals.filledOpen(`${label} #${r.id}`, num(p.price), p.currency, r.limit_price ? de.proposals.viaLimit(num(r.limit_price)) : de.proposals.atOpening, a.name), { to: r.author === this.cfg.user ? [] : [r.author], ref: `#${r.id}` });
 		}
 	}
 
@@ -369,13 +370,13 @@ export abstract class DeskProposals extends DeskMarket {
 		const now = this.now();
 		// eine unbeantwortete Rückfrage des Brokers verfällt; bestätigt werden kann sie danach nicht mehr
 		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status = 'confirm' AND COALESCE(status_at, decided_at, created_at) <= ?", now - CONFIRM_TTL_MS)) {
-			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ?, status_at = ? WHERE id = ? AND status = 'confirm'", "Rückfrage des Brokers nicht innerhalb von 15 Minuten bestätigt – nichts gesendet.", now, r.id).changes)
-				this.event("proposal.expired", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: Rückfrage des Brokers abgelaufen – nichts gesendet.`, { to: r.author === this.cfg.user ? [this.cfg.user] : [this.cfg.user, r.author], ref: `#${r.id}` });
+			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ?, status_at = ? WHERE id = ? AND status = 'confirm'", de.proposals.replyExpired, now, r.id).changes)
+				this.event("proposal.expired", "Desk", de.proposals.replyExpiredEvent(`${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}`), { to: r.author === this.cfg.user ? [this.cfg.user] : [this.cfg.user, r.author], ref: `#${r.id}` });
 		}
 		// Broker-Orders laufen beim Broker ab (Tagesorder); deren Ende meldet der Abruf, nicht diese Uhr
 		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status IN ('pending','open','placed') AND expires_at <= ? AND broker_order_id IS NULL", now)) {
-			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ? WHERE id = ? AND status = ?", r.status === "pending" ? "nicht rechtzeitig entschieden" : "nicht ausgeführt", r.id, r.status).changes)
-				this.event("proposal.expired", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} von ${r.author} abgelaufen`);
+			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ? WHERE id = ? AND status = ?", r.status === "pending" ? de.proposals.notDecidedInTime : de.proposals.notFilled, r.id, r.status).changes)
+				this.event("proposal.expired", "Desk", de.proposals.expired(`${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol}`, r.author));
 		}
 	}
 
@@ -396,11 +397,11 @@ export abstract class DeskProposals extends DeskMarket {
 			const a = this.account(r.account_id);
 			if (r.stop_loss && !r.stop_hit_at && q.price <= r.stop_loss) {
 				this.db.run("UPDATE proposal SET stop_hit_at = ? WHERE id = ?", this.now(), r.id);
-				this.event("stop", "Desk", `${r.symbol} hat den Stop-Loss ${num(r.stop_loss)} erreicht (${a.name}) – Verkauf prüfen.`, { to: [this.cfg.user, ...(r.author === this.cfg.user ? [] : [r.author])], ref: r.symbol });
+				this.event("stop", "Desk", de.proposals.stopHit(r.symbol, num(r.stop_loss), a.name), { to: [this.cfg.user, ...(r.author === this.cfg.user ? [] : [r.author])], ref: r.symbol });
 			}
 			if (r.take_profit && !r.target_hit_at && q.price >= r.take_profit) {
 				this.db.run("UPDATE proposal SET target_hit_at = ? WHERE id = ?", this.now(), r.id);
-				this.event("target", "Desk", `${r.symbol} hat das Kursziel ${num(r.take_profit)} erreicht (${a.name}).`, { to: [this.cfg.user, ...(r.author === this.cfg.user ? [] : [r.author])], ref: r.symbol });
+				this.event("target", "Desk", de.proposals.targetHit(r.symbol, num(r.take_profit), a.name), { to: [this.cfg.user, ...(r.author === this.cfg.user ? [] : [r.author])], ref: r.symbol });
 			}
 		}
 	}

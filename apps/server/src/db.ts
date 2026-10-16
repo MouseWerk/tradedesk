@@ -3,6 +3,7 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { de } from "./i18n/de.ts";
 
 export const MIGRATIONS: string[] = [
 	/* 1 */ `
@@ -154,7 +155,7 @@ export function openDatabase(file: string): Database {
 		}
 	};
 	const version = Number((raw.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
-	if (version > MIGRATIONS.length) throw new Error(`Datenbank ${file} stammt aus einer neueren Version (${version} > ${MIGRATIONS.length}) – bitte die neuere Version starten.`);
+	if (version > MIGRATIONS.length) throw new Error(de.db.newerVersion(file, version, MIGRATIONS.length));
 	// Sicherung vor jeder Migration: VACUUM INTO schreibt eine vollständige, in sich stimmige Kopie – auch mit dem, was
 	// erst im WAL steht (eine Kopie nur der Hauptdatei wäre älter, als sie aussieht, oder kaputt)
 	if (version < MIGRATIONS.length && existed && version > 0) {

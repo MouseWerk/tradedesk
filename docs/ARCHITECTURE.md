@@ -12,6 +12,7 @@ one page. Owner decisions and code rules are in `CLAUDE.md`; this file says wher
 | `packages/shared/src/trading.ts` | indicators (EMA, VWAP, RSI, ATR), sessions, day stats, position sizing, R |
 | `packages/shared/src/analytics.ts` | analytics (closed trades with R, stats, drawdown, day results), overview ranges and asset classes |
 | `packages/shared/src/csv.ts` | CSV import parser |
+| `packages/shared/src/i18n/de.ts` | texts of the shared logic (`sharedDe`): risk check, status and side names, CSV and schema messages |
 | `apps/server/src/index.ts` | start, config, wiring of market, feed and brokers, listen on 127.0.0.1 (+ Tailscale) |
 | `apps/server/src/app.ts` | HTTP (Hono): host check, body limits, owner/agent split, routes, SSE stream, web app |
 | `apps/server/src/auth.ts` | owner PIN (scrypt), sessions (SHA-256 of the token), lockout |
@@ -23,6 +24,8 @@ one page. Owner decisions and code rules are in `CLAUDE.md`; this file says wher
 | `apps/server/src/http.ts` | the only HTTP client: `httpJson` (internet, timeout), `localJson` (localhost only, self-signed TLS) |
 | `apps/server/src/db.ts` | migrations (numbered, append only, backup before each), small query helper |
 | `apps/server/src/fixture.ts`, `selftest.ts` | throwaway workspace with fake exchange and broker for tests, self-test, Playwright |
+| `apps/server/src/i18n/de.ts` | every German message of the server (`de`): errors, events and chat, broker, console |
+| `apps/web/src/i18n/de.ts` | every UI text of the web app (`de`); terms in `docs/GLOSSARY.md` |
 | `cli/desk.py` | the agents' CLI (read, propose, journal, chat); no approve command |
 
 `src/desk/` is a chain of abstract classes, each file one concern, each building on the one before; `Desk` is the
@@ -41,6 +44,15 @@ journal.ts    DeskJournal   journal, agents comparison, chat
 analytics.ts  DeskAnalytics GET /api/analytics
 desk.ts       Desk          cockpit, close reminder, tick, timer
 ```
+
+## Texts
+
+The product is German only ("du"), so there is no i18n library: one typed catalog per side (web, server, shared), a
+nested object whose texts with values are small functions (`approved: (label: string) => …`) with plurals written out.
+Code references texts by their full path (`de.proposal.approveTitle(…)`); data (symbols, account and agent names,
+agent text, IBKR's own questions) stays data. `apps/web/test/i18n.test.ts` and `apps/server/test/i18n.test.ts` fail on
+a German literal outside the catalogs (heuristic in `apps/server/test/i18n-guard.ts`), on wording rules (quotes „…“,
+minus, decimal comma, ellipsis, "du"), on a forbidden variant from `docs/GLOSSARY.md` and on unused keys.
 
 ## Data flow
 

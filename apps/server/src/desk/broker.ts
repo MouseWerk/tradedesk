@@ -6,6 +6,7 @@ import { fxSymbol } from "../market.ts";
 import type { Broker, BrokerExecution, BrokerOrder, PlaceResult } from "../broker.ts";
 import { DeskError, CONFIRM_TTL_MS, num, type ProposalRow } from "./core.ts";
 import { DeskProposals } from "./proposals.ts";
+import { de } from "../i18n/de.ts";
 
 const UNLISTED_MS = 24 * 3_600_000; // so lange darf eine Broker-Order aus der Orderliste fehlen, dann gilt sie als abgelaufen
 
@@ -14,7 +15,7 @@ export abstract class DeskBroker extends DeskProposals {
 
 	protected brokerOf(accountId: string): Broker {
 		const b = this.brokers.get(accountId);
-		if (!b) throw new DeskError(`${this.account(accountId).name}: keine Broker-Verbindung eingerichtet.`, 409);
+		if (!b) throw new DeskError(de.brokerFlow.noBroker(this.account(accountId).name), 409);
 		return b;
 	}
 
@@ -24,7 +25,7 @@ export abstract class DeskBroker extends DeskProposals {
 		return (
 			this.brokerState.get(accountId) ?? {
 				accountId, adapter: b?.adapter ?? "–", connected: false, authenticated: false, brokerAccount: null, paper: null, live: a.live, liveTrading: this.cfg.liveTrading,
-				message: b ? "Noch nicht geprüft." : "Keine Broker-Verbindung eingerichtet.", checkedAt: null, loginUrl: b?.loginUrl ?? null,
+				message: b ? de.brokerFlow.notChecked : de.brokerFlow.noBrokerStatus, checkedAt: null, loginUrl: b?.loginUrl ?? null,
 			}
 		);
 	}
@@ -88,8 +89,8 @@ export abstract class DeskBroker extends DeskProposals {
 		try {
 			broker = this.brokerOf(a.id);
 			const session = await broker.session();
-			if (!session.account) return fail(session.message || "nicht angemeldet");
-			if (a.live && session.paper === true) return fail("das Gateway ist mit einem Papierkonto angemeldet, das Depot ist aber als echtes Konto eingetragen");
+			if (!session.account) return fail(session.message || de.broker.notLoggedInShort);
+			if (a.live && session.paper === true) return fail(de.brokerFlow.paperSession);
 		} catch (e) {
 			return fail((e as Error).message);
 		}
@@ -119,19 +120,19 @@ export abstract class DeskBroker extends DeskProposals {
 		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
 		if (res.kind === "submitted") {
 			this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ?, broker_message = NULL, reply_id = NULL, reason = '', status_at = ?, last_seen_at = ? WHERE id = ? AND status = 'sending'", res.orderId, now, now, id);
-			this.event("broker.sent", "Desk", `${label} an ${a.broker} gesendet (Order ${res.orderId}${a.live ? ", echtes Geld" : ", Papierkonto"})`, notify);
+			this.event("broker.sent", "Desk", de.brokerFlow.sent(label, a.broker, res.orderId, a.live), notify);
 		} else if (res.kind === "reply") {
 			this.db.run("UPDATE proposal SET status = 'confirm', reply_id = ?, broker_message = ?, status_at = ? WHERE id = ? AND status = 'sending'", res.replyId, res.message.slice(0, 1000), now, id);
-			this.event("broker.confirm", "Desk", `${label}: ${a.broker} fragt nach – „${res.message.slice(0, 200)}“ – bitte unter Orders bestätigen oder stornieren.`, { to: [this.cfg.user], ref: `#${id}` });
+			this.event("broker.confirm", "Desk", de.brokerFlow.asks(label, a.broker, res.message.slice(0, 200)), { to: [this.cfg.user], ref: `#${id}` });
 		} else if (res.kind === "unknown") {
 			// keine sichere Antwort: die Order kann beim Broker arbeiten. Sie bleibt "wird gesendet"; der Abruf findet sie über
 			// ihre Client-Order-ID oder sagt nach 5 Minuten, dass du beim Broker nachsehen musst. Nie erneut senden.
-			const reason = `Keine sichere Antwort von ${a.broker} (${res.message}) – Ergebnis unbekannt. Der Desk sucht die Order über ihre ID und sendet nicht erneut.`;
+			const reason = de.brokerFlow.unknownResult(a.broker, res.message);
 			this.db.run("UPDATE proposal SET reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", reason.slice(0, 500), now, id);
 			this.event("broker.unknown", "Desk", `${label}: ${reason}`, { to: [this.cfg.user, ...(notify?.to ?? [])], ref: `#${id}` });
 		} else {
 			this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${res.message}`.slice(0, 500), now, id);
-			this.event("proposal.rejected", "Desk", `${label}: ${a.broker} hat abgelehnt – ${res.message}`, notify);
+			this.event("proposal.rejected", "Desk", de.brokerFlow.rejectedBy(label, a.broker, res.message), notify);
 		}
 	}
 
@@ -142,10 +143,10 @@ export abstract class DeskBroker extends DeskProposals {
 	 */
 	async confirmBroker(id: number): Promise<Proposal> {
 		const r = this.proposalRow(id);
-		if (r.status !== "confirm" || !r.reply_id) throw new DeskError("Hier gibt es keine offene Rückfrage des Brokers.", 409, this.toProposal(r));
-		if (this.killSwitch) throw new DeskError("Not-Aus ist aktiv – keine Orders, bis du ihn ausschaltest.", 409, this.toProposal(r));
+		if (r.status !== "confirm" || !r.reply_id) throw new DeskError(de.brokerFlow.noReply, 409, this.toProposal(r));
+		if (this.killSwitch) throw new DeskError(de.brokerFlow.killActive, 409, this.toProposal(r));
 		const a = this.account(r.account_id);
-		if (a.live && !this.cfg.liveTrading) throw new DeskError(`Live-Handel ist aus – in config.json "liveTrading": true setzen.`, 409, this.toProposal(r));
+		if (a.live && !this.cfg.liveTrading) throw new DeskError(de.brokerFlow.liveOff, 409, this.toProposal(r));
 		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
 		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
 		const end = (status: ProposalStatus, reason: string, kind: string) => {
@@ -154,17 +155,17 @@ export abstract class DeskBroker extends DeskProposals {
 			this.emit("tick", { at: this.now() });
 			return this.proposal(id);
 		};
-		if (this.now() - (r.status_at ?? r.decided_at ?? r.created_at) > CONFIRM_TTL_MS) return end("expired", "Rückfrage des Brokers nicht innerhalb von 15 Minuten bestätigt – nichts gesendet.", "proposal.expired");
+		if (this.now() - (r.status_at ?? r.decided_at ?? r.created_at) > CONFIRM_TTL_MS) return end("expired", de.proposals.replyExpired, "proposal.expired");
 		await this.refresh([r.symbol]);
 		const stale = this.quoteProblem(r.symbol);
-		if (stale) throw new DeskError(`${stale} Nichts gesendet, die Rückfrage wartet weiter.`, 409, this.toProposal(r));
+		if (stale) throw new DeskError(de.brokerFlow.staleWaits(stale), 409, this.toProposal(r));
 		const verdict = this.verdict(r, r.approved_qty ?? r.qty);
 		if (verdict) return end(verdict.status, verdict.reason, verdict.status === "stale" ? "proposal.stale" : "proposal.rejected");
 		const broker = this.brokerOf(a.id);
 		const session = await broker.session();
-		if (!session.account) throw new DeskError(`${a.broker}: ${session.message || "nicht angemeldet"} – erst im Gateway anmelden, dann bestätigen.`, 409, this.toProposal(r));
-		if (a.live && session.paper === true) return end("rejected", "das Gateway ist mit einem Papierkonto angemeldet, das Depot ist aber als echtes Konto eingetragen", "proposal.rejected");
-		if (!this.db.run("UPDATE proposal SET status = 'sending', status_at = ? WHERE id = ? AND status = 'confirm'", this.now(), id).changes) throw new DeskError("Schon bestätigt.", 409);
+		if (!session.account) throw new DeskError(de.brokerFlow.loginFirst(a.broker, session.message || de.broker.notLoggedInShort), 409, this.toProposal(r));
+		if (a.live && session.paper === true) return end("rejected", de.brokerFlow.paperSession, "proposal.rejected");
+		if (!this.db.run("UPDATE proposal SET status = 'sending', status_at = ? WHERE id = ? AND status = 'confirm'", this.now(), id).changes) throw new DeskError(de.brokerFlow.alreadyConfirmed, 409);
 		let res: PlaceResult;
 		try {
 			res = await broker.confirm(r.reply_id);
@@ -197,9 +198,9 @@ export abstract class DeskBroker extends DeskProposals {
 				const o = orders.find((x) => x.cOID === this.coidOf(r));
 				if (o) {
 					if (this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ?, reason = '', status_at = ?, last_seen_at = ? WHERE id = ? AND status = 'sending'", o.orderId, now, now, r.id).changes)
-						this.event("broker.sent", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: bei ${a.broker} gefunden (Order ${o.orderId}).`, { to: [this.cfg.user], ref: `#${r.id}` });
-				} else if ((r.status_at ?? r.decided_at!) < now - 5 * 60_000 && this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", `Senden an ${a.broker} unterbrochen – Order dort nicht gefunden. Bei ${a.broker} prüfen; der Desk sendet nicht erneut.`, now, r.id).changes)
-					this.event("proposal.rejected", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: Senden an ${a.broker} unterbrochen – bitte dort prüfen.`, { to: [this.cfg.user], ref: `#${r.id}` });
+						this.event("broker.sent", "Desk", de.brokerFlow.found(`${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}`, a.broker, o.orderId), { to: [this.cfg.user], ref: `#${r.id}` });
+				} else if ((r.status_at ?? r.decided_at!) < now - 5 * 60_000 && this.db.run("UPDATE proposal SET status = 'rejected', reason = ?, status_at = ? WHERE id = ? AND status = 'sending'", de.brokerFlow.interruptedReason(a.broker), now, r.id).changes)
+					this.event("proposal.rejected", "Desk", de.brokerFlow.interrupted(`${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}`, a.broker), { to: [this.cfg.user], ref: `#${r.id}` });
 			}
 			for (const e of execs) this.importExecution(a, e, missing);
 			this.syncOrders(a, orders, now);
@@ -220,36 +221,36 @@ export abstract class DeskBroker extends DeskProposals {
 			const f = this.fillsOf(r.id);
 			const notify = { to: r.author === this.cfg.user ? [this.cfg.user] : [this.cfg.user, r.author], ref: `#${r.id}` };
 			const label = `${sideLabel[r.side]} ${num(want)} ${r.symbol} #${r.id}`;
-			const part = (q: number) => `teilweise ausgeführt: ${num(q)} von ${num(want)} Stück`;
+			const part = (q: number) => de.brokerFlow.partial(num(q), num(want));
 			if (f.qty > 0 && f.qty !== (r.filled_qty ?? 0)) this.db.run("UPDATE proposal SET filled_qty = ?, fill_price = ? WHERE id = ?", f.qty, f.avg, r.id);
 			if (r.status === "filled") continue;
 			if (r.status !== "placed") {
 				// schon storniert, abgelehnt oder abgelaufen – und trotzdem kommt eine Ausführung (z. B. während PendingCancel)
 				if (f.qty > (r.filled_qty ?? 0) + 1e-9) {
 					const full = f.qty >= want - 1e-9;
-					this.db.run("UPDATE proposal SET status = ?, reason = ?, status_at = ? WHERE id = ?", full ? "filled" : r.status, full ? "" : `${part(f.qty)}, Rest ${r.reason || "nicht ausgeführt"}`.slice(0, 500), now, r.id);
-					this.event("trade.fill", "Desk", `${label}: nach „${r.reason || r.status}“ doch bei ${a.broker} ausgeführt (${num(f.qty)} Stück) – Bestand prüfen.`, notify);
+					this.db.run("UPDATE proposal SET status = ?, reason = ?, status_at = ? WHERE id = ?", full ? "filled" : r.status, full ? "" : de.brokerFlow.partialRest(part(f.qty), r.reason || de.proposals.notFilled).slice(0, 500), now, r.id);
+					this.event("trade.fill", "Desk", de.brokerFlow.lateFill(label, r.reason || r.status, a.broker, num(f.qty)), notify);
 				}
 				continue;
 			}
 			if (o) this.db.run("UPDATE proposal SET last_seen_at = ? WHERE id = ?", now, r.id);
 			if (o?.status === "filled" || f.qty >= want - 1e-9) {
 				if (this.db.run("UPDATE proposal SET status = 'filled', fill_price = COALESCE(?, fill_price), reason = '', status_at = ? WHERE id = ? AND status = 'placed'", f.avg ?? o?.avgPrice ?? null, now, r.id).changes)
-					this.event("trade.fill", "Desk", `${label} bei ${a.broker} ausgeführt${f.avg ?? o?.avgPrice ? ` zu ${num(f.avg ?? o!.avgPrice!)}` : ""}`, notify);
+					this.event("trade.fill", "Desk", de.brokerFlow.filled(label, a.broker, f.avg ?? o?.avgPrice ? num(f.avg ?? o!.avgPrice!) : null), notify);
 			} else if (o && (o.status === "cancelled" || o.status === "rejected")) {
-				const why = `${o.status === "cancelled" ? `bei ${a.broker} storniert` : `von ${a.broker} abgelehnt`}${f.qty > 0 ? ` (${part(f.qty)})` : ""}`;
+				const why = `${o.status === "cancelled" ? de.brokerFlow.cancelledAt(a.broker) : de.brokerFlow.rejectedAt(a.broker)}${f.qty > 0 ? ` (${part(f.qty)})` : ""}`;
 				if (this.db.run("UPDATE proposal SET status = ?, reason = ?, status_at = ? WHERE id = ? AND status = 'placed'", o.status, why, now, r.id).changes) this.event("proposal.cancelled", "Desk", `${label} ${why}`, notify);
 			} else if (!o) {
 				// nicht mehr gelistet (eine Tagesorder verschwindet am nächsten Tag): nach 24 h ohne Lebenszeichen abgelaufen
 				const seen = r.last_seen_at ?? r.status_at ?? r.decided_at ?? r.created_at;
 				if (now - seen > UNLISTED_MS) {
-					const why = `bei ${a.broker} nicht mehr gelistet – dort prüfen${f.qty > 0 ? ` (${part(f.qty)})` : ""}`;
+					const why = `${de.brokerFlow.unlisted(a.broker)}${f.qty > 0 ? ` (${part(f.qty)})` : ""}`;
 					if (this.db.run("UPDATE proposal SET status = 'expired', reason = ?, status_at = ? WHERE id = ? AND status = 'placed'", why, now, r.id).changes) this.event("proposal.expired", "Desk", `${label} ${why}`, notify);
 				}
 			} else if (o.rawStatus.toLowerCase() === "inactive") {
 				this.noteOnce(`inactive:${r.id}`, () => {
-					this.db.run("UPDATE proposal SET broker_message = ? WHERE id = ?", `${a.broker} meldet „Inactive“ – die Order arbeitet nicht, kann aber wieder aktiv werden (z. B. außerhalb der Handelszeit). Bei ${a.broker} prüfen.`, r.id);
-					this.event("broker.inactive", "Desk", `${label}: ${a.broker} meldet „Inactive“ – bitte dort prüfen.`, notify);
+					this.db.run("UPDATE proposal SET broker_message = ? WHERE id = ?", de.brokerFlow.inactiveMessage(a.broker), r.id);
+					this.event("broker.inactive", "Desk", de.brokerFlow.inactive(label, a.broker), notify);
 				});
 			}
 		}
@@ -263,10 +264,10 @@ export abstract class DeskBroker extends DeskProposals {
 		const byCoid = e.cOID?.startsWith("desk-") ? this.db.get<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND (broker_coid = ? OR (broker_coid IS NULL AND 'desk-' || id = ?))", a.id, e.cOID, e.cOID) : undefined;
 		const proposal = byCoid && byCoid.broker_conid !== null && e.conid !== null && byCoid.broker_conid === e.conid ? byCoid : undefined;
 		if (byCoid && !proposal)
-			this.noteOnce(`mismatch:${a.id}:${e.id}`, () => this.event("broker.mismatch", "Desk", `${a.broker}: Ausführung ${e.id} trägt die Order-ID von #${byCoid.id}, aber einen anderen Kontrakt (${e.conid ?? "?"} statt ${byCoid.broker_conid ?? "?"}) – nicht diesem Vorschlag zugeordnet.`, { to: [this.cfg.user], ref: `#${byCoid.id}` }));
+			this.noteOnce(`mismatch:${a.id}:${e.id}`, () => this.event("broker.mismatch", "Desk", de.brokerFlow.mismatch(a.broker, e.id, byCoid.id, String(e.conid ?? "?"), String(byCoid.broker_conid ?? "?")), { to: [this.cfg.user], ref: `#${byCoid.id}` }));
 		const symbol = proposal?.symbol ?? this.symbolOfConid(a.id, e.conid);
 		if (!symbol) {
-			this.noteOnce(`unmapped:${a.id}:${e.conid}`, () => this.event("broker.unknown", "Desk", `${a.broker}: Ausführung für Kontrakt ${e.conid} ohne Symbol – in config.json unter "conids" zuordnen, dann „Mit ${a.broker} abgleichen“.`));
+			this.noteOnce(`unmapped:${a.id}:${e.conid}`, () => this.event("broker.unknown", "Desk", de.brokerFlow.unmapped(a.broker, String(e.conid))));
 			return;
 		}
 		// vom Abgleich schon im Bestand übernommen: nicht noch einmal buchen
@@ -280,7 +281,7 @@ export abstract class DeskBroker extends DeskProposals {
 			missing.add(symbol);
 			if (inst && inst.currency !== "EUR") missing.add(fxSymbol(inst.currency));
 			if (e.commissionCurrency && e.commissionCurrency !== "EUR") missing.add(fxSymbol(e.commissionCurrency));
-			this.noteOnce(`fxwait:${a.id}:${e.id}`, () => this.event("broker.wait", "Desk", `${a.broker}: Ausführung ${num(e.qty)} ${symbol} wartet auf ${inst ? `den Wechselkurs ${inst.currency}/EUR` : "Kursdaten (Währung)"} – wird gebucht, sobald er da ist.`));
+			this.noteOnce(`fxwait:${a.id}:${e.id}`, () => this.event("broker.wait", "Desk", de.brokerFlow.waits(a.broker, num(e.qty), symbol, inst ? de.brokerFlow.waitsFx(inst.currency) : de.brokerFlow.waitsCurrency)));
 			return;
 		}
 		this.insertTrade(a, {
@@ -292,7 +293,7 @@ export abstract class DeskBroker extends DeskProposals {
 	/** Bestand und Cash beim Broker gegen das Buch des Desks. */
 	async reconcile(accountId: string): Promise<Reconcile> {
 		const a = this.account(accountId);
-		if (a.kind !== "broker") throw new DeskError(`${a.name} ist kein Broker-Depot.`);
+		if (a.kind !== "broker") throw new DeskError(de.brokerFlow.notBrokerDepot(a.name));
 		const broker = this.brokerOf(accountId);
 		await this.pollBroker(accountId);
 		const status = this.brokerStatus(accountId);
@@ -310,7 +311,7 @@ export abstract class DeskBroker extends DeskProposals {
 		const deskCash = this.summary(a).cashCents;
 		// Cash nur in EUR vergleichen: eine andere oder unbekannte Basiswährung wird nicht als EUR gebucht
 		const eurCash = cash && cash.currency === "EUR" ? cents(cash.amount) : null;
-		const cashNote = cash && cash.currency !== "EUR" ? `Cash bei ${a.broker} in ${cash.currency === "BASE" ? "unbekannter Basiswährung" : cash.currency} – der Desk gleicht nur EUR ab.` : null;
+		const cashNote = cash && cash.currency !== "EUR" ? de.brokerFlow.cashNote(a.broker, cash.currency === "BASE" ? null : cash.currency) : null;
 		return { status, rows, brokerCashCents: eurCash, deskCashCents: deskCash, differences: rows.filter((r) => Math.abs(r.brokerQty - r.deskQty) > 1e-9).length + (eurCash !== null && Math.abs(eurCash - deskCash) >= 100 ? 1 : 0), cashNote };
 	}
 
@@ -322,7 +323,7 @@ export abstract class DeskBroker extends DeskProposals {
 	async applyReconcile(accountId: string): Promise<Reconcile> {
 		const a = this.account(accountId);
 		const first = await this.reconcile(accountId);
-		if (!first.status.brokerAccount) throw new DeskError(`${a.broker}: nicht angemeldet – erst im Gateway anmelden.`, 409);
+		if (!first.status.brokerAccount) throw new DeskError(de.brokerFlow.notLoggedIn(a.broker), 409);
 		for (const row of first.rows) if (row.symbol && row.conid !== null) this.rememberConid(a.id, row.conid, row.symbol);
 		const r = await this.reconcile(accountId); // bucht die jetzt zuordenbaren Ausführungen
 		const skipped: string[] = [];
@@ -338,13 +339,13 @@ export abstract class DeskBroker extends DeskProposals {
 					skipped.push(row.symbol);
 					continue;
 				}
-				this.insertTrade(a, { symbol: row.symbol, side: diff > 0 ? "buy" : "sell", qty: Math.abs(diff), price, currency, fx, feeCents: 0, time: now, source: "import", proposalId: null, note: `Abgleich ${a.broker}` });
+				this.insertTrade(a, { symbol: row.symbol, side: diff > 0 ? "buy" : "sell", qty: Math.abs(diff), price, currency, fx, feeCents: 0, time: now, source: "import", proposalId: null, note: de.brokerFlow.reconcileNote(a.broker) });
 				if (row.conid !== null) this.db.run("INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", `reconciled:${a.id}:${row.conid}`, String(now));
 			}
 			const deskCash = this.summary(a).cashCents;
 			if (r.brokerCashCents !== null && r.brokerCashCents !== deskCash)
-				this.db.run("INSERT INTO cash_move (account_id, amount_cents, time, note) VALUES (?,?,?,?)", a.id, r.brokerCashCents - deskCash, now, `Abgleich ${a.broker}`);
-			this.event("broker.reconcile", this.cfg.user, `${a.name} mit ${a.broker} abgeglichen (${r.differences} Unterschiede übernommen)${skipped.length ? ` – ohne Kurs oder Wechselkurs nicht übernommen: ${skipped.join(", ")}` : ""}`);
+				this.db.run("INSERT INTO cash_move (account_id, amount_cents, time, note) VALUES (?,?,?,?)", a.id, r.brokerCashCents - deskCash, now, de.brokerFlow.reconcileNote(a.broker));
+			this.event("broker.reconcile", this.cfg.user, de.brokerFlow.reconciled(a.name, a.broker, r.differences, skipped.join(", ")));
 		});
 		this.emit("tick", { at: this.now() });
 		return this.reconcile(accountId);

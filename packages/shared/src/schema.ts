@@ -2,13 +2,14 @@
 // Geld in Cent (Basiswährung EUR) als ganze Zahl; Kurse in der Währung des Wertpapiers; Stückzahlen bis 6 Nachkommastellen.
 import { z } from "zod";
 import { decimals } from "./portfolio.ts";
+import { sharedDe } from "./i18n/de.ts";
 
 /** Obergrenzen an der API-Grenze: was darüber liegt, ist ein Tippfehler oder ein Angriff, nie eine Order. */
 export const MAX_QTY = 10_000_000;
 export const MAX_PRICE = 10_000_000; // in Wertpapierwährung
 export const MAX_EUR = 100_000_000; // Ein- und Auszahlungen, Gebühren, Grenzen
-export const QtySchema = z.number().positive().max(MAX_QTY).refine((n) => decimals(n) <= 6, "höchstens 6 Nachkommastellen");
-export const PriceSchema = z.number().positive().max(MAX_PRICE).refine((n) => decimals(n) <= 8, "höchstens 8 Nachkommastellen");
+export const QtySchema = z.number().positive().max(MAX_QTY).refine((n) => decimals(n) <= 6, sharedDe.schema.maxDecimals(6));
+export const PriceSchema = z.number().positive().max(MAX_PRICE).refine((n) => decimals(n) <= 8, sharedDe.schema.maxDecimals(8));
 
 export const SideSchema = z.enum(["buy", "sell"]);
 export type Side = z.infer<typeof SideSchema>;

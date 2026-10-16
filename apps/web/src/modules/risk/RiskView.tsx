@@ -7,6 +7,7 @@ import { inputNumber, numberError, parseDe, pct } from "@/lib/format";
 import { Badge, Button, Card, Field, Input, Skeleton, cn } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
 import { Page, PageHead, useAction, useKillSwitch } from "../common";
+import { de } from "@/i18n/de";
 
 export default function RiskView() {
 	const { data, error, refetch } = useRisk();
@@ -27,33 +28,33 @@ export default function RiskView() {
 	const toggleKill = () => kill.toggle(data.killSwitch);
 	return (
 		<Page>
-			<PageHead title="Risiko" sub="Jede Order, jeder Vorschlag und jede Freigabe läuft durch diese Prüfung – auch deine eigenen." />
+			<PageHead title={de.risk.title} sub={de.risk.sub} />
 			<Card pad={false}>
 				<div className={cn("flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4", data.killSwitch && "bg-err/8")}>
 					{data.killSwitch ? <OctagonX className="size-6 text-err" aria-hidden /> : <ShieldCheck className="size-6 text-ok" aria-hidden />}
 					<div className="min-w-0 flex-1">
-						<h2 className="text-[15px] font-semibold">{data.killSwitch ? "Not-Aus ist an" : "Handel aktiv"}</h2>
-						<p className="text-[12.5px] text-fg-3">{data.killSwitch ? "Nichts wird freigegeben oder ausgeführt, bis du ihn ausschaltest." : "Ein Klick stoppt alle Freigaben und Ausführungen sofort."}</p>
+						<h2 className="text-[15px] font-semibold">{data.killSwitch ? de.risk.killOnTitle : de.overview.tradingActive}</h2>
+						<p className="text-[12.5px] text-fg-3">{data.killSwitch ? de.risk.killOnText : de.risk.killOffText}</p>
 					</div>
 					<Button variant={data.killSwitch ? "outline" : "danger"} onClick={() => void toggleKill()} disabled={kill.busy} data-testid="kill-toggle">
-						{data.killSwitch ? "Not-Aus ausschalten" : "Not-Aus…"}
+						{data.killSwitch ? de.risk.killSwitchOff : de.risk.killSwitchOn}
 					</Button>
 				</div>
 				<dl className="grid grid-cols-3 gap-4 border-t border-line px-4 py-3 text-[12.5px] @max-[700px]:grid-cols-1">
 					<div>
-						<dt className="text-fg-3">Mindest-Zuversicht für Agenten</dt>
+						<dt className="text-fg-3">{de.risk.minConfidence}</dt>
 						<dd className="font-medium tnum">{Math.round(data.minConfidence * 100)} %</dd>
 					</div>
 					<div>
-						<dt className="text-fg-3">Kursbewegung bis zur Freigabe höchstens</dt>
+						<dt className="text-fg-3">{de.risk.staleMove}</dt>
 						<dd className="font-medium tnum">{pct(data.staleMovePct, { signed: false })}</dd>
 					</div>
 					<div>
-						<dt className="text-fg-3">Vorschläge verfallen nach</dt>
-						<dd className="font-medium tnum">{data.proposalTtlHours} Std.</dd>
+						<dt className="text-fg-3">{de.risk.proposalTtl}</dt>
+						<dd className="font-medium tnum">{de.risk.hours(data.proposalTtlHours)}</dd>
 					</div>
 				</dl>
-				<p className="border-t border-line px-4 py-2 text-[11.5px] text-fg-3">Diese drei Werte stehen in config.json (minConfidence, staleMovePct, proposalTtlHours).</p>
+				<p className="border-t border-line px-4 py-2 text-[11.5px] text-fg-3">{de.risk.configNote}</p>
 			</Card>
 			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(340px,100%),1fr))] gap-4">
 				{data.accounts.map((a) => (
@@ -65,11 +66,11 @@ export default function RiskView() {
 }
 
 const FIELDS: { key: keyof Omit<RiskLimits, "accountId" | "requireStop">; label: string; hint: string; unit: string; toUi: (v: number) => string; fromUi: (v: number) => number }[] = [
-	{ key: "maxOrderCents", label: "Max. Orderwert", hint: "je Order, 0 = keine Grenze", unit: "€", toUi: (v) => inputNumber(v / 100, v % 100 ? 2 : 0), fromUi: (v) => Math.round(v * 100) },
-	{ key: "maxPositionPct", label: "Max. Position", hint: "Anteil am Depot nach dem Kauf", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
-	{ key: "maxRiskPct", label: "Risiko je Trade", hint: "Verlust bis zum Stop, 0 = keine Grenze", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
-	{ key: "dailyLossPct", label: "Tagesverlust-Stopp", hint: "danach keine Käufe, 0 = keine Grenze", unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
-	{ key: "maxOpenProposals", label: "Offene Vorschläge", hint: "je Agent, 0 = keine Grenze", unit: "", toUi: (v) => String(v), fromUi: (v) => Math.round(v) },
+	{ key: "maxOrderCents", label: de.risk.field.maxOrderCents.label, hint: de.risk.field.maxOrderCents.hint, unit: "€", toUi: (v) => inputNumber(v / 100, v % 100 ? 2 : 0), fromUi: (v) => Math.round(v * 100) },
+	{ key: "maxPositionPct", label: de.risk.field.maxPositionPct.label, hint: de.risk.field.maxPositionPct.hint, unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "maxRiskPct", label: de.risk.field.maxRiskPct.label, hint: de.risk.field.maxRiskPct.hint, unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "dailyLossPct", label: de.risk.field.dailyLossPct.label, hint: de.risk.field.dailyLossPct.hint, unit: "%", toUi: (v) => String(v).replace(".", ","), fromUi: (v) => v },
+	{ key: "maxOpenProposals", label: de.risk.field.maxOpenProposals.label, hint: de.risk.field.maxOpenProposals.hint, unit: "", toUi: (v) => String(v), fromUi: (v) => Math.round(v) },
 ];
 
 function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: string; limits: RiskLimits; dayLossPct: number | null }) {
@@ -91,17 +92,17 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 	}, [limits]);
 	const commit = async (f: (typeof FIELDS)[number]) => {
 		const v = parseDe(vals[f.key]);
-		if (!(v >= 0) || (f.unit === "%" && v > 100)) return setErrs({ ...errs, [f.key]: numberError(vals[f.key]) ?? (f.unit === "%" ? "0 bis 100" : "0 oder mehr") });
+		if (!(v >= 0) || (f.unit === "%" && v > 100)) return setErrs({ ...errs, [f.key]: numberError(vals[f.key]) ?? (f.unit === "%" ? de.risk.errPercent : de.risk.errMin) });
 		setErrs({ ...errs, [f.key]: null });
 		// gleiche Schreibweise wie vom Server (z. B. „5000“ → „5.000“)
 		setVals((x) => ({ ...x, [f.key]: f.toUi(f.fromUi(v)) }));
 		const next = f.fromUi(v);
 		if (next === limits[f.key]) return;
 		const prev = limits[f.key];
-		await run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: next }, `${f.label} für ${name} geändert.`, { label: "Rückgängig", run: () => void run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: prev }, "Zurückgesetzt.") });
+		await run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: next }, de.risk.changed(f.label, name), { label: de.portfolio.undo, run: () => void run(`/api/risk/${limits.accountId}`, "PUT", { [f.key]: prev }, de.risk.reset) });
 	};
 	return (
-		<Card title={name} aside={owner === "user" ? <Badge>dein Depot</Badge> : <Badge>Agent {owner}</Badge>}>
+		<Card title={name} aside={owner === "user" ? <Badge>{de.risk.yourDepot}</Badge> : <Badge>{de.risk.agentBadge(owner)}</Badge>}>
 			<div className="grid grid-cols-2 gap-3 @max-[480px]:grid-cols-1">
 				{FIELDS.map((f) => (
 					<Field key={f.key} label={`${f.label}${f.unit ? ` (${f.unit})` : ""}`} hint={f.hint} error={errs[f.key]}>
@@ -128,11 +129,11 @@ function Limits({ name, owner, limits, dayLossPct }: { name: string; owner: stri
 					type="checkbox"
 					className="size-4 accent-[var(--fg)]"
 					checked={limits.requireStop}
-					onChange={(e) => void run(`/api/risk/${limits.accountId}`, "PUT", { requireStop: e.target.checked }, e.target.checked ? `Stop-Pflicht für Agenten in ${name} an.` : `Stop-Pflicht für Agenten in ${name} aus.`)}
+					onChange={(e) => void run(`/api/risk/${limits.accountId}`, "PUT", { requireStop: e.target.checked }, e.target.checked ? de.risk.requireStopOn(name) : de.risk.requireStopOff(name))}
 				/>
-				Agenten müssen beim Kauf einen Stop-Loss setzen
+				{de.risk.requireStop}
 			</label>
-			<p className="mt-2 text-[12px] text-fg-3 tnum">Heute: {dayLossPct === null ? "noch kein Vortag" : dayLossPct > 0 ? `${pct(dayLossPct, { signed: false })} Verlust` : "kein Verlust"}</p>
+			<p className="mt-2 text-[12px] text-fg-3 tnum">{de.risk.today(dayLossPct === null ? de.risk.noPrevDay : dayLossPct > 0 ? de.risk.dayLoss(pct(dayLossPct, { signed: false })) : de.risk.noLoss)}</p>
 		</Card>
 	);
 }

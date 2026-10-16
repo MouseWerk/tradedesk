@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { z } from "zod";
 import type { ChartRange, ChatMessage, DeskEvent } from "@desk/shared";
 import { AccountDetailSchema, AgentsDataSchema, AnalysisSchema, AnalyticsSchema, BrokerStatusSchema, ChartSchema, ChatMessageSchema, CockpitSchema, EventSchema, NewsItemSchema, OverviewSchema, ProposalSchema, RiskDataSchema, SearchHitSchema, WatchItemSchema } from "@desk/shared";
+import { de } from "../i18n/de";
 
 // Kein globales placeholderData: ein Schlüssel für ein anderes Symbol oder Depot zeigte sonst die Daten des vorigen
 // unter der neuen Überschrift (Kennzahlen von SAP unter NVDA). Wo es passt, setzt die Abfrage es selbst.
@@ -44,7 +45,7 @@ export async function request(url: string, init: RequestInit = {}): Promise<Resp
 		return await fetch(url, { ...init, headers });
 	} catch (e) {
 		if ((e as Error).name === "AbortError") throw e;
-		throw new Error("Desk nicht erreichbar – läuft der Server noch?");
+		throw new Error(de.api.unreachable);
 	}
 }
 
@@ -60,7 +61,7 @@ function authRequired(url: string, status: number, body: unknown) {
 
 export async function getAuth(): Promise<{ pinSet: boolean; authenticated: boolean }> {
 	const r = await request("/api/auth", { headers: { Accept: "application/json" } });
-	if (!r.ok) throw new Error(`Desk antwortet nicht (${r.status}).`);
+	if (!r.ok) throw new Error(de.api.authFailed(String(r.status)));
 	return (await r.json()) as { pinSet: boolean; authenticated: boolean };
 }
 
@@ -68,12 +69,12 @@ export async function getChecked<S extends z.ZodType>(url: string, schema: S): P
 	const r = await request(url, { headers: { Accept: "application/json" } });
 	const body = (await r.json().catch(() => null)) as unknown;
 	authRequired(url, r.status, body);
-	if (!r.ok) throw new Error((body as { msg?: string } | null)?.msg ?? `Server antwortet nicht wie erwartet (${r.status}). Läuft der Desk?`);
+	if (!r.ok) throw new Error((body as { msg?: string } | null)?.msg ?? de.api.unexpected(String(r.status)));
 	const parsed = schema.safeParse(body);
 	if (!parsed.success) {
 		const i = parsed.error.issues[0];
 		console.warn("desk: API-Antwort passt nicht zum Schema", url, parsed.error.issues.slice(0, 5));
-		throw new Error(`Server und App passen nicht zusammen (${url}: ${i?.path.join(".") || "?"} – ${i?.message ?? "ungültig"}). Seite neu laden.`);
+		throw new Error(de.api.mismatch(url, i?.path.join(".") || "?", i?.message ?? de.api.invalid));
 	}
 	return parsed.data;
 }
@@ -81,7 +82,7 @@ export async function getChecked<S extends z.ZodType>(url: string, schema: S): P
 /** Änderungen: immer JSON (der Server verlangt es), Fehlermeldung des Servers als Error. */
 export async function send<T = unknown>(url: string, method: "POST" | "PUT" | "DELETE", body: unknown = {}, signal?: AbortSignal): Promise<T> {
 	const r = await request(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-	const data = (await r.json().catch(() => ({ msg: `Server antwortet nicht (${r.status}).` }))) as T & { msg?: string };
+	const data = (await r.json().catch(() => ({ msg: de.api.noAnswer(String(r.status)) }))) as T & { msg?: string };
 	authRequired(url, r.status, data);
 	if (!r.ok) throw new Error(data.msg ?? `${url}: ${r.status}`);
 	return data;
@@ -250,7 +251,7 @@ export function useLive(): LiveState {
 			es.addEventListener("event", (e) => {
 				refresh();
 				const parsed = EventSchema.safeParse(parse((e as MessageEvent).data));
-				if (parsed.success && NOTIFY_KINDS.has(parsed.data.kind)) notify(`Tradedesk – ${parsed.data.actor}`, (parsed.data as DeskEvent).text, `event-${parsed.data.id}-${parsed.data.time}`);
+				if (parsed.success && NOTIFY_KINDS.has(parsed.data.kind)) notify(de.api.notifyEvent(parsed.data.actor), (parsed.data as DeskEvent).text, `event-${parsed.data.id}-${parsed.data.time}`);
 			});
 			es.addEventListener("chat", (e) => {
 				live.signalAt = Date.now();
@@ -258,7 +259,7 @@ export function useLive(): LiveState {
 				if (!parsed.success) return;
 				const m: ChatMessage = parsed.data;
 				qc.setQueryData<ChatMessage[]>(keys.chat, (old) => (old && !old.some((x) => x.id === m.id) ? [...old, m].slice(-500) : old));
-				if (m.role === "agent") notify(`${m.author} im Chat`, m.text.slice(0, 160), `chat-${m.id}`);
+				if (m.role === "agent") notify(de.api.notifyChat(m.author), m.text.slice(0, 160), `chat-${m.id}`);
 			});
 		};
 		connect();
