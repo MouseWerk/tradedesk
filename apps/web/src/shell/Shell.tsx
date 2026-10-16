@@ -2,17 +2,25 @@
 // Platz: Ist der Chat angedockt und das Fenster schmaler als 1600 px, wird die Seitenleiste zur Symbolleiste – sonst
 // bleiben auf einem 1440er-Laptop keine 800 px für Chart und Order-Rechner. Unter 1280 px ist der Chat ein modaler
 // Dialog (Fokus hinein, Escape schließt, Fokus zurück auf den Chat-Knopf, Modul-Tasten ruhen).
+// Telefon (unter 640 px): keine Seitenleiste, unten eine Leiste mit fünf Modulen und „Mehr“, Knöpfe 44 px.
+// Strg+K / Cmd+K öffnet überall die Befehlspalette (auch aus einem Feld), nur nicht hinter einem anderen Dialog.
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, BellOff, ChevronRight, ListChecks, LogOut, MessageSquare, Moon, OctagonX, Radio, Sun } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bell, BellOff, ChevronRight, ListChecks, LogOut, MessageSquare, Moon, OctagonX, Radio, Search, Sun } from "lucide-react";
 import { MODULES, moduleForPath } from "@/modules/registry";
 import { AUTH_EVENT, notifyEnabled, send, setNotify, setSessionToken, useChat, useLive, useOverview, type LiveState } from "@/lib/api";
 import { ago, eur, hhmm, pct, tone } from "@/lib/format";
 import { Badge, Button, Kbd, cn } from "@/ui/kit";
 import { Boundary } from "@/ui/boundary";
 import { useToast } from "@/ui/overlay";
+import { useKillSwitch } from "@/modules/common";
 import { ChatPanel } from "./ChatPanel";
+import { CommandPalette, type PaletteActions } from "./CommandPalette";
+import { PhoneNav } from "./PhoneNav";
+
+// erst beim ersten Öffnen geladen (Befehlspalette „Order…“); bleibt danach stehen, damit der Fokus zurückfindet
+const OrderTicket = lazy(() => import("@/modules/orders/OrderTicket").then((m) => ({ default: m.OrderTicket })));
 
 function useTheme(): [boolean, () => void] {
 	const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
@@ -100,6 +108,7 @@ export function Shell() {
 	const [dark, toggleTheme] = useTheme();
 	const navigate = useNavigate();
 	const { data: ov } = useOverview();
+	const phone = useMedia("(max-width: 639.98px)");
 	const wide = useMedia("(min-width: 1280px)");
 	const lg = useMedia("(min-width: 1024px)");
 	const roomy = useMedia("(min-width: 1600px)");
@@ -107,11 +116,23 @@ export function Shell() {
 	const [drawer, setDrawer] = useState(false);
 	const chatOpen = wide ? chatWide : drawer;
 	const rail = !lg || (wide && chatWide && !roomy);
+	const [palette, setPalette] = useState(false);
+	const [ticket, setTicket] = useState<{ open: boolean; symbol?: string; used: boolean }>({ open: false, used: false });
+	const kill = useKillSwitch();
+	const symbolInView = useRouterState({ select: (st) => (st.location.pathname === "/trade" || st.location.pathname === "/market" ? (st.location.search as { symbol?: string }).symbol : undefined) });
 	const toggleChat = useCallback(() => (wide ? setChatWide(!chatWide) : setDrawer((d) => !d)), [wide, chatWide, setChatWide]);
 	const { unread, markSeen } = useUnread(chatOpen, ov?.user ?? "");
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			const t = e.target as HTMLElement;
+			// Strg+K / Cmd+K: Palette auf und zu; hinter einem anderen Dialog (Freigabe, Chat-Schublade) nicht
+			if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k" && !e.isComposing) {
+				const other = [...document.querySelectorAll("[role=dialog]")].some((d) => !d.matches('[data-testid="palette"]'));
+				if (other) return;
+				e.preventDefault();
+				setPalette((o) => !o);
+				return;
+			}
 			if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || t.closest("input, textarea, select, [contenteditable=true], [role=dialog]") || document.querySelector("[role=dialog]")) return;
 			const m = MODULES.find((x) => x.hotkey === e.key);
 			// preventDefault: sonst landet das „c“ im Nachrichtenfeld, das beim Öffnen den Fokus bekommt
@@ -125,21 +146,54 @@ export function Shell() {
 		if (wide) setDrawer(false);
 	}, [wide]);
 	const chatInput = () => document.querySelector<HTMLTextAreaElement>('[data-testid="chat"] textarea')?.focus();
+	const logout = useCallback(async () => {
+		await send("/api/auth/logout", "POST").catch(() => undefined);
+		setSessionToken(null);
+		window.dispatchEvent(new Event(AUTH_EVENT));
+	}, []);
+	const killOn = !!ov?.killSwitch;
+	const actions = useMemo<PaletteActions>(
+		() => ({
+			order: () => setTicket({ open: true, symbol: symbolInView, used: true }),
+			kill: () => void kill.toggle(killOn),
+			theme: toggleTheme,
+			chat: toggleChat,
+			logout: () => void logout(),
+			dark,
+			chatOpen,
+		}),
+		[symbolInView, kill, killOn, toggleTheme, toggleChat, logout, dark, chatOpen],
+	);
+	const status = useStatus(live);
+	const notify = useNotify();
 	return (
-		<div className="flex h-screen gap-2 bg-bg p-2 text-[13px] text-fg max-md:gap-1 max-md:p-1">
+		<div className="flex h-dvh gap-2 bg-bg p-2 text-[13px] text-fg max-md:gap-1 max-md:p-1 max-sm:flex-col max-sm:gap-0 max-sm:px-[max(4px,env(safe-area-inset-left))] max-sm:pt-[max(4px,env(safe-area-inset-top))] max-sm:pb-0">
 			<a href="#main" className="sr-only rounded-lg bg-primary px-3 py-2 text-[13px] font-medium text-primary-fg focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[70]" onClick={(e) => (e.preventDefault(), document.getElementById("main")?.focus())}>
 				Zum Inhalt
 			</a>
-			<Boundary name="Navigation" compact>
-				<Sidebar live={live} rail={rail} />
-			</Boundary>
-			<main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)]">
-				<TopBar dark={dark} toggleTheme={toggleTheme} chatOpen={chatOpen} toggleChat={toggleChat} unread={unread} />
+			{!phone && (
+				<Boundary name="Navigation" compact>
+					<Sidebar status={status} rail={rail} />
+				</Boundary>
+			)}
+			<main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow)]">
+				<TopBar dark={dark} toggleTheme={toggleTheme} chatOpen={chatOpen} toggleChat={toggleChat} unread={unread} onPalette={() => setPalette(true)} onLogout={() => void logout()} notify={notify} phone={phone} />
 				<KillBanner />
 				<div className="@container scroll-thin flex-1 overflow-auto outline-none" id="main" tabIndex={-1}>
 					<Outlet />
 				</div>
 			</main>
+			{phone && (
+				<Boundary name="Navigation" compact>
+					<PhoneNav menu={{ palette: () => setPalette(true), chat: toggleChat, theme: toggleTheme, logout: () => void logout(), dark, notify: notify.can ? { on: notify.on, toggle: () => void notify.toggle() } : undefined, status: status.text }} />
+				</Boundary>
+			)}
+			<CommandPalette open={palette} onOpenChange={setPalette} actions={actions} />
+			{ticket.used && ov && (
+				<Suspense fallback={null}>
+					<OrderTicket open={ticket.open} onOpenChange={(o) => setTicket((t) => ({ ...t, open: o }))} accounts={ov.accounts} symbol={ticket.symbol} />
+				</Suspense>
+			)}
 			{wide && chatWide && (
 				<Boundary name="Chat" compact>
 					<ChatPanel onSeen={markSeen} />
@@ -171,11 +225,9 @@ export function Shell() {
 	);
 }
 
-function Sidebar({ live, rail }: { live: LiveState; rail: boolean }) {
-	const path = useRouterState({ select: (s) => s.location.pathname });
-	const active = moduleForPath(path)?.id;
+/** Zustand von Stream, Server und Kursen in einem Satz (Seitenleiste, am Telefon im Blatt „Mehr“). */
+function useStatus(live: LiveState): { text: string; icon: string; title?: string } {
 	const { data, error, dataUpdatedAt } = useOverview();
-	const mine = data?.accounts.filter((a) => a.owner === "user") ?? [];
 	useEffect(() => {
 		document.title = data?.pending ? `(${data.pending}) Tradedesk` : "Tradedesk";
 	}, [data?.pending]);
@@ -194,6 +246,15 @@ function Sidebar({ live, rail }: { live: LiveState; rail: boolean }) {
 				: data?.market === "off"
 					? "Kurse aus"
 					: `Kurse ${ago(data?.quotesAt ?? null)}`;
+	const icon = !stale && live === "live" && data?.market !== "error" ? "text-ok" : !stale && live === "connecting" ? "text-warn" : "text-err";
+	return { text: status, icon, title: data?.marketError ?? undefined };
+}
+
+function Sidebar({ status, rail }: { status: ReturnType<typeof useStatus>; rail: boolean }) {
+	const path = useRouterState({ select: (s) => s.location.pathname });
+	const active = moduleForPath(path)?.id;
+	const { data } = useOverview();
+	const mine = data?.accounts.filter((a) => a.owner === "user") ?? [];
 	return (
 		<aside className={cn("flex shrink-0 flex-col py-1.5", rail ? "w-12 px-0.5" : "w-[232px] px-2")} aria-label="Navigation" data-rail={rail || undefined}>
 			<div className="flex h-10 items-center gap-2.5 px-2">
@@ -255,9 +316,9 @@ function Sidebar({ live, rail }: { live: LiveState; rail: boolean }) {
 			)}
 			<div className="mt-auto flex flex-col gap-2 px-1">
 				<p className={cn("px-1 text-[10.5px] leading-snug text-fg-3", rail && "hidden")}>Keine Anlageberatung. Kurse von Yahoo Finance, oft verzögert.</p>
-				<div className={cn("flex items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-2 text-[12px] text-fg-2", rail && "justify-center border-0 bg-transparent px-0")} role="status" title={rail ? status : (data?.marketError ?? undefined)} data-testid="live-status">
-					<Radio className={cn("size-3.5 shrink-0", !stale && live === "live" && data?.market !== "error" ? "text-ok" : !stale && live === "connecting" ? "text-warn" : "text-err")} aria-hidden />
-					<span className={cn("min-w-0 truncate", rail && "sr-only")}>{status}</span>
+				<div className={cn("flex items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-2 text-[12px] text-fg-2", rail && "justify-center border-0 bg-transparent px-0")} role="status" title={rail ? status.text : status.title} data-testid="live-status">
+					<Radio className={cn("size-3.5 shrink-0", status.icon)} aria-hidden />
+					<span className={cn("min-w-0 truncate", rail && "sr-only")}>{status.text}</span>
 				</div>
 			</div>
 		</aside>
@@ -278,71 +339,102 @@ function KillBanner() {
 	);
 }
 
-function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread }: { dark: boolean; toggleTheme: () => void; chatOpen: boolean; toggleChat: () => void; unread: number }) {
-	const logout = async () => {
-		await send("/api/auth/logout", "POST").catch(() => undefined);
-		setSessionToken(null);
-		window.dispatchEvent(new Event(AUTH_EVENT));
+/** Browser-Benachrichtigungen: Zustand, an/aus mit Meldung, wenn der Browser nicht erlaubt (Kopfzeile, Blatt „Mehr“). */
+function useNotify() {
+	const toast = useToast();
+	const [on, setOn] = useState(notifyEnabled);
+	const can = typeof Notification !== "undefined";
+	// Erlaubnis kann in den Website-Einstellungen entzogen werden: beim Zurückkommen neu lesen
+	const resync = useRef(() => setOn(notifyEnabled()));
+	useEffect(() => {
+		const fn = resync.current;
+		window.addEventListener("focus", fn);
+		document.addEventListener("visibilitychange", fn);
+		return () => {
+			window.removeEventListener("focus", fn);
+			document.removeEventListener("visibilitychange", fn);
+		};
+	}, []);
+	const toggle = async () => {
+		const r = await setNotify(!on);
+		if (r === "blocked") {
+			toast({ text: "Benachrichtigungen sind im Browser blockiert – in den Website-Einstellungen für diese Seite erlauben.", tone: "error" });
+			return setOn(false);
+		}
+		if (!on && !r) toast({ text: "Benachrichtigungen nicht erlaubt – der Browser hat nicht zugestimmt.", tone: "error" });
+		setOn(r === true);
 	};
+	return { on, can, toggle };
+}
+
+const MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+function TopBar({ dark, toggleTheme, chatOpen, toggleChat, unread, onPalette, onLogout, notify, phone }: {
+	dark: boolean;
+	toggleTheme: () => void;
+	chatOpen: boolean;
+	toggleChat: () => void;
+	unread: number;
+	onPalette: () => void;
+	onLogout: () => void;
+	notify: ReturnType<typeof useNotify>;
+	phone: boolean;
+}) {
 	const path = useRouterState({ select: (s) => s.location.pathname });
 	const mod = moduleForPath(path);
 	const { data } = useOverview();
-	const toast = useToast();
-	const [notify, setNotifyState] = useState(notifyEnabled);
-	const canNotify = typeof Notification !== "undefined";
-	// Erlaubnis kann in den Website-Einstellungen entzogen werden: beim Zurückkommen neu lesen
-	const resync = useRef(() => setNotifyState(notifyEnabled()));
-	useEffect(() => {
-		const on = resync.current;
-		window.addEventListener("focus", on);
-		document.addEventListener("visibilitychange", on);
-		return () => {
-			window.removeEventListener("focus", on);
-			document.removeEventListener("visibilitychange", on);
-		};
-	}, []);
-	const toggleNotify = async () => {
-		const r = await setNotify(!notify);
-		if (r === "blocked") {
-			toast({ text: "Benachrichtigungen sind im Browser blockiert – in den Website-Einstellungen für diese Seite erlauben.", tone: "error" });
-			return setNotifyState(false);
-		}
-		if (!notify && !r) toast({ text: "Benachrichtigungen nicht erlaubt – der Browser hat nicht zugestimmt.", tone: "error" });
-		setNotifyState(r === true);
-	};
 	const pending = data ? String(data.pending) : "–";
+	// Telefon: 44 px große Knöpfe; Benachrichtigungen, Abmelden und Design liegen dort im Blatt „Mehr“
+	const icon = "max-sm:size-11";
 	return (
-		<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-5 max-md:px-3">
+		<header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-5 max-md:px-3 max-sm:h-14 max-sm:gap-1 max-sm:pr-1.5">
 			<span className="flex min-w-0 items-center gap-2">
 				<span className="text-fg-3 max-sm:hidden">Tradedesk</span>
 				<ChevronRight className="size-3.5 text-fg-3 max-sm:hidden" aria-hidden />
-				<span className="truncate font-medium">{mod?.title ?? "Übersicht"}</span>
+				<span className="truncate font-medium max-sm:text-[15px]">{mod?.title ?? "Übersicht"}</span>
 			</span>
-			<div className="ml-auto flex items-center gap-1.5">
-				{canNotify && (
+			<div className="ml-auto flex items-center gap-1.5 max-sm:gap-0.5">
+				<button
+					type="button"
+					onClick={onPalette}
+					className="inline-flex h-8 items-center gap-2 rounded-lg border border-line bg-bg-2 pr-1.5 pl-2.5 text-[12.5px] text-fg-3 hover:border-line-strong hover:text-fg-2 max-lg:size-8 max-lg:justify-center max-lg:border-0 max-lg:bg-transparent max-lg:p-0 max-sm:size-11"
+					aria-label={`Suchen und Befehle (${MAC ? "Cmd" : "Strg"}+K)`}
+					title={`Suchen und Befehle (${MAC ? "⌘K" : "Strg+K"})`}
+					aria-haspopup="dialog"
+					data-testid="palette-button"
+				>
+					<Search className="size-4 shrink-0" aria-hidden />
+					<span className="max-lg:hidden">Suchen…</span>
+					<Kbd className="ml-4 max-lg:hidden">{MAC ? "⌘K" : "Strg K"}</Kbd>
+				</button>
+				{notify.can && !phone && (
 					<Button
 						variant="ghost"
 						size="icon"
-						onClick={() => void toggleNotify()}
-						aria-pressed={notify}
-						aria-label={notify ? "Benachrichtigungen aus" : "Benachrichtigungen an (Vorschläge, Alarme, Stops, wenn das Fenster im Hintergrund ist)"}
-						title={notify ? "Benachrichtigungen aus" : "Benachrichtigungen an"}
+						onClick={() => void notify.toggle()}
+						aria-pressed={notify.on}
+						aria-label={notify.on ? "Benachrichtigungen aus" : "Benachrichtigungen an (Vorschläge, Alarme, Stops, wenn das Fenster im Hintergrund ist)"}
+						title={notify.on ? "Benachrichtigungen aus" : "Benachrichtigungen an"}
 						data-testid="notify-toggle"
 					>
-						{notify ? <Bell className="size-4" /> : <BellOff className="size-4" />}
+						{notify.on ? <Bell className="size-4" /> : <BellOff className="size-4" />}
 					</Button>
 				)}
-				<Button variant="ghost" size="icon" onClick={() => void logout()} aria-label="Abmelden" title="Abmelden – danach nur mit PIN wieder an Freigaben">
-					<LogOut className="size-4" />
+				{!phone && (
+					<>
+						<Button variant="ghost" size="icon" onClick={onLogout} aria-label="Abmelden" title="Abmelden – danach nur mit PIN wieder an Freigaben">
+							<LogOut className="size-4" />
+						</Button>
+						<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={dark ? "Helles Design" : "Dunkles Design"} title={dark ? "Helles Design" : "Dunkles Design"}>
+							{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+						</Button>
+					</>
+				)}
+				<Button variant="ghost" size="icon" onClick={toggleChat} aria-pressed={chatOpen} aria-label={unread ? `Chat (C), ${unread} ungelesen` : "Chat (C)"} title="Chat (C)" className={cn("relative", icon)} data-testid="chat-toggle">
+					<MessageSquare className="size-4 max-sm:size-5" />
+					{unread > 0 && <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warn px-1 text-[10px] font-semibold text-primary-fg tnum max-sm:top-1 max-sm:right-1">{unread > 99 ? "99+" : unread}</span>}
 				</Button>
-				<Button variant="ghost" size="icon" onClick={toggleTheme} aria-label={dark ? "Helles Design" : "Dunkles Design"} title={dark ? "Helles Design" : "Dunkles Design"}>
-					{dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-				</Button>
-				<Button variant="ghost" size="icon" onClick={toggleChat} aria-pressed={chatOpen} aria-label={unread ? `Chat (C), ${unread} ungelesen` : "Chat (C)"} title="Chat (C)" className="relative" data-testid="chat-toggle">
-					<MessageSquare className="size-4" />
-					{unread > 0 && <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warn px-1 text-[10px] font-semibold text-primary-fg tnum">{unread > 99 ? "99+" : unread}</span>}
-				</Button>
-				<Link to="/orders" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-fg hover:opacity-90" aria-label={data ? `Vorschläge, ${data.pending} warten auf dich` : "Vorschläge"} data-testid="pending-link">
+				<Link to="/orders" className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-fg hover:opacity-90 max-sm:ml-1 max-sm:h-11 max-sm:min-w-11 max-sm:justify-center" aria-label={data ? `Vorschläge, ${data.pending} warten auf dich` : "Vorschläge"} data-testid="pending-link">
 					<ListChecks className="size-4 sm:hidden" aria-hidden />
 					<span className="max-sm:hidden">Vorschläge</span>
 					<span className="tnum">{pending}</span>

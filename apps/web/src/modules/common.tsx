@@ -4,12 +4,13 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
-import { Bot, Check, Clock, OctagonX, TriangleAlert, User, X } from "lucide-react";
-import type { AccountSummary, Proposal, ProposalStatus } from "@desk/shared";
+import { Bot, Check, Clock, OctagonX, Radio, TriangleAlert, User, X } from "lucide-react";
+import type { AccountSummary, Proposal, ProposalStatus, QuoteInfo } from "@desk/shared";
 import { movePct, sideLabel, statusLabel } from "@desk/shared";
 import { live, refreshable, send } from "@/lib/api";
 import { ago, dateTime, eur, inputNumber, num, numberError, parseDe, pct, price, qty as fmtQty } from "@/lib/format";
 import { orderResultText, proposalRisk } from "@/lib/orders";
+import { quoteLabel } from "@/lib/quotes";
 import { Badge, Button, Field, Input, Textarea, cn } from "@/ui/kit";
 import { FormDialog, useConfirm, useFormErrors, useToast } from "@/ui/overlay";
 
@@ -61,6 +62,18 @@ export function useAction() {
 		}
 	};
 	return { run, busy };
+}
+
+/** Not-Aus ein (mit Bestätigung, startet auf „Abbrechen“) oder aus – für die Seite Risiko und die Befehlspalette. */
+export function useKillSwitch() {
+	const { run, busy } = useAction();
+	const confirm = useConfirm();
+	const toggle = async (isOn: boolean) => {
+		const on = !isOn;
+		if (on && !(await confirm({ title: "Not-Aus einschalten?", body: "Keine Freigaben und keine Ausführungen mehr, offene Limits ruhen. Vorschläge kommen weiter an.", confirm: "Not-Aus einschalten", danger: true }))) return;
+		await run("/api/risk/kill", "PUT", { on }, on ? "Not-Aus ist an." : "Not-Aus ist aus.");
+	};
+	return { toggle, busy };
 }
 
 const STATUS_VARIANT: Record<ProposalStatus, "warn" | "ok" | "err" | "soft"> = {
@@ -274,6 +287,22 @@ function useProposalActions(p: Proposal, accounts: AccountSummary[]) {
 	return { acc, busy, label, manual, broker, liveMoney, question, open, cancel, confirmBroker, dialogs };
 }
 
+/** These: am Telefon auf drei Zeilen gekürzt, ganz lesbar per Knopf (kompakte Karten, Knöpfe bleiben nah). */
+function Thesis({ text }: { text: string }) {
+	const [open, setOpen] = useState(false);
+	const long = text.length > 180 || text.split("\n").length > 3;
+	return (
+		<div className="flex flex-col items-start gap-1">
+			<p className={cn("text-[12.5px] leading-relaxed whitespace-pre-line text-fg-2", long && !open && "max-sm:line-clamp-3")}>{text}</p>
+			{long && (
+				<button type="button" className="hidden h-8 text-[12px] text-fg-3 underline underline-offset-2 max-sm:block" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+					{open ? "These kürzen" : "These ganz lesen"}
+				</button>
+			)}
+		</div>
+	);
+}
+
 function Warnings({ items }: { items: string[] }) {
 	return (
 		<ul className="flex flex-col gap-1 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn">
@@ -287,33 +316,36 @@ function Warnings({ items }: { items: string[] }) {
 	);
 }
 
+/** Am Telefon 44 px hoch und nebeneinander über die ganze Breite – Freigeben und Ablehnen liegen unter dem Daumen. */
+const THUMB = "max-sm:h-11 max-sm:flex-1 max-sm:text-[13px]";
+
 /** Knöpfe zu einem Vorschlag; die Namen sagen, worauf sie wirken („Kauf 2 SAP.DE freigeben…“). */
 function Actions({ p, a, size }: { p: Proposal; a: ReturnType<typeof useProposalActions>; size?: "sm" }) {
 	return (
 		<>
 			{p.status === "pending" && (
 				<>
-					<Button size={size} variant="primary" onClick={() => a.open("approve")} disabled={a.busy} aria-label={`${a.label} freigeben…`}>
+					<Button size={size} className={THUMB} variant="primary" onClick={() => a.open("approve")} disabled={a.busy} aria-label={`${a.label} freigeben…`}>
 						<Check className="size-3.5" aria-hidden />
 						Freigeben…
 					</Button>
-					<Button size={size} onClick={() => a.open("reject")} disabled={a.busy} aria-label={`${a.label} ablehnen…`}>
+					<Button size={size} className={THUMB} onClick={() => a.open("reject")} disabled={a.busy} aria-label={`${a.label} ablehnen…`}>
 						Ablehnen…
 					</Button>
 				</>
 			)}
 			{p.status === "placed" && a.manual && (
-				<Button size={size} variant="primary" onClick={() => a.open("fill")} disabled={a.busy} aria-label={`Ausführung von ${a.label} eintragen…`}>
+				<Button size={size} className={THUMB} variant="primary" onClick={() => a.open("fill")} disabled={a.busy} aria-label={`Ausführung von ${a.label} eintragen…`}>
 					Ausführung eintragen…
 				</Button>
 			)}
 			{p.status === "confirm" && a.question && (
-				<Button size={size} variant={a.liveMoney ? "danger" : "primary"} onClick={() => void a.confirmBroker()} disabled={a.busy} aria-label={`${a.label} bei ${a.acc?.broker ?? "Broker"} bestätigen…`}>
+				<Button size={size} className={THUMB} variant={a.liveMoney ? "danger" : "primary"} onClick={() => void a.confirmBroker()} disabled={a.busy} aria-label={`${a.label} bei ${a.acc?.broker ?? "Broker"} bestätigen…`}>
 					Bei {a.acc?.broker ?? "Broker"} bestätigen…
 				</Button>
 			)}
 			{(p.status === "placed" || p.status === "open" || p.status === "confirm") && (
-				<Button size={size} variant="ghost" onClick={() => void a.cancel()} disabled={a.busy} aria-label={`${a.label} stornieren…`}>
+				<Button size={size} className={THUMB} variant="ghost" onClick={() => void a.cancel()} disabled={a.busy} aria-label={`${a.label} stornieren…`}>
 					Stornieren…
 				</Button>
 			)}
@@ -392,7 +424,7 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 					</div>
 				)}
 			</dl>
-			{p.thesis && <p className="text-[12.5px] leading-relaxed whitespace-pre-line text-fg-2">{p.thesis}</p>}
+			{p.thesis && <Thesis text={p.thesis} />}
 			{p.warnings.length > 0 && p.status === "pending" && <Warnings items={p.warnings} />}
 			{p.reason && p.status !== "pending" && <p className="rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-fg-2">{p.reason}</p>}
 			{p.status === "placed" && !broker && (
@@ -415,7 +447,7 @@ export function ProposalCard({ p, accounts, user }: { p: Proposal; accounts: Acc
 			{isActive(p) && p.status !== "sending" && (
 				<footer className="flex flex-wrap gap-2">
 					<Actions p={p} a={a} />
-					<span className="ml-auto self-center text-[11.5px] text-fg-3">gilt bis {dateTime(p.expiresAt)}</span>
+					<span className="ml-auto self-center text-[11.5px] text-fg-3 max-sm:order-first max-sm:ml-0 max-sm:basis-full">gilt bis {dateTime(p.expiresAt)}</span>
 				</footer>
 			)}
 			{a.dialogs}
@@ -442,11 +474,23 @@ export function ProposalRow({ p, accounts }: { p: Proposal; accounts: AccountSum
 						{p.author} für {a.acc?.name ?? p.accountId}
 					</span>
 				</span>
-				<span className="flex shrink-0 flex-wrap gap-1.5">
+				<span className="flex shrink-0 flex-wrap gap-1.5 max-sm:gap-2">
 					<Actions p={p} a={a} size="sm" />
 				</span>
 			</div>
 			{a.dialogs}
 		</li>
+	);
+}
+
+/** Leiser Hinweis zu Herkunft und Alter eines Kurses („Echtzeit“, „verzögert“, „vor 3 Min.“); Tooltip mit allem. */
+export function QuoteTag({ quote, stale, className }: { quote: QuoteInfo | null | undefined; stale?: boolean; className?: string }) {
+	const l = quoteLabel(quote, stale);
+	return (
+		<span className={cn("inline-flex shrink-0 items-center gap-1 text-[11px] whitespace-nowrap text-fg-3", l.stale && "font-medium text-fg-2", className)} title={l.title} data-testid="quote-tag" data-stale={l.stale || undefined}>
+			{l.live && <Radio className="size-3" aria-hidden />}
+			{l.text}
+			<span className="sr-only">. {l.title}</span>
+		</span>
 	);
 }

@@ -6,7 +6,8 @@ import { dayKey, ema, vwap } from "@desk/shared";
 import { useAnalysis, useChart, useWatchlist } from "@/lib/api";
 import { compact, date, hhmm, num, pct, price, tone } from "@/lib/format";
 import { CandleChart, type Overlay, type RefLine } from "@/ui/charts";
-import { Card, Empty, Segmented, Skeleton } from "@/ui/kit";
+import { Card, Empty, Segmented, Skeleton, cn } from "@/ui/kit";
+import { QuoteTag } from "../common";
 import { RangeBar } from "./Scanner";
 import { SessionDot, STATE_LABEL, exchangeLabel } from "./parts";
 
@@ -60,11 +61,12 @@ export function IntradayChart({ row, cockpit, proposals, small }: { row: ScanRow
 					</h1>
 					<p className="flex items-center gap-1.5 text-[12px] text-fg-3">
 						<SessionDot state={row.state} />
-						{exchangeLabel(row.exchange)} · {STATE_LABEL[row.state]} · Stand {hhmm(row.marketTime)}
+						{exchangeLabel(row.exchange)} · {STATE_LABEL[row.state]} · Stand {hhmm(row.marketTime)} ·
+						<QuoteTag quote={row.quote} stale={row.quoteStale} className="text-[12px]" />
 					</p>
 				</div>
 				<div className="flex items-baseline gap-2 tnum">
-					<span className="text-[24px] font-semibold" data-testid="quote-price">
+					<span className={cn("text-[24px] font-semibold", row.quoteStale && "text-fg-3")} data-testid="quote-price" data-stale={row.quoteStale || undefined}>
 						{price(row.price, row.currency)}
 					</span>
 					<span className={tone(row.changePct)}>{pct(row.changePct)}</span>

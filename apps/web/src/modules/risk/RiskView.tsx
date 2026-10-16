@@ -6,13 +6,11 @@ import { useRisk } from "@/lib/api";
 import { inputNumber, numberError, parseDe, pct } from "@/lib/format";
 import { Badge, Button, Card, Field, Input, Skeleton, cn } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
-import { useConfirm } from "@/ui/overlay";
-import { Page, PageHead, useAction } from "../common";
+import { Page, PageHead, useAction, useKillSwitch } from "../common";
 
 export default function RiskView() {
 	const { data, error, refetch } = useRisk();
-	const { run, busy } = useAction();
-	const confirm = useConfirm();
+	const kill = useKillSwitch();
 	if (error && !data)
 		return (
 			<Page>
@@ -26,11 +24,7 @@ export default function RiskView() {
 				<Skeleton className="h-40" />
 			</Page>
 		);
-	const toggleKill = async () => {
-		const on = !data.killSwitch;
-		if (on && !(await confirm({ title: "Not-Aus einschalten?", body: "Keine Freigaben und keine Ausführungen mehr, offene Limits ruhen. Vorschläge kommen weiter an.", confirm: "Not-Aus einschalten", danger: true }))) return;
-		await run("/api/risk/kill", "PUT", { on }, on ? "Not-Aus ist an." : "Not-Aus ist aus.");
-	};
+	const toggleKill = () => kill.toggle(data.killSwitch);
 	return (
 		<Page>
 			<PageHead title="Risiko" sub="Jede Order, jeder Vorschlag und jede Freigabe läuft durch diese Prüfung – auch deine eigenen." />
@@ -41,7 +35,7 @@ export default function RiskView() {
 						<h2 className="text-[15px] font-semibold">{data.killSwitch ? "Not-Aus ist an" : "Handel aktiv"}</h2>
 						<p className="text-[12.5px] text-fg-3">{data.killSwitch ? "Nichts wird freigegeben oder ausgeführt, bis du ihn ausschaltest." : "Ein Klick stoppt alle Freigaben und Ausführungen sofort."}</p>
 					</div>
-					<Button variant={data.killSwitch ? "outline" : "danger"} onClick={() => void toggleKill()} disabled={busy} data-testid="kill-toggle">
+					<Button variant={data.killSwitch ? "outline" : "danger"} onClick={() => void toggleKill()} disabled={kill.busy} data-testid="kill-toggle">
 						{data.killSwitch ? "Not-Aus ausschalten" : "Not-Aus…"}
 					</Button>
 				</div>

@@ -3,6 +3,7 @@
 // Not-Aus, Fokusring neutral, Bestätigung startet auf „Abbrechen“. Dazu die Funde aus Qualitätsrunde q1
 // (docs/quality/q1): Broker-Orders nie per Eingabetaste, Cockpit-Anordnung mit Chat, Fokus nach Dialogen, Chat als
 // modaler Dialog, langsame und fehlerhafte Server-Antworten (per page.route), Wiederverbinden des Streams.
+// Runde q2: Befehlspalette (Tastatur, ARIA, IME), Telefon-Leiste bei 390 px, Kursherkunft, Auswertung (auch 1 000 Trades).
 // Screenshots nach build/preview/.
 // Nutzung: npm run build && npm run e2e
 import { spawn } from "node:child_process";
@@ -17,7 +18,7 @@ const out = path.join(repo, "build", "preview");
 mkdirSync(out, { recursive: true });
 const PORT = 8000 + Math.floor(Math.random() * 900) + 100;
 const BASE = `http://127.0.0.1:${PORT}`;
-const ROUTES = ["/", "/trade?symbol=NVDA", "/portfolio?account=tr", "/portfolio?account=ibkr", "/market?symbol=SAP.DE", "/orders", "/agents", "/risk"];
+const ROUTES = ["/", "/trade?symbol=NVDA", "/portfolio?account=tr", "/portfolio?account=ibkr", "/analytics?account=all&range=all", "/market?symbol=SAP.DE", "/orders", "/agents", "/risk"];
 const WIDTHS = [390, 800, 1280, 1920];
 
 function startServer() {
@@ -195,7 +196,7 @@ async function keyboardChecks(browser) {
 	// Übersicht: alles, was wartet, als Zeile – oder ein Link auf den Rest (D13); Handelszeiten und Not-Aus oben (D9)
 	await pg.goto(`${BASE}/`);
 	await settle(pg);
-	const waitingStat = Number(await pg.getByTestId("stat-waiting").locator("div").nth(1).innerText());
+	const waitingStat = Number(await pg.getByTestId("waiting-count").innerText());
 	const rows = await pg.getByTestId("overview-waiting").getByTestId("proposal-row").count();
 	const more = await pg.getByTestId("overview-more").count();
 	check("overview lists every waiting decision or links to the rest", rows > 0 && (rows === waitingStat || more === 1), `${rows} rows, ${waitingStat} waiting, more ${more}`);
@@ -525,6 +526,241 @@ async function inputChecks(browser) {
 	await pg.context().close();
 }
 
+/** Auswertung (q2): Kennzahlen, Kalender mit Tooltip und Tabelle, Trades sortierbar, leerer Zeitraum, 1 000 Trades. */
+async function analyticsChecks(browser) {
+	let pg = await open(browser);
+	await pg.goto(`${BASE}/analytics?account=all&range=all`);
+	await settle(pg);
+	const kpis = await pg.getByTestId("analytics-kpis").innerText();
+	check("analytics shows the KPI row (result, hit rate, profit factor, expectancy, drawdown, holding time)", ["Ergebnis (realisiert)", "Trefferquote", "Profit-Faktor", "Erwartungswert", "Max. Drawdown", "Ø Haltedauer"].every((k) => kpis.includes(k)) && /60 %/.test(kpis) && /\+222,57\s€/.test(kpis), kpis.replace(/\s+/g, " "));
+	const cells = await pg.getByTestId("heat-cell").count();
+	const levels = await pg.getByTestId("heat-cell").evaluateAll((els) => [...new Set(els.map((e) => e.dataset.level))]);
+	check("day calendar draws a cell per day with gains, losses and the neutral middle", cells >= 85 && levels.some((l) => Number(l) > 0) && levels.some((l) => Number(l) < 0), `${cells} cells, levels ${levels.join(",")}`);
+	await pg.getByTestId("heat-cell").nth(20).hover();
+	const tip = await pg.getByTestId("heat-tip").innerText().catch(() => "");
+	check("hovering a day shows its date and signed result", /\d{2}\.\d{2}\.\d{4}/.test(tip) && /[+−±]?[\d.]+,\d\d\s€|Kein Tagesstand/.test(tip), tip.replace(/\s+/g, " "));
+	await pg.getByTestId("day-calendar").focus();
+	await pg.keyboard.press("ArrowLeft");
+	const kbTip = await pg.getByTestId("heat-tip").innerText().catch(() => "");
+	check("the calendar works by keyboard (one Tab stop, arrows pick a day)", /\d{2}\.\d{2}\.\d{4}/.test(kbTip), kbTip.replace(/\s+/g, " "));
+	await pg.getByRole("region", { name: "Ergebnis je Tag" }).getByRole("tab", { name: "Tabelle" }).click();
+	check("day results are readable without color in a table", (await pg.getByTestId("day-table").locator("tr").count()) >= 85);
+	const rows = await pg.getByTestId("trade-row").count();
+	await pg.getByTestId("sort-pnl").click();
+	const firstPnl = await pg.getByTestId("trade-row").first().locator("td").nth(8).innerText();
+	const sortState = await pg.getByTestId("sort-pnl").evaluate((b) => b.closest("th").getAttribute("aria-sort"));
+	check("closed trades are listed and sort by result (aria-sort)", rows === 5 && /^\+200,90\s€$/.test(firstPnl.trim()) && sortState === "descending", `${rows} rows, first ${firstPnl}, ${sortState}`);
+	const authors = await pg.getByTestId("by-author").innerText();
+	check("per-author table lists you and every agent", /Du \(Maurice\)/.test(authors) && /Atlas/.test(authors) && /Nova/.test(authors), authors.replace(/\s+/g, " "));
+	check("per-symbol table and weekday chart are there", (await pg.getByTestId("by-symbol").locator("tr").count()) === 4 && (await pg.getByTestId("weekday-chart").getByTestId("column").count()) >= 5);
+	// Filter: Depot ohne Trades im Monat → leerer Zustand mit Weg nach vorn
+	await pg.getByTestId("analytics-account").selectOption("papier");
+	await pg.getByTestId("analytics-filters").getByRole("tab", { name: "1M" }).click();
+	await pg.getByTestId("analytics-empty").first().waitFor({ timeout: 10_000 }).catch(() => undefined);
+	const url = new URL(pg.url());
+	const emptyText = await pg.getByTestId("analytics-empty").first().innerText().catch(() => "");
+	check("filters go into the address and an empty range offers a way forward", url.searchParams.get("account") === "papier" && url.searchParams.get("range") === "1M" && /Ganzen Zeitraum zeigen/.test(emptyText), `${url.search} ${emptyText.replace(/\s+/g, " ")}`);
+	await pg.getByRole("button", { name: "Ganzen Zeitraum zeigen" }).first().click();
+	check("way forward widens the range", await until(pg, () => new URL(location.href).searchParams.get("range") === "all"));
+	check("analytics: no console errors or warnings", pg.errors.length === 0, pg.errors.slice(0, 3).join(" | "));
+	await pg.context().close();
+
+	// 1 000 geschlossene Trades und ein Jahr Tage: schnell da, Sortieren ohne Warten, R-Verteilung gezeichnet
+	pg = await open(browser);
+	await pg.route((u) => u.pathname === "/api/analytics", async (route) => {
+		const r = await route.fetch();
+		const j = await r.json();
+		const now = Date.now();
+		const syms = ["SAP.DE", "NVDA", "ALV.DE", "MSFT", "AAPL", "EUNL.DE"];
+		j.trades = Array.from({ length: 1000 }, (_, i) => {
+			const exit = now - i * 7 * 3_600_000;
+			const hold = ((i % 50) + 1) * 600_000;
+			const pnl = ((i * 7919) % 20001) - 9000;
+			const risk = i % 3 ? 5000 : null;
+			return { accountId: "papier", symbol: syms[i % 6], name: syms[i % 6], author: i % 2 ? "Atlas" : "Maurice", buyTradeId: 10_000 + i, sellTradeId: 20_000 + i, proposalId: null, qty: 1 + (i % 5), entryTime: exit - hold, exitTime: exit, entryPrice: 100, exitPrice: 100 + pnl / 100, costCents: 10_000, proceedsCents: 10_000 + pnl, feesCents: 200, pnlCents: pnl, holdMs: hold, stopLoss: risk ? 95 : null, riskCents: risk, r: risk ? pnl / risk : null };
+		});
+		j.tradesTotal = 1200;
+		j.stats = { ...j.stats, trades: 1200, rTrades: 800, expectancyR: 0.12 };
+		j.rBuckets = j.rBuckets.map((b, i) => ({ ...b, trades: [40, 90, 260, 220, 110, 50, 30][i], pnlCents: (i - 3) * 12_345 }));
+		const day = (k) => new Date(now - k * 86_400_000).toLocaleDateString("sv-SE");
+		j.days = Array.from({ length: 365 }, (_, k) => ({ day: day(364 - k), realizedCents: ((k * 131) % 4001) - 2000, trades: k % 4, resultCents: ((k * 977) % 60001) - 30000, unrealizedChangeCents: 0, sinceDay: day(365 - k) }));
+		await route.fulfill({ response: r, json: j });
+	});
+	const t0 = Date.now();
+	await pg.goto(`${BASE}/analytics?account=all&range=all`);
+	await settle(pg);
+	await pg.getByTestId("trade-row").nth(99).waitFor({ timeout: 10_000 });
+	const loadMs = Date.now() - t0;
+	const shown = await pg.getByTestId("trade-row").count();
+	const sortMs = await pg.evaluate(async () => {
+		const first = () => document.querySelector('[data-testid="trade-row"]')?.textContent;
+		const before = first();
+		const t = performance.now();
+		document.querySelector('[data-testid="sort-pnl"]').click();
+		while (first() === before && performance.now() - t < 3000) await new Promise((r) => requestAnimationFrame(r));
+		return performance.now() - t;
+	});
+	console.log(`     1000 trades: page ready in ${loadMs} ms, sort by result in ${sortMs.toFixed(0)} ms`);
+	check("1000 closed trades: page ready within 4 s, 100 rows drawn, sorting within 300 ms", loadMs < 4000 && shown === 100 && sortMs < 300, `${loadMs} ms, ${shown} rows, sort ${sortMs.toFixed(0)} ms`);
+	await pg.getByTestId("trades-more").click();
+	const note = await pg.getByRole("region", { name: "Geschlossene Trades" }).innerText();
+	check("more trades on request, and the list says it holds the newest 1000 of 1200", (await pg.getByTestId("trade-row").count()) === 200 && /die neuesten 1\.000 von 1\.200/.test(note));
+	check("R distribution draws all seven buckets", (await pg.getByTestId("r-chart").getByTestId("column").count()) === 7);
+	check("a year of days fits the calendar", (await pg.getByTestId("heat-cell").count()) >= 365);
+	check("analytics with 1000 trades: no console errors or warnings", pg.errors.length === 0, pg.errors.slice(0, 3).join(" | "));
+	await pg.context().close();
+}
+
+/** Befehlspalette (q2): Strg+K, Tastatur ganz, ARIA-Combobox, Escape nur Palette, Fokus zurück, IME, Aktionen. */
+async function paletteChecks(browser) {
+	const pg = await open(browser);
+	await pg.goto(`${BASE}/orders`);
+	await settle(pg);
+	await pg.locator("#main").focus();
+	await pg.keyboard.press("Control+k");
+	const input = pg.getByTestId("palette-input");
+	await input.waitFor({ timeout: 5_000 });
+	const aria = await input.evaluate((el) => ({ role: el.getAttribute("role"), expanded: el.getAttribute("aria-expanded"), list: document.getElementById(el.getAttribute("aria-controls"))?.getAttribute("role"), focused: document.activeElement === el, active: el.getAttribute("aria-activedescendant") }));
+	check("Ctrl+K opens the palette: focus in a combobox that controls a listbox", aria.role === "combobox" && aria.expanded === "true" && aria.list === "listbox" && aria.focused && !!aria.active, JSON.stringify(aria));
+	await pg.keyboard.type("2");
+	check("module hotkeys do nothing while the palette is open (2 is typed)", new URL(pg.url()).pathname === "/orders" && (await input.inputValue()) === "2");
+	await input.fill("nvda");
+	const top = await pg.getByTestId("palette-option").first().getAttribute("data-id");
+	await input.fill("m");
+	await until(pg, () => document.querySelectorAll('[data-testid="palette-option"]').length > 1);
+	const first = await input.getAttribute("aria-activedescendant");
+	await pg.keyboard.press("ArrowDown");
+	const second = await input.getAttribute("aria-activedescendant");
+	await pg.keyboard.press("ArrowUp");
+	const back = await input.getAttribute("aria-activedescendant");
+	const selected = await pg.locator('[data-testid="palette-option"][aria-selected="true"]').getAttribute("id");
+	await input.fill("nvda");
+	check("fuzzy search ranks the symbol first; arrows move the marked option", top === "s-NVDA" && second !== first && back === first && selected === first, `${top} ${first} ${second} ${back} ${selected}`);
+	// IME: Eingabe, die eine Komposition beendet, wählt nichts
+	await input.dispatchEvent("keydown", { key: "Enter", isComposing: true, keyCode: 229 });
+	check("Enter during IME composition does not choose", (await pg.getByTestId("palette").count()) === 1);
+	await pg.keyboard.press("Enter");
+	check("Enter opens the symbol in Trading and closes the palette", await until(pg, () => location.pathname === "/trade" && new URL(location.href).searchParams.get("symbol") === "NVDA" && !document.querySelector('[data-testid="palette"]')));
+	// Knopf oben, Escape schließt nur die Palette, Fokus zurück auf den Knopf
+	await pg.getByTestId("palette-button").click();
+	await input.waitFor();
+	await pg.keyboard.press("Escape");
+	await pg.getByTestId("palette").waitFor({ state: "detached", timeout: 5_000 });
+	check("Escape closes the palette and focus returns to the search button", await until(pg, () => document.activeElement?.dataset.testid === "palette-button", null, 3_000));
+	// offener Vorschlag → Orders, Fokus auf die Karte
+	await pg.keyboard.press("Control+k");
+	await input.fill("kauf msft");
+	check("open proposals are in the palette", (await pg.getByTestId("palette-option").first().getAttribute("data-id"))?.startsWith("p-"));
+	await pg.keyboard.press("Enter");
+	check("choosing a proposal opens Orders with focus on its card", await until(pg, () => location.pathname === "/orders" && !!document.activeElement?.closest('[data-testid="proposal"]')?.textContent?.includes("MSFT"), null, 6_000));
+	// Aktion Not-Aus: Bestätigung startet auf Abbrechen; Escape schließt nur sie
+	await pg.keyboard.press("Control+k");
+	await input.fill("notaus");
+	await pg.keyboard.press("Enter");
+	await pg.getByTestId("confirm").waitFor({ timeout: 5_000 });
+	const onCancel = await pg.evaluate(() => document.activeElement?.textContent?.trim());
+	await pg.keyboard.press("Escape");
+	await pg.getByTestId("confirm").waitFor({ state: "detached" });
+	check("palette action Not-Aus asks first, starting on Abbrechen; nothing switched", onCancel === "Abbrechen" && (await pg.getByTestId("kill-banner").count()) === 0, onCancel);
+	// Strg+K hinter einem anderen Dialog: nichts
+	await pg.getByRole("button", { name: /freigeben…$/ }).first().click();
+	await pg.getByRole("dialog").waitFor();
+	await pg.keyboard.press("Control+k");
+	await delay(200);
+	check("Ctrl+K does nothing behind another dialog", (await pg.getByTestId("palette").count()) === 0);
+	await pg.keyboard.press("Escape");
+	// Aktion Order… öffnet das Ticket
+	await pg.keyboard.press("Control+k");
+	await input.fill("neue order");
+	await pg.keyboard.press("Enter");
+	check("palette action Order… opens the order ticket", await until(pg, () => !!document.querySelector('[data-testid="ticket-account"]'), null, 6_000));
+	await pg.keyboard.press("Escape");
+	// Hotkey der Auswertung
+	await pg.locator("#main").focus();
+	await pg.keyboard.press("5");
+	check("hotkey 5 opens Auswertung", await until(pg, () => location.pathname === "/analytics"));
+	await pg.screenshot({ path: path.join(out, "palette-1440.png") });
+	await pg.keyboard.press("Control+k");
+	await input.fill("de");
+	await pg.screenshot({ path: path.join(out, "palette-open-1440.png") });
+	await pg.keyboard.press("Escape");
+	check("palette: no console errors or warnings", pg.errors.length === 0, pg.errors.slice(0, 3).join(" | "));
+	await pg.context().close();
+}
+
+/** Telefon (q2): untere Leiste bei 390 px, 44-px-Ziele, „Mehr“, Daumen-Knöpfe, zweite Bestätigung bleibt. */
+async function phoneChecks(browser) {
+	for (const theme of ["dark", "light"]) {
+		const pg = await open(browser, { w: 390, h: 844, theme });
+		await pg.goto(`${BASE}/orders`);
+		await settle(pg);
+		const nav = pg.getByTestId("phone-nav");
+		const tabs = await nav.locator("a, button").evaluateAll((els) => els.map((e) => ({ t: e.textContent.trim(), h: Math.round(e.getBoundingClientRect().height), w: Math.round(e.getBoundingClientRect().width) })));
+		const navBox = await rect(nav);
+		check(`${theme} 390px: bottom bar with five modules and Mehr, every target at least 44 px, no sidebar`, tabs.length === 6 && tabs.every((t) => t.h >= 44 && t.w >= 44) && /Mehr/.test(tabs.at(-1).t) && navBox.bottom <= 844 && navBox.bottom > 800 && (await pg.locator('aside[aria-label="Navigation"]').count()) === 0, JSON.stringify(tabs));
+		const top = await pg.locator("header").first().locator("a, button").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+		check(`${theme} 390px: top bar buttons are 44 px`, top.length >= 3 && top.every((h) => h >= 44), top.join(","));
+		const actions = await pg.locator('[data-testid="proposal"] footer button').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+		check(`${theme} 390px: approve and reject on proposal cards are 44 px`, actions.length > 0 && actions.every((h) => h >= 44), actions.join(","));
+		if (theme === "dark") {
+			await pg.screenshot({ path: path.join(out, "phone-orders-dark.png") });
+			// zweite Bestätigung für Broker-Orders auch am Telefon
+			const ib = pg.locator('[data-testid="proposal"]', { hasText: "für IBKR Papier" });
+			await ib.getByRole("button", { name: "Freigeben…" }).click();
+			await pg.getByRole("dialog").getByRole("button", { name: "An Interactive Brokers senden…" }).click();
+			await pg.getByTestId("confirm").waitFor({ timeout: 5_000 });
+			const onCancel = await pg.evaluate(() => document.activeElement?.textContent?.trim());
+			const btnH = await pg.getByTestId("confirm").locator("button").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+			check("390px: broker approval keeps the second confirmation (starts on Abbrechen, 44 px buttons)", onCancel === "Abbrechen" && btnH.every((h) => h >= 44), `${onCancel} ${btnH}`);
+			await pg.keyboard.press("Escape");
+			await pg.keyboard.press("Escape");
+			await pg.getByRole("dialog").waitFor({ state: "detached" });
+			await pg.getByTestId("phone-more").click();
+			const sheet = pg.getByTestId("phone-sheet");
+			await sheet.waitFor();
+			await pg.screenshot({ path: path.join(out, "phone-more-dark.png") });
+			await sheet.getByRole("link", { name: "Auswertung" }).click();
+			check("Mehr lists the other modules and opens them", await until(pg, () => location.pathname === "/analytics"));
+			check("the bottom bar marks Mehr as current for a module inside it", (await pg.getByTestId("phone-more").getAttribute("aria-current")) === "page");
+			await pg.getByTestId("phone-more").click();
+			await sheet.getByRole("button", { name: "Suchen und Befehle" }).click();
+			check("Mehr opens the command palette too", await until(pg, () => document.activeElement?.dataset.testid === "palette-input", null, 5_000));
+			await pg.screenshot({ path: path.join(out, "phone-palette-dark.png") });
+			await pg.keyboard.press("Escape");
+			await pg.getByTestId("phone-tab").filter({ hasText: "Übersicht" }).click();
+			check("bottom bar navigates", await until(pg, () => location.pathname === "/"));
+		}
+		check(`${theme} 390px phone: no console errors or warnings`, pg.errors.length === 0, pg.errors.slice(0, 3).join(" | "));
+		await pg.context().close();
+	}
+}
+
+/** Kursherkunft (q2): Hinweis im Chart-Kopf, Tooltip im Scanner, Watchlist; alte Kurse gedimmt. */
+async function quoteChecks(browser) {
+	const pg = await open(browser);
+	await pg.route("**/api/cockpit", async (route) => {
+		const r = await route.fetch();
+		const j = await r.json();
+		for (const row of j.scan) if (row.symbol === "ALV.DE") row.quoteStale = true;
+		await route.fulfill({ response: r, json: j });
+	});
+	await pg.goto(`${BASE}/trade?symbol=SAP.DE`);
+	await settle(pg);
+	const head = await pg.locator('section[aria-label^="Chart"] [data-testid="quote-tag"]').first().innerText();
+	check("cockpit chart header says how old the price is", /^(gerade eben|vor \d+ (Min\.|Std\.)|Echtzeit|verzögert)/.test(head.trim()), head);
+	const tipText = await pg.locator('[data-testid="scan-row"][data-symbol="SAP.DE"] [data-testid="scan-price"]').getAttribute("title");
+	check("scanner price explains source and age in its tooltip", /Quelle: Testbörse/.test(tipText ?? "") && /Kurszeit/.test(tipText ?? ""), tipText);
+	const stale = await pg.locator('[data-testid="scan-row"][data-symbol="ALV.DE"] [data-testid="scan-price"]').evaluate((e) => ({ s: e.dataset.stale, c: getComputedStyle(e).color, b: getComputedStyle(e).borderTopWidth, o: getComputedStyle(e).outlineStyle }));
+	const fresh = await pg.locator('[data-testid="scan-row"][data-symbol="SAP.DE"] [data-testid="scan-price"]').evaluate((e) => getComputedStyle(e).color);
+	check("a stale price is dimmed, without a frame", stale.s === "true" && stale.c !== fresh && stale.b === "0px" && stale.o === "none", JSON.stringify({ stale, fresh }));
+	await pg.goto(`${BASE}/market?symbol=ALV.DE`);
+	await settle(pg);
+	const tags = await pg.getByTestId("watch-item").getByTestId("quote-tag").allInnerTexts();
+	check("watchlist shows a quote label on every row, stale ones say veraltet", tags.length === 7 && tags.some((t) => t.startsWith("veraltet")), tags.join(" | "));
+	check("quote labels: no console errors or warnings", pg.errors.length === 0, pg.errors.slice(0, 3).join(" | "));
+	await pg.context().close();
+}
+
 const server = await startServer();
 const browser = await chromium.launch({ headless: true });
 try {
@@ -596,6 +832,12 @@ try {
 			await pg.context().close();
 		}
 	}
+
+	/* Runde q2: Befehlspalette, Telefon, Kursherkunft, Auswertung – vor dem Freigabe-Ablauf, solange alles offen ist */
+	await paletteChecks(browser);
+	await phoneChecks(browser);
+	await quoteChecks(browser);
+	await analyticsChecks(browser);
 
 	/* Freigabe: verkleinern, ausführen, Meldung nennt die freigegebene Menge */
 	let pg = await open(browser);

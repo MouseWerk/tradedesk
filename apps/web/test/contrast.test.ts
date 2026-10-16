@@ -77,6 +77,23 @@ describe.each(Object.entries(THEMES))("%s theme", (_, t) => {
 	});
 });
 
+/** OKLCH-Helligkeit eines Tokens (für die Reihenfolge der Stufen). */
+const lightness = (v: string) => Number(v.match(/^oklch\(\s*([\d.]+)/)![1]);
+
+describe.each(Object.entries(THEMES))("%s theme: diverging chart scale (Auswertung)", (name, t) => {
+	const c = (k: string) => oklch(t[k]);
+	it("steps grow away from the surface on both sides, the first still visible (2:1), bars (step 3) at 3:1", () => {
+		for (const side of ["pos", "neg"]) {
+			const L = [1, 2, 3, 4].map((i) => lightness(t[`div-${side}-${i}`]));
+			// hell: dunkler je Stufe, dunkel: heller je Stufe; mindestens 0,06 Abstand (dataviz --ordinal)
+			for (let i = 1; i < 4; i++) expect(Math.abs(L[i] - L[i - 1]), `${side} ${i}`).toBeGreaterThanOrEqual(0.06);
+			for (let i = 1; i < 4; i++) expect(name === "light" ? L[i] < L[i - 1] : L[i] > L[i - 1], `${side} order`).toBe(true);
+			expect(ratio(c(`div-${side}-1`), c("surface")), `${side}-1 on surface`).toBeGreaterThanOrEqual(2);
+			expect(ratio(c(`div-${side}-3`), c("surface")), `${side}-3 on surface`).toBeGreaterThanOrEqual(3);
+		}
+	});
+});
+
 describe("contrast helper", () => {
 	it("matches known values", () => {
 		expect(ratio([1, 1, 1], [0, 0, 0])).toBeCloseTo(21, 5);

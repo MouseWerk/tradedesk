@@ -22,8 +22,15 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
 
 export { niceTicks } from "./scale";
 
-function useCursor(n: number) {
-	const [idx, setIdx] = useState<number | null>(null);
+/** Fadenkreuz; mit cursor/onCursor teilen sich zwei Charts eins (Kurve und Drawdown darunter). */
+function useCursor(n: number, shared?: { cursor: number | null; onCursor: (i: number | null) => void }) {
+	const [own, setOwn] = useState<number | null>(null);
+	const idx = shared ? shared.cursor : own;
+	const setIdx = (v: number | null | ((i: number | null) => number | null)) => {
+		const next = typeof v === "function" ? v(idx) : v;
+		if (shared) shared.onCursor(next);
+		else setOwn(next);
+	};
 	const onKey = (e: KeyboardEvent) => {
 		if (!n) return;
 		if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -57,22 +64,27 @@ export interface LineSeries {
 }
 
 /** Liniendiagramm mit einer Achse. x sind Beschriftungen (Tage), alle Reihen teilen sie. */
-export function LineChart({ xs, xLabel, series, format, height = 220, area = false, baseline, label, className }: {
+export function LineChart({ xs, xLabel, series, format, height = 220, area = false, areaTo, baseline, label, className, cursor, onCursor, testId }: {
 	xs: string[];
 	xLabel: (x: string) => string;
 	series: LineSeries[];
 	format: (v: number) => string;
 	height?: number;
 	area?: boolean;
+	areaTo?: number; // Fläche bis zu diesem Wert statt bis zum unteren Rand (Drawdown: bis 0)
 	baseline?: number; // gestrichelte Bezugslinie (z. B. Einzahlungen, 0 %)
 	label: string;
 	className?: string;
+	cursor?: number | null; // geteiltes Fadenkreuz (mit onCursor)
+	onCursor?: (i: number | null) => void;
+	testId?: string;
 }) {
 	const [ref, width] = useWidth<HTMLDivElement>();
-	const { idx, setIdx, onKey } = useCursor(xs.length);
+	const { idx, setIdx, onKey } = useCursor(xs.length, onCursor ? { cursor: cursor ?? null, onCursor } : undefined);
 	const pad = { l: 8, r: 64, t: 10, b: 22 };
 	const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
 	if (baseline !== undefined) all.push(baseline);
+	if (areaTo !== undefined) all.push(areaTo);
 	const iw = Math.max(1, width - pad.l - pad.r);
 	const ih = height - pad.t - pad.b;
 	const { lo, hi, ticks } = niceScale(Math.min(...all), Math.max(...all), tickCount(ih));
@@ -98,7 +110,7 @@ export function LineChart({ xs, xLabel, series, format, height = 220, area = fal
 		setIdx(Math.max(0, Math.min(xs.length - 1, Math.round(rel * (xs.length - 1)))));
 	};
 	return (
-		<div ref={ref} className={cn("relative w-full select-none", className)} style={{ height }}>
+		<div ref={ref} className={cn("relative w-full select-none", className)} style={{ height }} data-testid={testId}>
 			{width > 0 && xs.length > 0 && (
 				<svg
 					width={width}
@@ -128,7 +140,7 @@ export function LineChart({ xs, xLabel, series, format, height = 220, area = fal
 					))}
 					{series.map((s, si) => (
 						<g key={s.id}>
-							{area && series.length === 1 && <path d={`${paths[si]}L${x(xs.length - 1)},${pad.t + ih}L${x(0)},${pad.t + ih}Z`} fill={s.color} opacity={0.08} />}
+							{area && series.length === 1 && <path d={`${paths[si]}L${x(xs.length - 1)},${areaTo !== undefined ? y(areaTo) : pad.t + ih}L${x(0)},${areaTo !== undefined ? y(areaTo) : pad.t + ih}Z`} fill={s.color} opacity={areaTo !== undefined ? 0.14 : 0.08} />}
 							<path d={paths[si]} fill="none" stroke={s.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
 						</g>
 					))}
@@ -344,3 +356,102 @@ export function Sparkline({ values, className, color = "currentColor" }: { value
 		</svg>
 	);
 }
+
+export interface Column {
+	key: string;
+	label: string; // unter der Säule
+	value: number;
+	color: string; // CSS-Farbe der Säule
+	tip: ReactNode; // Inhalt des Tooltips (Hover und Tastatur)
+}
+
+/** Pfad einer Säule ab der Nulllinie, 4 px gerundet nur am Datenende (Säulen nach unten: unten gerundet). */
+function columnPath(x: number, w: number, base: number, end: number): string {
+	const h = Math.abs(end - base);
+	if (h < 0.5) return "";
+	const r = Math.min(4, w / 2, h);
+	if (end < base)
+		return `M${x},${base}V${end + r}Q${x},${end} ${x + r},${end}H${x + w - r}Q${x + w},${end} ${x + w},${end + r}V${base}Z`;
+	return `M${x},${base}V${end - r}Q${x},${end} ${x + r},${end}H${x + w - r}Q${x + w},${end} ${x + w},${end - r}V${base}Z`;
+}
+
+/**
+ * Säulen mit einer Nulllinie (Ergebnis je Wochentag/Stunde, R-Verteilung). Säulen höchstens 24 px breit, die Säule ist
+ * die Trefferfläche über die ganze Höhe ihres Platzes; Pfeiltasten wandern wie bei den Linien. valueLabels: Wert am
+ * Säulenende (nur bei wenigen Säulen sinnvoll).
+ */
+export function ColumnChart({ columns, format, height = 200, label, valueLabels = false, testId }: {
+	columns: Column[];
+	format: (v: number) => string;
+	height?: number;
+	label: string;
+	valueLabels?: boolean;
+	testId?: string;
+}) {
+	const [ref, width] = useWidth<HTMLDivElement>();
+	const { idx, setIdx, onKey } = useCursor(columns.length);
+	const pad = { l: 8, r: 56, t: valueLabels ? 18 : 10, b: 22 };
+	const iw = Math.max(1, width - pad.l - pad.r);
+	const ih = height - pad.t - pad.b - (valueLabels ? 12 : 0);
+	const vals = columns.map((c) => c.value);
+	const { lo, hi, ticks } = niceScale(Math.min(0, ...vals), Math.max(0, ...vals, lo0(vals)), tickCount(ih));
+	const y = (v: number) => pad.t + ih - ((v - lo) / (hi - lo || 1)) * ih;
+	const band = iw / Math.max(1, columns.length);
+	const bw = Math.max(2, Math.min(24, band - 4));
+	const every = Math.max(1, Math.ceil(30 / band)); // Beschriftung nur, wo sie Platz hat
+	const cx = (i: number) => pad.l + band * (i + 0.5);
+	return (
+		<div ref={ref} className="relative w-full select-none" style={{ height }} data-testid={testId}>
+			{width > 0 && columns.length > 0 && (
+				<svg
+					width={width}
+					height={height}
+					className="block outline-none focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+					role="img"
+					aria-label={label}
+					tabIndex={0}
+					onKeyDown={onKey}
+					onPointerLeave={() => setIdx(null)}
+					onBlur={() => setIdx(null)}
+				>
+					{ticks.map((t) => (
+						<g key={t}>
+							<line x1={pad.l} x2={pad.l + iw} y1={y(t)} y2={y(t)} stroke={t === 0 ? "var(--line-strong)" : "var(--line)"} />
+							<text x={pad.l + iw + 6} y={y(t)} dy="0.32em" fontSize={11} fill="var(--fg-3)" className="tnum">
+								{format(t)}
+							</text>
+						</g>
+					))}
+					{columns.map((c, i) => {
+						const top = y(c.value);
+						const base = y(0);
+						return (
+							<g key={c.key} opacity={idx === null || idx === i ? 1 : 0.55} data-testid="column">
+								<path d={columnPath(cx(i) - bw / 2, bw, base, top)} fill={c.color} />
+								{valueLabels && c.value !== 0 && (
+									<text x={cx(i)} y={c.value > 0 ? top - 5 : top + 13} fontSize={11} fill="var(--fg-2)" textAnchor="middle" className="tnum">
+										{format(c.value)}
+									</text>
+								)}
+								{i % every === 0 && (
+									<text x={cx(i)} y={height - 6} fontSize={11} fill="var(--fg-3)" textAnchor="middle">
+										{c.label}
+									</text>
+								)}
+								<rect x={cx(i) - band / 2} y={pad.t} width={band} height={ih} fill="transparent" onPointerEnter={() => setIdx(i)} onPointerDown={() => setIdx(i)} />
+							</g>
+						);
+					})}
+				</svg>
+			)}
+			{idx !== null && width > 0 && columns[idx] && (
+				<Tooltip x={cx(idx)} width={width}>
+					{columns[idx].tip}
+				</Tooltip>
+			)}
+		</div>
+	);
+}
+
+/** ohne Werte über 0 trotzdem eine sichtbare Skala nach oben (alle Säulen 0: 0 bis 1) */
+const lo0 = (vals: number[]) => (vals.every((v) => v === 0) ? 1 : 0);

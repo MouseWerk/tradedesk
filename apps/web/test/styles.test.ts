@@ -39,6 +39,10 @@ describe("styles.css", () => {
 	it("defines every series color for both themes", () => {
 		for (let i = 1; i <= 5; i++) expect(css.match(new RegExp(`--series-${i}:`, "g"))).toHaveLength(2);
 	});
+
+	it("defines the diverging chart scale (four steps per side and a middle) for both themes", () => {
+		for (const t of ["mid", ...[1, 2, 3, 4].flatMap((i) => [`pos-${i}`, `neg-${i}`])]) expect(css.match(new RegExp(`--div-${t}:`, "g")), t).toHaveLength(2);
+	});
 });
 
 describe("components", () => {

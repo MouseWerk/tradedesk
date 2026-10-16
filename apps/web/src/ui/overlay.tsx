@@ -26,6 +26,9 @@ export function useOpener(open: boolean) {
 	return opener;
 }
 
+/** Am Telefon: Knöpfe im Dialog 44 px hoch und je halbe Breite – mit dem Daumen erreichbar. */
+const THUMB = "max-sm:h-11 max-sm:flex-1";
+
 /* ------------------------------------------------------------ Bestätigen */
 
 interface Ask {
@@ -75,10 +78,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 						</Dialog.Description>
 						<div className="mt-5 flex flex-wrap justify-end gap-2">
 							{/* Abbrechen hat den Fokus: Eingabe führt nichts Folgenreiches aus */}
-							<Button variant="ghost" onClick={() => close(false)} autoFocus>
+							<Button variant="ghost" onClick={() => close(false)} autoFocus className={THUMB}>
 								Abbrechen
 							</Button>
-							<Button variant={ask?.danger ? "danger" : "primary"} onClick={() => close(true)}>
+							<Button variant={ask?.danger ? "danger" : "primary"} onClick={() => close(true)} className={THUMB}>
 								{ask?.confirm ?? "Ausführen"}
 							</Button>
 						</div>
@@ -148,9 +151,11 @@ export function FormDialog({ open, onOpenChange, title, description, children, o
 						)}
 						<div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">
 							<Dialog.Close asChild>
-								<Button variant="ghost">Abbrechen</Button>
+								<Button variant="ghost" className={THUMB}>
+									Abbrechen
+								</Button>
 							</Dialog.Close>
-							<Button type="submit" variant={submitVariant} disabled={busy}>
+							<Button type="submit" variant={submitVariant} disabled={busy} className={THUMB}>
 								{submit}
 							</Button>
 						</div>
@@ -195,7 +200,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 	return (
 		<ToastCtx.Provider value={push}>
 			{children}
-			<div className="pointer-events-none fixed right-3 bottom-3 z-[60] flex w-[min(380px,calc(100vw-24px))] flex-col gap-2" aria-live="polite">
+			<div className="pointer-events-none fixed right-3 bottom-3 z-[60] flex max-sm:bottom-[calc(76px+env(safe-area-inset-bottom))] w-[min(380px,calc(100vw-24px))] flex-col gap-2" aria-live="polite">
 				{items.map((t) => (
 					<ToastItem key={t.id} toast={t} onDone={done} />
 				))}
