@@ -70,6 +70,7 @@ export interface Book {
 	feesCents: number;
 	buysCents: number; // Summe Kaufwert + Gebühr
 	sellsCents: number; // Summe Verkaufswert − Gebühr
+	oversold: Map<number, number>; // Verkauf → Stück über den Bestand zu seinem Zeitpunkt (sollte leer sein)
 }
 
 interface Lot {
@@ -82,6 +83,7 @@ interface Lot {
 export function buildBook(trades: TradeLike[]): Book {
 	const lots = new Map<string, Lot[]>();
 	const realizedBySell = new Map<number, number>();
+	const oversold = new Map<number, number>();
 	let realizedCents = 0;
 	let feesCents = 0;
 	let buysCents = 0;
@@ -110,6 +112,7 @@ export function buildBook(trades: TradeLike[]): Book {
 			left = roundQty(left - take);
 			if (lot.qty <= 1e-9) list.shift();
 		}
+		if (left > 1e-9) oversold.set(t.id, left);
 		const soldQty = roundQty(t.qty - left);
 		// Erlös nur für die tatsächlich gehaltenen Stück
 		const proceeds = soldQty >= t.qty - 1e-9 ? t.valueCents - t.feeCents : Math.round(((t.valueCents - t.feeCents) * soldQty) / t.qty);
@@ -125,7 +128,22 @@ export function buildBook(trades: TradeLike[]): Book {
 		const avgPrice = list.reduce((s, l) => s + l.qty * l.price, 0) / qty;
 		holdings.set(symbol, { symbol, qty, costCents, avgPrice });
 	}
-	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents };
+	return { holdings, realizedBySell, realizedCents, feesCents, buysCents, sellsCents, oversold };
+}
+
+/** Verkäufe, die zu ihrem Zeitpunkt mehr Stück verkaufen, als im Bestand waren (Trade-ID → Stück zu viel). Wie buildBook sortiert. */
+export function oversold(trades: Pick<TradeLike, "id" | "symbol" | "side" | "qty" | "time">[]): Map<number, number> {
+	const held = new Map<string, number>();
+	const out = new Map<number, number>();
+	for (const t of [...trades].sort((a, b) => a.time - b.time || a.id - b.id)) {
+		const h = held.get(t.symbol) ?? 0;
+		if (t.side === "buy") held.set(t.symbol, roundQty(h + t.qty));
+		else {
+			if (t.qty > h + 1e-9) out.set(t.id, roundQty(t.qty - h));
+			held.set(t.symbol, Math.max(0, roundQty(h - t.qty)));
+		}
+	}
+	return out;
 }
 
 export interface Valued {

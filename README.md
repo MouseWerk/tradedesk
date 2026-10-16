@@ -114,7 +114,10 @@ or violate the terms, so the desk does not use them. Instead:
 
 - record trades by hand ("Trade erfassen…") or import a CSV:
   `datum;symbol;seite;stueck;kurs;gebuehr;waehrung;notiz` (German or English headers, `;` with decimal comma or `,`),
-  importing the same file twice skips known lines;
+  importing the same file twice skips known lines (two identical lines in one file are two executions); a line in a
+  foreign currency needs the rate of its trade day, column `fx` (EUR per unit, e.g. `0,9612` for USD) or `betrag_eur`
+  (value in EUR without fee) – it is never booked at today's rate; dates in the future, impossible dates and sells
+  that were not covered at their own time are refused with the line number;
 - approved proposals for the Trade Republic account wait as "beim Broker" until you enter the execution.
 
 ### Interactive Brokers

@@ -55,6 +55,7 @@ export const AccountSummarySchema = AccountSchema.extend({
 	returnPct: z.number().nullable(),
 	positions: z.number().int(),
 	missingQuotes: z.array(z.string()),
+	oversoldTrades: z.array(z.number().int()), // Verkäufe, die zu ihrem Zeitpunkt mehr verkauften als da war (alte Daten, Broker-Import)
 });
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 

@@ -9,7 +9,7 @@ import type {
 	NewsItem, Overview, Position, Proposal, ProposalStatus, RiskData, RiskLimits, ScanRow, SearchHit, SessionInfo, Side, Trade, WatchItem,
 } from "@desk/shared";
 import {
-	MAX_EUR, PriceSchema, ProposalInputSchema, QtySchema, RiskLimitsSchema, atr, cents, decimals, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
+	MAX_EUR, PriceSchema, ProposalInputSchema, QtySchema, RiskLimitsSchema, atr, cents, decimals, oversold, buildBook, checkOrder, dayKey, dayStats, ema, last, movePct, orderValueCents, parseTradesCsv, rMultiple, returnPct, roundQty, rsi, sessionState, sideLabel, valueHoldings, vwap,
 	type DayStats, type SessionState,
 } from "@desk/shared";
 import type { Config } from "./config.ts";
@@ -31,7 +31,7 @@ export class DeskError extends Error {
 /** Wer fragt: der Browser (du) oder ein Agent über cli/desk.py. */
 export type Origin = "web" | "cli";
 
-interface TradeRow { id: number; account_id: string; symbol: string; side: Side; qty: number; price: number; currency: string; fx: number; value_cents: number; fee_cents: number; time: number; source: Trade["source"]; proposal_id: number | null; note: string }
+interface TradeRow { id: number; account_id: string; symbol: string; side: Side; qty: number; price: number; currency: string; fx: number; value_cents: number; fee_cents: number; time: number; source: Trade["source"]; proposal_id: number | null; note: string; deleted_at?: number | null }
 interface ProposalRow {
 	id: number; account_id: string; author: string; symbol: string; side: Side; qty: number; order_type: "market" | "limit"; limit_price: number | null; stop_loss: number | null; take_profit: number | null;
 	confidence: number; thesis: string; status: ProposalStatus; reason: string; quote_price: number; warnings: string; created_at: number; decided_at: number | null; decided_by: string | null;
@@ -56,6 +56,8 @@ const UNLISTED_MS = 24 * 3_600_000; // so lange darf eine Broker-Order aus der O
 const BROKER_KEEPALIVE_MS = 60_000; // IBKR empfiehlt etwa einmal je Minute /tickle, unabhängig vom Kurstakt
 
 const MAX_FEE_EUR = 10_000;
+const MIN_TRADE_TIME = new Date(1990, 0, 1).getTime(); // davor erfasst niemand einen Trade – ein Tippfehler
+const dateText = (t: number) => new Date(t).toLocaleDateString("de-DE");
 
 /** Stückzahl aus einer Eingabe: endlich, > 0, höchstens MAX_QTY und 6 Nachkommastellen – sonst 400. */
 function parseQty(v: unknown, what = "Stückzahl"): number {
@@ -248,6 +250,24 @@ export class Desk extends EventEmitter {
 		return this.db.all<TradeRow>("SELECT * FROM trade WHERE account_id = ? AND deleted_at IS NULL ORDER BY time, id", accountId);
 	}
 
+	/**
+	 * Verkäufe, die mit dieser Änderung (add kommt dazu, remove fällt weg) zu ihrem Zeitpunkt nicht mehr gedeckt wären:
+	 * Trade-ID → Stück zu viel. Geprüft wird das ganze Buch in zeitlicher Reihenfolge, nicht nur der heutige Bestand.
+	 */
+	private newOversells(accountId: string, add: { id: number; symbol: string; side: Side; qty: number; time: number }[], remove?: number): Map<number, number> {
+		const rows = this.tradeRows(accountId);
+		const before = oversold(rows);
+		const after = oversold([...rows.filter((t) => t.id !== remove), ...add]);
+		return new Map([...after].filter(([id, q]) => q > (before.get(id) ?? 0) + 1e-9));
+	}
+
+	/** Zeitpunkt aus einer Eingabe: fehlt er, gilt jetzt; sonst ab 1990 und höchstens eine Minute in der Zukunft. */
+	private tradeTime(v: unknown): number {
+		if (v === undefined || v === null) return this.now();
+		if (typeof v !== "number" || !Number.isFinite(v) || v < MIN_TRADE_TIME || v > this.now() + 60_000) throw new DeskError("Zeitpunkt: ab 1990 und nicht in der Zukunft.");
+		return Math.trunc(v);
+	}
+
 	private book(accountId: string) {
 		return buildBook(this.tradeRows(accountId).map((t) => ({ id: t.id, symbol: t.symbol, side: t.side, qty: t.qty, price: t.price, valueCents: t.value_cents, feeCents: t.fee_cents, time: t.time })));
 	}
@@ -281,6 +301,7 @@ export class Desk extends EventEmitter {
 			returnPct: returnPct(equity, deposits),
 			positions: book.holdings.size,
 			missingQuotes: v.missing,
+			oversoldTrades: [...book.oversold.keys()],
 		};
 	}
 
@@ -795,8 +816,10 @@ export class Desk extends EventEmitter {
 		if (qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
 		const price = parsePrice(body.price, "Ausführungskurs in EUR");
 		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
-		const time = typeof body.time === "number" && body.time > 0 && body.time <= this.now() + 60_000 ? body.time : this.now();
+		const time = this.tradeTime(body.time);
 		if (r.side === "sell" && (this.book(a.id).holdings.get(r.symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${r.symbol}.`);
+		if (r.side === "sell" && this.newOversells(a.id, [{ id: Number.MAX_SAFE_INTEGER, symbol: r.symbol, side: "sell", qty, time }]).size)
+			throw new DeskError(`Am ${dateText(time)} waren weniger als ${num(qty)} Stück ${r.symbol} im Depot – Zeitpunkt prüfen.`);
 		this.db.tx(() => {
 			const { changes } = this.db.run("UPDATE proposal SET status = 'filled', fill_price = ?, approved_qty = ? WHERE id = ? AND status = 'placed'", price, qty, id);
 			if (!changes) throw new DeskError("Schon eingetragen.", 409);
@@ -1167,11 +1190,14 @@ export class Desk extends EventEmitter {
 		const qty = parseQty(body.qty);
 		const price = parsePrice(body.price);
 		const feeCents = parseFeeCents(body.feeEur, a.feeCents);
-		const time = typeof body.time === "number" && body.time > 0 && body.time <= this.now() + 60_000 ? body.time : this.now();
+		const time = this.tradeTime(body.time);
 		const note = typeof body.note === "string" ? body.note.slice(0, 200) : "";
 		if (!this.instrument(symbol) && this.market.kind !== "off") await this.refresh([symbol]); // Name und Kurs, wenn Yahoo das Symbol kennt
 		const id = this.db.tx(() => {
 			if (side === "sell" && (this.book(a.id).holdings.get(symbol)?.qty ?? 0) + 1e-9 < qty) throw new DeskError(`Im Depot sind weniger als ${num(qty)} Stück ${symbol}.`);
+			// auch zurückdatiert: ein Verkauf vor dem Kauf würde Geld erzeugen, das es nie gab
+			if (this.newOversells(a.id, [{ id: Number.MAX_SAFE_INTEGER, symbol, side, qty, time }]).size)
+				throw new DeskError(side === "sell" ? `Am ${dateText(time)} waren weniger als ${num(qty)} Stück ${symbol} im Depot – Zeitpunkt prüfen.` : `Dieser Trade lässt einen späteren Verkauf ungedeckt.`);
 			const id = this.insertTrade(a, { symbol, side, qty, price, currency: "EUR", fx: 1, feeCents, time, source: "manual", proposalId: null, note });
 			this.event("trade.manual", this.cfg.user, `${sideLabel[side]} ${num(qty)} ${symbol} zu ${num(price)} € erfasst (${a.name})`);
 			return id;
@@ -1183,6 +1209,10 @@ export class Desk extends EventEmitter {
 	/** Löschen mit Rückgängig: der Trade wird nur ausgeblendet, restoreTrade holt ihn zurück. */
 	deleteTrade(accountId: string, id: number, restore = false) {
 		const a = this.manual(accountId);
+		// ein Kauf, an dem spätere Verkäufe hängen, bleibt; ein gelöschter Verkauf kommt nur zurück, wenn er gedeckt ist
+		const row = this.db.get<TradeRow>("SELECT * FROM trade WHERE id = ? AND account_id = ?", id, a.id);
+		if (row && !restore && row.deleted_at === null && this.newOversells(a.id, [], id).size) throw new DeskError("Spätere Verkäufe hängen an diesem Kauf – zuerst den Verkauf löschen.", 409);
+		if (row && restore && row.deleted_at !== null && this.newOversells(a.id, [row]).size) throw new DeskError(`Der Verkauf vom ${dateText(row.time)} wäre nicht mehr gedeckt – nicht wiederhergestellt.`, 409);
 		const { changes } = this.db.run(
 			restore ? "UPDATE trade SET deleted_at = NULL WHERE id = ? AND account_id = ? AND deleted_at IS NOT NULL" : "UPDATE trade SET deleted_at = ? WHERE id = ? AND account_id = ? AND deleted_at IS NULL AND source IN ('manual','import')",
 			...(restore ? [id, a.id] : [this.now(), id, a.id]),
@@ -1208,25 +1238,60 @@ export class Desk extends EventEmitter {
 		return { id: lastId, accountId: a.id, amountCents: amount, time, note };
 	}
 
+	/**
+	 * CSV-Zeilen, die zusammen mit dem Buch gedeckt sind. Ein Verkauf, der zu seinem Zeitpunkt mehr verkauft als da war,
+	 * wird als Fehler genannt; macht eine neue Zeile einen bestehenden Verkauf ungedeckt, fällt der späteste neue Verkauf
+	 * desselben Symbols davor weg. Linear je Durchgang, meist genügt einer.
+	 */
+	private coveredCsvRows<T extends { line: number; symbol: string; side: Side; qty: number; time: number }>(accountId: string, rows: T[], errors: string[]): T[] {
+		const base = (this.db.get<{ m: number | null }>("SELECT MAX(id) AS m FROM trade")?.m ?? 0) + 1;
+		let keep = rows.map((r, i) => ({ r, id: base + i }));
+		for (let pass = 0; pass <= rows.length; pass++) {
+			const bad = this.newOversells(accountId, keep.map((k) => ({ id: k.id, symbol: k.r.symbol, side: k.r.side, qty: k.r.qty, time: k.r.time })));
+			if (!bad.size) break;
+			const drop = new Set<number>();
+			for (const id of bad.keys()) {
+				const own = keep.find((k) => k.id === id);
+				if (own) drop.add(id);
+				else {
+					const t = this.db.get<TradeRow>("SELECT * FROM trade WHERE id = ?", id)!;
+					const culprit = keep.filter((k) => k.r.side === "sell" && k.r.symbol === t.symbol && k.r.time <= t.time).at(-1);
+					if (culprit) drop.add(culprit.id);
+				}
+			}
+			if (!drop.size) break;
+			for (const k of keep) if (drop.has(k.id)) errors.push(`Zeile ${k.r.line}: Verkauf ${num(k.r.qty)} ${k.r.symbol} am ${dateText(k.r.time)} – zu dem Zeitpunkt nicht genug Stück im Depot.`);
+			keep = keep.filter((k) => !drop.has(k.id));
+		}
+		return keep.map((k) => k.r);
+	}
+
 	async importCsv(accountId: string, text: unknown): Promise<ImportResult> {
 		const a = this.manual(accountId);
 		if (typeof text !== "string" || !text.trim()) throw new DeskError("Leere Datei.");
 		if (text.length > 2_000_000) throw new DeskError("Datei zu groß (höchstens 2 MB).");
-		const { rows, errors } = parseTradesCsv(text);
-		const foreign = [...new Set(rows.filter((r) => r.currency !== "EUR").map((r) => r.currency))];
-		if (foreign.length && this.market.kind !== "off") await this.refresh(foreign.map(fxSymbol));
-		const unknown = [...new Set(rows.map((r) => r.symbol))].filter((s) => !this.instrument(s));
+		const parsed = parseTradesCsv(text);
+		const errors = parsed.errors;
+		// keine Zeilen aus der Zukunft oder von vor 1990
+		const dated = parsed.rows.filter((r) => {
+			const bad = r.time > this.now() + 60_000 ? "liegt in der Zukunft" : r.time < MIN_TRADE_TIME ? "liegt vor 1990" : null;
+			if (bad) errors.push(`Zeile ${r.line}: Datum ${bad}.`);
+			return !bad;
+		});
+		const unknown = [...new Set(dated.map((r) => r.symbol))].filter((s) => !this.instrument(s));
 		if (unknown.length && this.market.kind !== "off") await this.refresh(unknown);
 		let imported = 0;
 		let skipped = 0;
 		this.db.tx(() => {
+			// schon importierte Zeilen zählen nicht; die neuen müssen zusammen mit dem Buch gedeckt sein (kein Verkauf vor dem Kauf)
+			const fresh = dated.filter((r) => {
+				const known = !!this.db.get("SELECT 1 FROM trade WHERE account_id = ? AND import_key = ?", a.id, r.key);
+				if (known) skipped++;
+				return !known;
+			});
+			const rows = this.coveredCsvRows(a.id, fresh, errors);
 			for (const r of rows) {
-				const fx = r.currency === "EUR" ? 1 : (this.quoteRow(fxSymbol(r.currency))?.price ?? null);
-				if (fx === null) {
-					errors.push(`Zeile ${r.line}: kein Wechselkurs für ${r.currency} – Kurs in EUR angeben.`);
-					continue;
-				}
-				const id = this.insertTrade(a, { symbol: r.symbol, side: r.side, qty: r.qty, price: r.price, currency: r.currency, fx, feeCents: r.feeCents, time: r.time, source: "import", proposalId: null, note: r.note, importKey: r.key });
+				const id = this.insertTrade(a, { symbol: r.symbol, side: r.side, qty: r.qty, price: r.price, currency: r.currency, fx: r.fx ?? 1, feeCents: r.feeCents, time: r.time, source: "import", proposalId: null, note: r.note, importKey: r.key });
 				if (id) imported++;
 				else skipped++;
 			}

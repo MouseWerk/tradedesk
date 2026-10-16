@@ -3,6 +3,8 @@
 //   datum;symbol;seite;stueck;kurs;gebuehr;waehrung;notiz
 //   2026-03-02;SAP.DE;kauf;3;181,40;1,00;EUR;Sparplan
 // Trennzeichen ; , oder Tab; bei ; gilt das Dezimalkomma. Datum YYYY-MM-DD oder TT.MM.JJJJ, optional mit HH:MM.
+// Fremdwährung (waehrung nicht EUR) nur mit dem Kurs ihres Tages: Spalte fx (EUR je Einheit, z. B. 0,9612 für USD)
+// oder betrag_eur (Kurswert in EUR ohne Gebühr) – nie zum heutigen Wechselkurs.
 import { MAX_PRICE, MAX_QTY, type Side } from "./schema.ts";
 import { QTY_DECIMALS, cents, decimals } from "./portfolio.ts";
 
@@ -16,6 +18,7 @@ export interface CsvTrade {
 	feeCents: number;
 	currency: string;
 	note: string;
+	fx: number | null; // EUR je Einheit der Währung; null bei EUR
 	key: string; // Wiedererkennung beim zweiten Import derselben Datei
 }
 
@@ -27,6 +30,8 @@ const COLS: Record<string, string[]> = {
 	price: ["kurs", "preis", "price"],
 	fee: ["gebuehr", "gebühr", "fee", "fees", "kosten"],
 	currency: ["waehrung", "währung", "currency"],
+	fx: ["fx", "wechselkurs", "devisenkurs"],
+	eur: ["betrag_eur", "wert_eur", "amount_eur"],
 	note: ["notiz", "note", "kommentar"],
 };
 
@@ -58,12 +63,19 @@ export function parseNumber(raw: string, decimalComma: boolean): number {
 	return /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : Number.NaN;
 }
 
+/** Ortszeit oder NaN; ein Datum, das es nicht gibt (30.02.), rollt nicht in den nächsten Monat. */
+function localTime(y: number, mo: number, d: number, h: number, mi: number): number {
+	const t = new Date(y, mo - 1, d, h, mi);
+	if (t.getFullYear() !== y || t.getMonth() !== mo - 1 || t.getDate() !== d || h > 23 || mi > 59) return Number.NaN;
+	return t.getTime();
+}
+
 export function parseDate(raw: string): number {
 	const s = raw.trim();
-	let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(s);
-	if (m) return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 12), +(m[5] ?? 0)).getTime();
+	let m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::\d{2})?)?$/.exec(s);
+	if (m) return localTime(+m[1], +m[2], +m[3], +(m[4] ?? 12), +(m[5] ?? 0));
 	m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/.exec(s);
-	if (m) return new Date(+m[3], +m[2] - 1, +m[1], +(m[4] ?? 12), +(m[5] ?? 0)).getTime();
+	if (m) return localTime(+m[3], +m[2], +m[1], +(m[4] ?? 12), +(m[5] ?? 0));
 	return Number.NaN;
 }
 
@@ -88,6 +100,7 @@ export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string
 	if (missing.length) return { rows: [], errors: [`Kopfzeile ohne Spalte ${missing.map((k) => COLS[k][0]).join(", ")} – erwartet z. B. „datum;symbol;seite;stueck;kurs;gebuehr;waehrung“.`] };
 	const rows: CsvTrade[] = [];
 	const errors: string[] = [];
+	const seen = new Map<string, number>(); // gleiche Zeilen derselben Datei sind zwei Ausführungen, nicht eine
 	for (let n = head + 1; n < lines.length; n++) {
 		const line = lines[n];
 		if (!line.trim()) continue;
@@ -100,6 +113,9 @@ export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string
 		const price = parseNumber(get("price"), decimalComma);
 		const fee = get("fee") ? parseNumber(get("fee"), decimalComma) : 0;
 		const currency = (get("currency") || "EUR").toUpperCase();
+		const fxRaw = get("fx") ? parseNumber(get("fx"), decimalComma) : null;
+		const eurRaw = get("eur") ? parseNumber(get("eur"), decimalComma) : null;
+		const fx = currency === "EUR" ? null : fxRaw !== null ? fxRaw : eurRaw !== null && qty > 0 && price > 0 ? eurRaw / (qty * price) : null;
 		const problems = [
 			Number.isNaN(time) && "Datum",
 			!/^[A-Z0-9.=^-]{1,24}$/.test(symbol) && "Symbol",
@@ -108,12 +124,21 @@ export function parseTradesCsv(text: string): { rows: CsvTrade[]; errors: string
 			!(price > 0 && price <= MAX_PRICE) && "Kurs",
 			!(fee >= 0 && fee <= 10_000 && decimals(fee) <= 2) && "Gebühr",
 			!/^[A-Z]{3}$/.test(currency) && "Währung",
+			fx !== null && !(fx > 0 && fx < 1_000_000) && "Wechselkurs",
 		].filter(Boolean);
 		if (problems.length) {
 			errors.push(`Zeile ${n + 1}: ${problems.join(", ")} ungültig.`);
 			continue;
 		}
-		rows.push({ line: n + 1, time, symbol, side: side!, qty, price, feeCents: cents(fee), currency, note: get("note").slice(0, 200), key: `${time}|${symbol}|${side}|${qty}|${price}|${cents(fee)}` });
+		if (currency !== "EUR" && fx === null) {
+			errors.push(`Zeile ${n + 1}: ${currency} ohne Wechselkurs – Spalte fx (EUR je ${currency} am Handelstag) oder betrag_eur angeben.`);
+			continue;
+		}
+		const base = `${time}|${symbol}|${side}|${qty}|${price}|${cents(fee)}`;
+		const k = seen.get(base) ?? 0;
+		seen.set(base, k + 1);
+		// die erste Zeile behält den bisherigen Schlüssel (schon importierte Dateien bleiben erkannt), weitere zählen mit
+		rows.push({ line: n + 1, time, symbol, side: side!, qty, price, feeCents: cents(fee), currency, fx, note: get("note").slice(0, 200), key: k ? `${base}#${k + 1}` : base });
 	}
 	return { rows, errors };
 }
