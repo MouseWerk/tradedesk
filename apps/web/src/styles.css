@@ -40,6 +40,15 @@
 	--color-s3: var(--series-3);
 	--color-s4: var(--series-4);
 	--color-s5: var(--series-5);
+	--color-div-mid: var(--div-mid);
+	--color-div-pos-1: var(--div-pos-1);
+	--color-div-pos-2: var(--div-pos-2);
+	--color-div-pos-3: var(--div-pos-3);
+	--color-div-pos-4: var(--div-pos-4);
+	--color-div-neg-1: var(--div-neg-1);
+	--color-div-neg-2: var(--div-neg-2);
+	--color-div-neg-3: var(--div-neg-3);
+	--color-div-neg-4: var(--div-neg-4);
 }
 
 :root {
@@ -68,6 +77,18 @@
 	--series-3: #1baf7a;
 	--series-4: #eda100;
 	--series-5: #e87ba4;
+	/* Divergierend für Ergebnisse in Charts (Auswertung): Gewinn petrol, Verlust rot, neutrale Mitte. Nicht grün/rot –
+	   das trennt sich bei Rot-Grün-Schwäche nicht (Validator: ΔE 2,5–4,7); so je Stufe ΔE ≥ 8,8, beide Arme
+	   monoton (--ordinal). Stufe 1 hält 2:1, Balken nutzen Stufe 3 (über 3:1). Werte stehen immer auch als Text daneben. */
+	--div-mid: oklch(0.945 0.004 260);
+	--div-pos-1: oklch(0.76 0.1 200);
+	--div-pos-2: oklch(0.66 0.11 200);
+	--div-pos-3: oklch(0.56 0.11 200);
+	--div-pos-4: oklch(0.46 0.095 200);
+	--div-neg-1: oklch(0.76 0.11 25);
+	--div-neg-2: oklch(0.66 0.14 25);
+	--div-neg-3: oklch(0.56 0.17 25);
+	--div-neg-4: oklch(0.46 0.16 25);
 	--shadow: 0 1px 2px oklch(0.2 0.01 265 / 0.05), 0 4px 16px -6px oklch(0.2 0.01 265 / 0.08);
 	--overlay: oklch(0.2 0.01 265 / 0.35);
 	--focus-ring: oklch(0.55 0.01 265);
@@ -97,6 +118,15 @@
 	--series-3: #199e70;
 	--series-4: #c98500;
 	--series-5: #d55181;
+	--div-mid: oklch(0.27 0.006 265);
+	--div-pos-1: oklch(0.43 0.08 200);
+	--div-pos-2: oklch(0.53 0.095 200);
+	--div-pos-3: oklch(0.63 0.11 200);
+	--div-pos-4: oklch(0.73 0.12 200);
+	--div-neg-1: oklch(0.43 0.11 25);
+	--div-neg-2: oklch(0.53 0.13 25);
+	--div-neg-3: oklch(0.63 0.15 25);
+	--div-neg-4: oklch(0.73 0.16 25);
 	--focus-ring: oklch(0.7 0.01 265);
 	--shadow: 0 1px 0 oklch(1 0 0 / 0.04) inset, 0 8px 24px -12px oklch(0 0 0 / 0.6);
 	--overlay: oklch(0 0 0 / 0.55);
