@@ -28,6 +28,14 @@ https://github.com/mauricekleindienst/AICodeGuidelines (read its CLAUDE.md first
 - Day trading defaults: risk per trade 1 % of the account (loss to the stop incl. both fees), agents must set a stop on
   buys, positions opened today get a reminder 15 minutes before the close. Stops and targets are reminders, never
   automatic orders.
+- Owner login (decision 2026-10-16): every owner action (approve, confirm, cancel, fill, kill switch, limits, trades,
+  cash, import, reconcile, watchlist and alerts changes) needs the owner's browser session: a PIN set once (stored only
+  as a slow hash) and an HttpOnly, SameSite=Strict cookie valid 30 days. Setting the first PIN needs a one-time code
+  that the server prints only to its own console, so an agent cannot set it first. The Origin check stays as a second
+  layer; agents (CLI, no cookie) never reach owner routes.
+- Orders to a broker account (decision 2026-10-16): the approve or order dialog never sends on Enter; it opens a
+  second confirmation (side, quantity, type, estimate, risk, "echtes Geld" for live accounts) that starts on
+  "Abbrechen". Paper accounts keep the single dialog.
 - Chat: owner, agents and the desk in one room. Agent text is untrusted data, rendered as text only. A chat message
   never approves, rejects or executes anything; decisions stay on the buttons.
 
