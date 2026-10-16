@@ -217,7 +217,15 @@ function Wealth({ data }: { data: Overview }) {
 	const cash = mine.reduce((s, a) => s + a.cashCents, 0);
 	const hasDay = mine.some((a) => a.dayChangeCents !== null);
 	const day = mine.reduce((s, a) => s + (a.dayChangeCents ?? 0), 0);
-	const ch: EquityChange | undefined = data.changes.find((c) => c.range === range);
+	// echtes Geld und Papier getrennt nennen – sonst liest sich das Spielgeld des Papierdepots wie dein Vermögen
+	const real = mine.filter((a) => a.kind === "manual" || a.live);
+	const realCents = real.reduce((s, a) => s + a.equityCents, 0);
+	const realEmpty = real.length > 0 && real.every((a) => a.equityCents === 0 && a.depositsCents === 0);
+	const picked: EquityChange | undefined = data.changes.find((c) => c.range === range);
+	// Verlauf kürzer als der Zeitraum: das Ergebnis seit Beginn zeigen, statt „kein Stand“
+	const all = data.changes.find((c) => c.range === "all");
+	const short = (!picked || picked.resultCents === null) && range !== "all" && all?.resultCents !== null && all?.resultCents !== undefined;
+	const ch = short ? all : picked;
 	const meta = RANGES.find((r) => r.id === range)!;
 	const curve = ch?.fromDay ? data.curve.filter((p) => p.day >= ch.fromDay!) : data.curve;
 	const first = data.curve[0]?.day;
@@ -232,6 +240,12 @@ function Wealth({ data }: { data: Overview }) {
 				<div className="min-w-0" data-testid="stat-equity">
 					<div className="text-[12px] text-fg-3">{de.overview.wealth.total}</div>
 					<div className="text-[40px] leading-[1.1] font-semibold tracking-tight whitespace-nowrap @max-[700px]:text-[30px]">{eur(equity)}</div>
+					{real.length > 0 && real.length < mine.length && (
+						<div className="text-[12.5px] text-fg-3 tnum" data-testid="stat-split">
+							{de.overview.wealth.split(eur(realCents), eur(equity - realCents))}
+						</div>
+					)}
+					{realEmpty && <div className="text-[12px] text-fg-3">{de.overview.wealth.realEmpty(real.map((a) => a.name).join(", "))}</div>}
 				</div>
 				<div className="min-w-0 pb-1" data-testid="overview-change">
 					{ch && ch.resultCents !== null ? (
@@ -240,7 +254,7 @@ function Wealth({ data }: { data: Overview }) {
 								{signedEur(ch.resultCents)} <span className="text-[14px] font-medium">({pct(ch.resultPct)})</span>
 							</div>
 							<div className="text-[12px] text-fg-3">
-								{de.overview.wealth.result(meta.long, dayLabel(ch.fromDay!))}
+								{short ? de.overview.wealth.shortHistory(dayLabel(ch.fromDay ?? first ?? ""), meta.long) : de.overview.wealth.result(meta.long, dayLabel(ch.fromDay!))}
 								{ch.changeCents !== null && ch.changeCents !== ch.resultCents && de.overview.wealth.valueChange(signedEur(ch.changeCents))}
 							</div>
 						</>
