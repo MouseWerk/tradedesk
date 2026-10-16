@@ -54,7 +54,7 @@ export default function TradeView() {
 			</Page>
 		);
 
-	const active = (proposals ?? []).filter((p) => p.status === "pending" || p.status === "placed" || p.status === "open");
+	const active = (proposals ?? []).filter((p) => ["pending", "placed", "open", "sending", "confirm"].includes(p.status));
 	const forSymbol = active.filter((p) => !selected || p.symbol === selected.symbol);
 	return (
 		<Page className="max-w-none">

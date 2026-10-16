@@ -1,12 +1,14 @@
 # Tradedesk
 
-A local trading desk for you and your AI agents: your real portfolio (for example at Trade Republic), paper
-portfolios, watchlist and candlestick charts, order proposals that only you can approve, risk limits with a kill
-switch, and a journal where agents explain themselves. Built like the AI Work Dashboard: local, one page, German UI.
+A local trading desk for you and your AI agents: your real portfolios (Trade Republic by hand, Interactive Brokers
+through its API), paper portfolios, a day-trading cockpit, order proposals that only you can approve, risk limits with
+a kill switch, a chat and a journal where agents explain themselves. Built like the AI Work Dashboard: local, one
+page, German UI.
 
-Kurz auf Deutsch: Agenten schlagen Orders vor, du gibst frei. Echtes Geld bewegt der Desk nie – für Trade Republic
-führst du freigegebene Orders selbst in der App aus und trägst die Ausführung ein. Jeder Agent handelt ein eigenes
-Papierdepot mit echten Kursen, damit du siehst, wer gut entscheidet. Keine Anlageberatung.
+Kurz auf Deutsch: Agenten (Claude-Code-Sitzungen) schlagen Orders vor, du gibst frei. Für Trade Republic führst du
+freigegebene Orders selbst in der App aus. Bei Interactive Brokers geht die freigegebene Order über die API an den
+Broker – mit echtem Geld nur, wenn du `liveTrading` einschaltest. Jeder Agent handelt ein eigenes Papierdepot mit
+echten Kursen, damit du siehst, wer gut entscheidet. Keine Anlageberatung.
 
 ## What it shows
 
@@ -32,7 +34,9 @@ Papierdepot mit echten Kursen, damit du siehst, wer gut entscheidet. Keine Anlag
    proposal, nothing happens and the proposal becomes "Kurs bewegt". The risk check runs again. You may approve fewer
    shares, never more. Two clicks execute once.
 3. Paper account: filled at the current price (limit orders once the limit is reached). Manual account (Trade
-   Republic): "beim Broker ausführen" – you place the order in the app, then enter price and fee from the statement.
+   Republic): "beim Broker" – you place the order in the app, then enter price and fee from the statement. Broker
+   account (Interactive Brokers): the order goes to IBKR as a day order; if IBKR asks back (price or size warning),
+   the proposal shows IBKR's text and waits for you to confirm or cancel; fills come back automatically.
 4. Stop loss and target are reminders in the timeline, never automatic orders.
 
 The CLI has no command to approve, reject, change limits or switch the kill switch, and the server refuses those
@@ -61,7 +65,8 @@ Windows: `pwsh start.ps1` installs, builds when needed and starts.
 | `user` | Your name; the only one who approves |
 | `port` | Default 8095 |
 | `market` | `yahoo` (free quotes from Yahoo Finance, unofficial, often delayed) or `off` (no network; positions valued at cost) |
-| `accounts` | Your accounts: `kind` `manual` (you trade at the broker and record it here) or `paper`; `feeEur` per order; `startCashEur` |
+| `accounts` | Your accounts: `kind` `manual` (you trade at the broker and record it here), `paper`, or `broker` (Interactive Brokers: `ibAccount`, optional `gateway`, `conids`); `feeEur` per order; `startCashEur` |
+| `liveTrading` | `false` by default; must be `true` before orders go to a real-money broker account |
 | `agents` | Agent names; each gets a paper account `agent-<name>` with `startCashEur` |
 | `minConfidence` | 0–1; agent proposals below it are not created |
 | `staleMovePct` | Max price move between proposal and approval |
@@ -84,11 +89,33 @@ or violate the terms, so the desk does not use them. Instead:
 - record trades by hand ("Trade erfassen…") or import a CSV:
   `datum;symbol;seite;stueck;kurs;gebuehr;waehrung;notiz` (German or English headers, `;` with decimal comma or `,`),
   importing the same file twice skips known lines;
-- approved proposals for the Trade Republic account wait as "beim Broker ausführen" until you enter the execution.
+- approved proposals for the Trade Republic account wait as "beim Broker" until you enter the execution.
 
-A broker with an official API (for example Interactive Brokers) can be added later behind the same approval flow.
+### Interactive Brokers
+
+Orders go through IBKR's Client Portal Web API via the **Client Portal Gateway** running on your computer
+(`https://localhost:5000`). You log in there yourself in the browser; the desk never sees credentials and only talks
+to a gateway on localhost.
+
+1. Install Java and the Client Portal Gateway from IBKR, start it, open https://localhost:5000 and log in (start with
+   your paper account, `DU…`).
+2. Add the account to `config.json`:
+   `{ "id": "ibkr", "name": "IBKR", "kind": "broker", "ibAccount": "DU1234567", "feeEur": 2, "startCashEur": 0 }`
+   (`gateway` defaults to `https://localhost:5000`; `conids` maps symbols to IBKR contract ids where the automatic
+   lookup is ambiguous, for example `{ "SAP.DE": 14204 }`).
+3. Restart the desk. Under Depots the account shows the connection; "Mit IBKR abgleichen…" previews positions and
+   cash at IBKR against the desk and books the differences only when you confirm.
+4. Real money: accounts not starting with `D` are live. Orders to them are refused until `"liveTrading": true` is
+   set in `config.json`, and refused if the gateway is logged into a paper session. The kill switch and every risk
+   limit apply to broker orders too. Crypto and FX are not traded through IBKR by the desk.
+
+The gateway session times out without activity; the desk pings it while running, but IBKR logs you out daily, so
+log in again in the morning before trading.
 
 ### Agents
+
+Agents are Claude Code sessions. Open Claude Code in this repository and run `/desk-agent Atlas` (one per agent), or
+`/loop 10m /desk-agent Atlas` to keep it going through the day. Rules and commands: `docs/AGENTS.md`.
 
 ```bash
 python cli/desk.py status
@@ -111,6 +138,7 @@ python cli/desk.py analyze NVDA                    # EMA 9/21, VWAP, RSI 14 (1-m
 python cli/desk.py news NVDA
 python cli/desk.py say --as Atlas --ref NVDA "@Nova gap and go?"
 python cli/desk.py read --as Atlas                 # new messages since the last read, * = addressed to me
+python cli/desk.py wait --as Atlas --timeout 600   # block until someone writes to you (exit 3 on timeout)
 ```
 
 `TRADEDESK_URL` overrides the server address. Exit code 1 means refused (reason on stderr), 2 not reachable.

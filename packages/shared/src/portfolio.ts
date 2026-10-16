@@ -227,7 +227,9 @@ export function checkOrder(i: OrderCheckInput): Check {
 export const statusLabel: Record<ProposalStatus, string> = {
 	pending: "wartet auf dich",
 	open: "Limit offen",
-	placed: "beim Broker ausführen",
+	placed: "beim Broker",
+	sending: "wird gesendet",
+	confirm: "Broker fragt nach",
 	filled: "ausgeführt",
 	rejected: "abgelehnt",
 	stale: "Kurs bewegt",
@@ -237,4 +239,4 @@ export const statusLabel: Record<ProposalStatus, string> = {
 
 export const sideLabel: Record<Side, string> = { buy: "Kauf", sell: "Verkauf" };
 
-export const ACTIVE_STATUSES: ProposalStatus[] = ["pending", "open", "placed"];
+export const ACTIVE_STATUSES: ProposalStatus[] = ["pending", "open", "placed", "sending", "confirm"];

@@ -8,4 +8,5 @@ __pycache__/
 config.json
 *.sqlite
 *.sqlite-*
-.claude/
+.claude/launch.json
+.claude/settings.local.json

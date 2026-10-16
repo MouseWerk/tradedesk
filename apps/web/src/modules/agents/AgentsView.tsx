@@ -140,20 +140,15 @@ export default function AgentsView() {
 				</Card>
 				<Card title="Agenten anbinden" icon={<Terminal className="size-4" />}>
 					<div className="flex flex-col gap-3 text-[12.5px] leading-relaxed text-fg-2">
-						<p>Agenten sprechen über die CLI mit dem Desk – freigeben kannst nur du hier im Browser.</p>
+						<p>Agenten sind Claude-Code-Sitzungen. Öffne Claude Code im Ordner des Tradedesk und starte je Agent:</p>
 						<pre className={cn("scroll-thin overflow-x-auto rounded-lg bg-bg-2 p-3 font-mono text-[11.5px] text-fg")}>
-							{`python cli/desk.py status
-python cli/desk.py quote SAP.DE
-python cli/desk.py propose --as Atlas \\
-  --account agent-atlas --symbol SAP.DE \\
-  --side buy --qty 3 --confidence 0.7 \\
-  --stop 185 --target 230 \\
-  --thesis "Kurze Begründung"
-python cli/desk.py proposals --as Atlas
-python cli/desk.py journal --as Atlas \\
-  --symbol SAP.DE "Notiz zum Wert"`}
+							{`/desk-agent Atlas
+
+# den ganzen Tag im Takt:
+/loop 10m /desk-agent Atlas`}
 						</pre>
-						<p className="text-fg-3">Mit --dry-run prüft der Desk einen Vorschlag, ohne ihn anzulegen. Nur Werte von der Watchlist oder aus dem Depot sind erlaubt.</p>
+						<p>Der Agent holt sich mit „desk.py brief“ alles Nötige, schreibt dir im Chat, schlägt mit Stop vor und wartet mit „desk.py wait“, bis du antwortest. Regeln: docs/AGENTS.md.</p>
+						<p className="text-fg-3">Freigeben, bei IBKR bestätigen und stornieren kannst nur du hier im Browser.</p>
 					</div>
 				</Card>
 			</div>

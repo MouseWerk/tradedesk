@@ -16,8 +16,8 @@ export async function selftest(): Promise<number> {
 
 		const ov = await get<Overview>("/api/overview");
 		check("overview matches its schema", OverviewSchema.safeParse(ov).success);
-		check("four accounts (two yours, two agents)", ov.accounts.length === 4 && ov.accounts.filter((a) => a.owner === "user").length === 2);
-		check("three pending proposals from the fixture", ov.pending === 3, String(ov.pending));
+		check("five accounts (three yours incl. IBKR paper, two agents)", ov.accounts.length === 5 && ov.accounts.filter((a) => a.owner === "user").length === 3);
+		check("four pending proposals from the fixture", ov.pending === 4, String(ov.pending));
 		check("equity curve has 91 days", ov.curve.length === 91, String(ov.curve.length));
 		const watch = await get<WatchItem[]>("/api/market/watchlist");
 		check("watchlist matches its schema and has quotes", WatchItemSchema.array().safeParse(watch).success && watch.every((w) => w.price !== null));

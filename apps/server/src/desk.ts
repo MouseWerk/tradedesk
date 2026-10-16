@@ -4,7 +4,7 @@
 // (z. B. Trade Republic) führst du selbst in der App des Brokers aus und trägst die Ausführung hier ein.
 import { EventEmitter } from "node:events";
 import type {
-	Account, AccountDetail, AccountSummary, AgentsData, Alert, Analysis, CashMove, Chart, ChartRange, ChatMessage, Check, Cockpit, CockpitPosition, CurvePoint, DeskEvent, ImportResult, JournalEntry,
+	Account, AccountDetail, AccountSummary, AgentsData, Alert, Analysis, BrokerStatus, Reconcile, CashMove, Chart, ChartRange, ChatMessage, Check, Cockpit, CockpitPosition, CurvePoint, DeskEvent, ImportResult, JournalEntry,
 	NewsItem, Overview, Position, Proposal, ProposalStatus, RiskData, RiskLimits, ScanRow, SearchHit, SessionInfo, Side, Trade, WatchItem,
 } from "@desk/shared";
 import {
@@ -14,6 +14,7 @@ import {
 import type { Config } from "./config.ts";
 import type { Database } from "./db.ts";
 import { fxSymbol, type Market, type QuoteData } from "./market.ts";
+import type { Broker } from "./broker.ts";
 
 export class DeskError extends Error {
 	readonly status: number;
@@ -33,6 +34,7 @@ interface ProposalRow {
 	id: number; account_id: string; author: string; symbol: string; side: Side; qty: number; order_type: "market" | "limit"; limit_price: number | null; stop_loss: number | null; take_profit: number | null;
 	confidence: number; thesis: string; status: ProposalStatus; reason: string; quote_price: number; warnings: string; created_at: number; decided_at: number | null; decided_by: string | null;
 	approved_qty: number | null; expires_at: number; fill_price: number | null; stop_hit_at: number | null; target_hit_at: number | null;
+	broker_order_id: string | null; broker_message: string | null; reply_id: string | null; broker_conid: number | null;
 }
 interface QuoteRow {
 	symbol: string; price: number; prev_close: number | null; market_time: number | null; fetched_at: number; day_open: number | null; day_high: number | null; day_low: number | null; volume: number | null;
@@ -57,14 +59,17 @@ export class Desk extends EventEmitter {
 	private timer: NodeJS.Timeout | null = null;
 	private ticking: Promise<void> | null = null;
 	private charts = new Map<string, { at: number; chart: Chart }>();
+	readonly brokers: Map<string, Broker>;
+	private brokerState = new Map<string, BrokerStatus>();
 
 	readonly cfg: Config;
 	readonly db: Database;
 	readonly market: Market;
 	readonly now: () => number;
 
-	constructor(cfg: Config, db: Database, market: Market, now: () => number = Date.now) {
+	constructor(cfg: Config, db: Database, market: Market, now: () => number = Date.now, brokers: Map<string, Broker> = new Map()) {
 		super();
+		this.brokers = brokers;
 		this.cfg = cfg;
 		this.db = db;
 		this.market = market;
@@ -340,7 +345,7 @@ export class Desk extends EventEmitter {
 
 	trackedSymbols(): string[] {
 		const watch = this.db.all<{ symbol: string }>("SELECT symbol FROM watch").map((r) => r.symbol);
-		const active = this.db.all<{ symbol: string }>(`SELECT DISTINCT symbol FROM proposal WHERE status IN ('pending','open','placed')`).map((r) => r.symbol);
+		const active = this.db.all<{ symbol: string }>(`SELECT DISTINCT symbol FROM proposal WHERE status IN ('pending','open','placed','sending','confirm')`).map((r) => r.symbol);
 		return [...new Set([...watch, ...this.heldSymbols(), ...active])];
 	}
 
@@ -450,6 +455,7 @@ export class Desk extends EventEmitter {
 			limitPrice: r.limit_price, stopLoss: r.stop_loss, takeProfit: r.take_profit, confidence: r.confidence, thesis: r.thesis, status: r.status, reason: r.reason, quotePrice: r.quote_price,
 			price: p?.price ?? null, estimateCents: orderValueCents(qty, unit, p?.fx ?? this.fx(i?.currency ?? "EUR") ?? 1), warnings: JSON.parse(r.warnings) as string[], createdAt: r.created_at,
 			decidedAt: r.decided_at, decidedBy: r.decided_by, approvedQty: r.approved_qty, expiresAt: r.expires_at, fillPrice: r.fill_price,
+			brokerOrderId: r.broker_order_id, brokerMessage: r.broker_message,
 		};
 	}
 
@@ -466,7 +472,7 @@ export class Desk extends EventEmitter {
 	proposals(opts: { status?: string; author?: string; limit?: number } = {}): Proposal[] {
 		const where: string[] = [];
 		const params: unknown[] = [];
-		if (opts.status === "active") where.push(`status IN ('pending','open','placed')`);
+		if (opts.status === "active") where.push(`status IN ('pending','open','placed','sending','confirm')`);
 		else if (opts.status) {
 			where.push("status = ?");
 			params.push(opts.status);
@@ -518,6 +524,7 @@ export class Desk extends EventEmitter {
 		if (!author) throw new DeskError(`Unbekannter Agent „${input.author}“ – in config.json unter "agents" eintragen.`, 403);
 		const a = this.account(input.accountId);
 		if (!isUser && a.owner !== "user" && a.owner !== author) throw new DeskError(`${author} darf nicht für ${a.name} vorschlagen – nur fürs eigene Papierdepot oder deine Depots.`, 403);
+		if (isUser && a.kind === "broker" && !this.brokers.has(a.id)) throw new DeskError(`${a.name}: keine Verbindung zum Broker eingerichtet.`);
 		if (isUser && a.kind === "manual") throw new DeskError(`${a.name} führst du beim Broker aus – dort ausgeführte Trades mit „Trade erfassen…“ eintragen.`);
 		const symbol = this.normalizeSymbol(input.symbol);
 		const extra: string[] = [];
@@ -543,6 +550,7 @@ export class Desk extends EventEmitter {
 			else this.execute(lastId, roundQty(input.qty), this.cfg.user);
 			return lastId;
 		});
+		if (this.proposalRow(id).status === "sending") await this.sendToBroker(id);
 		this.emit("tick", { at: now });
 		return { ok: true, check, proposal: this.proposal(id) };
 	}
@@ -576,6 +584,17 @@ export class Desk extends EventEmitter {
 			this.event("proposal.rejected", by, `${label}: ${reason}`, notify);
 			return this.proposal(id);
 		}
+		if (a.kind === "broker") {
+			// echtes Geld nur mit Hauptschalter; Senden passiert nach der Transaktion (Netzwerk), hier nur reservieren
+			if (a.live && !this.cfg.liveTrading) {
+				const reason = `Live-Handel ist aus – in config.json "liveTrading": true setzen, um echte Orders an ${a.broker} zu senden.`;
+				set("rejected", { reason });
+				this.event("proposal.rejected", by, `${label}: ${reason}`, notify);
+				return this.proposal(id);
+			}
+			set("sending", { expires_at: now + PLACED_DAYS * 86_400_000 });
+			return this.proposal(id);
+		}
 		if (a.kind === "manual") {
 			set("placed", { expires_at: now + PLACED_DAYS * 86_400_000 });
 			this.event("proposal.placed", by, `${label} freigegeben – jetzt in ${a.broker} ausführen und die Ausführung eintragen.`, notify);
@@ -603,8 +622,9 @@ export class Desk extends EventEmitter {
 		}
 		await this.refresh([r.symbol]); // direkt vor dem Schreiben neu lesen
 		const out = this.db.tx(() => this.execute(id, qty, this.cfg.user));
+		if (out.status === "sending") await this.sendToBroker(id);
 		this.emit("tick", { at: this.now() });
-		return out;
+		return this.proposal(id);
 	}
 
 	reject(id: number, reason: unknown): Proposal {
@@ -616,10 +636,23 @@ export class Desk extends EventEmitter {
 		return this.proposal(id);
 	}
 
-	cancel(id: number): Proposal {
+	async cancel(id: number): Promise<Proposal> {
 		const r = this.proposalRow(id);
-		const { changes } = this.db.run(`UPDATE proposal SET status = 'cancelled', reason = 'von dir storniert', decided_at = COALESCE(decided_at, ?), decided_by = COALESCE(decided_by, ?) WHERE id = ? AND status IN ('open','placed')`, this.now(), this.cfg.user, id);
-		if (!changes) throw new DeskError("Nur offene Limits und noch nicht eingetragene Broker-Orders lassen sich stornieren.", 409, this.toProposal(r));
+		const a = this.account(r.account_id);
+		if (a.kind === "broker" && r.status === "placed" && r.broker_order_id) {
+			// beim Broker stornieren; endgültig "storniert" erst, wenn der Broker es meldet (eine Order kann schon ausgeführt sein)
+			try {
+				await this.brokerOf(a.id).cancel(r.broker_order_id);
+			} catch (e) {
+				throw new DeskError(`Storno bei ${a.broker} fehlgeschlagen: ${(e as Error).message}`, 502);
+			}
+			this.db.run("UPDATE proposal SET reason = 'Storno beim Broker angefragt' WHERE id = ?", id);
+			this.event("proposal.cancel", this.cfg.user, `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}: Storno an ${a.broker} gesendet`);
+			await this.pollBroker(a.id).catch(() => undefined);
+			return this.proposal(id);
+		}
+		const { changes } = this.db.run(`UPDATE proposal SET status = 'cancelled', reason = 'von dir storniert', decided_at = COALESCE(decided_at, ?), decided_by = COALESCE(decided_by, ?) WHERE id = ? AND status IN ('open','placed','confirm')`, this.now(), this.cfg.user, id);
+		if (!changes) throw new DeskError("Nur offene Limits, Broker-Rückfragen und noch nicht eingetragene Broker-Orders lassen sich stornieren.", 409, this.toProposal(r));
 		this.event("proposal.cancelled", this.cfg.user, `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} storniert`);
 		return this.proposal(id);
 	}
@@ -629,6 +662,7 @@ export class Desk extends EventEmitter {
 		const r = this.proposalRow(id);
 		if (r.status !== "placed") throw new DeskError("Nur freigegebene Broker-Orders lassen sich als ausgeführt eintragen.", 409, this.toProposal(r));
 		const a = this.account(r.account_id);
+		if (a.kind !== "manual") throw new DeskError(`Ausführungen von ${a.broker} kommen automatisch über die API.`, 409, this.toProposal(r));
 		const max = r.approved_qty ?? r.qty;
 		const qty = typeof body.qty === "number" ? roundQty(body.qty) : max;
 		if (!(qty > 0) || qty > max + 1e-9) throw new DeskError(`Stück zwischen 0 und ${num(max)}.`);
@@ -652,6 +686,211 @@ export class Desk extends EventEmitter {
 			a.id, t.symbol, t.side, roundQty(t.qty), t.price, t.currency, t.fx, orderValueCents(t.qty, t.price, t.fx), t.feeCents, t.time, t.source, t.proposalId, t.note, t.importKey ?? null,
 		);
 		return changes ? lastId : 0;
+	}
+
+	/* ------------------------------------------------------------------ Broker (IBKR) */
+
+	private brokerOf(accountId: string): Broker {
+		const b = this.brokers.get(accountId);
+		if (!b) throw new DeskError(`${this.account(accountId).name}: keine Broker-Verbindung eingerichtet.`, 409);
+		return b;
+	}
+
+	brokerStatus(accountId: string): BrokerStatus {
+		const a = this.account(accountId);
+		const b = this.brokers.get(accountId);
+		return (
+			this.brokerState.get(accountId) ?? {
+				accountId, adapter: b?.adapter ?? "–", connected: false, authenticated: false, brokerAccount: null, paper: null, live: a.live, liveTrading: this.cfg.liveTrading,
+				message: b ? "Noch nicht geprüft." : "Keine Broker-Verbindung eingerichtet.", checkedAt: null, loginUrl: b?.loginUrl ?? null,
+			}
+		);
+	}
+
+	brokerStatuses(): BrokerStatus[] {
+		return this.cfg.accounts.filter((a) => a.kind === "broker").map((a) => this.brokerStatus(a.id));
+	}
+
+	/** Symbol zu einer Kontrakt-ID dieses Depots (aus gesendeten Orders oder config.json). */
+	private symbolOfConid(accountId: string, conid: number | null): string | null {
+		if (conid === null) return null;
+		return this.db.get<{ symbol: string }>("SELECT symbol FROM broker_conid WHERE account_id = ? AND conid = ?", accountId, conid)?.symbol ?? null;
+	}
+
+	private rememberConid(accountId: string, conid: number, symbol: string) {
+		this.db.run("INSERT INTO broker_conid (account_id, conid, symbol) VALUES (?,?,?) ON CONFLICT (account_id, conid) DO UPDATE SET symbol = excluded.symbol", accountId, conid, symbol);
+	}
+
+	/** Reservierte Order ("sending") an den Broker geben. Ergebnis: beim Broker, Rückfrage oder abgelehnt. */
+	private async sendToBroker(id: number): Promise<void> {
+		const r = this.proposalRow(id);
+		if (r.status !== "sending") return;
+		const a = this.account(r.account_id);
+		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
+		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
+		const fail = (msg: string) => {
+			this.db.run("UPDATE proposal SET status = 'rejected', reason = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${msg}`, id);
+			this.event("proposal.rejected", "Desk", `${label}: ${a.broker} – ${msg}`, notify);
+		};
+		let broker: Broker;
+		try {
+			broker = this.brokerOf(a.id);
+			const session = await broker.session();
+			if (!session.account) return fail(session.message || "nicht angemeldet");
+			if (a.live && session.paper === true) return fail("das Gateway ist mit einem Papierkonto angemeldet, das Depot ist aber als echtes Konto eingetragen");
+		} catch (e) {
+			return fail((e as Error).message);
+		}
+		let conid: number;
+		try {
+			conid = (await broker.resolve(r.symbol)).conid;
+		} catch (e) {
+			return fail((e as Error).message);
+		}
+		this.rememberConid(a.id, conid, r.symbol);
+		this.db.run("UPDATE proposal SET broker_conid = ? WHERE id = ?", conid, id);
+		const res = await broker.place({ conid, side: r.side, qty: r.approved_qty ?? r.qty, type: r.order_type, limit: r.limit_price, cOID: `desk-${id}` });
+		this.applyPlace(id, res);
+	}
+
+	private applyPlace(id: number, res: Awaited<ReturnType<Broker["place"]>>) {
+		const r = this.proposalRow(id);
+		const a = this.account(r.account_id);
+		const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${id}` };
+		const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${id}`;
+		if (res.kind === "submitted") {
+			this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ?, broker_message = NULL, reply_id = NULL WHERE id = ? AND status = 'sending'", res.orderId, id);
+			this.event("broker.sent", "Desk", `${label} an ${a.broker} gesendet (Order ${res.orderId}${a.live ? ", echtes Geld" : ", Papierkonto"})`, notify);
+		} else if (res.kind === "reply") {
+			this.db.run("UPDATE proposal SET status = 'confirm', reply_id = ?, broker_message = ? WHERE id = ? AND status = 'sending'", res.replyId, res.message.slice(0, 1000), id);
+			this.event("broker.confirm", "Desk", `${label}: ${a.broker} fragt nach – „${res.message.slice(0, 200)}“ – bitte unter Orders bestätigen oder stornieren.`, { to: [this.cfg.user], ref: `#${id}` });
+		} else {
+			this.db.run("UPDATE proposal SET status = 'rejected', reason = ? WHERE id = ? AND status = 'sending'", `${a.broker}: ${res.message}`.slice(0, 500), id);
+			this.event("proposal.rejected", "Desk", `${label}: ${a.broker} hat abgelehnt – ${res.message}`, notify);
+		}
+	}
+
+	/** Rückfrage des Brokers bestätigen – nur du, im Browser, nach dem Lesen des Originaltexts. */
+	async confirmBroker(id: number): Promise<Proposal> {
+		const r = this.proposalRow(id);
+		if (r.status !== "confirm" || !r.reply_id) throw new DeskError("Hier gibt es keine offene Rückfrage des Brokers.", 409, this.toProposal(r));
+		if (this.killSwitch) throw new DeskError("Not-Aus ist aktiv – keine Orders, bis du ihn ausschaltest.", 409, this.toProposal(r));
+		const a = this.account(r.account_id);
+		if (a.live && !this.cfg.liveTrading) throw new DeskError(`Live-Handel ist aus – in config.json "liveTrading": true setzen.`, 409, this.toProposal(r));
+		if (!this.db.run("UPDATE proposal SET status = 'sending' WHERE id = ? AND status = 'confirm'", id).changes) throw new DeskError("Schon bestätigt.", 409);
+		const res = await this.brokerOf(a.id).confirm(r.reply_id);
+		this.applyPlace(id, res);
+		this.emit("tick", { at: this.now() });
+		return this.proposal(id);
+	}
+
+	/** Sitzung prüfen, wach halten, Orderstatus und Ausführungen abholen. */
+	async pollBroker(accountId: string): Promise<void> {
+		const a = this.account(accountId);
+		const broker = this.brokerOf(accountId);
+		const session = await broker.session();
+		this.brokerState.set(accountId, {
+			accountId, adapter: broker.adapter, connected: session.connected, authenticated: session.authenticated, brokerAccount: session.account, paper: session.paper, live: a.live,
+			liveTrading: this.cfg.liveTrading, message: session.message, checkedAt: this.now(), loginUrl: broker.loginUrl,
+		});
+		if (!session.account) return;
+		await broker.keepAlive();
+		const orders = await broker.orders();
+		const execs = await broker.executions();
+		this.db.tx(() => {
+			// beim Senden unterbrochen (Absturz, Netz): über die eigene Order-ID beim Broker wiederfinden, nie erneut senden
+			for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND status = 'sending' AND decided_at < ?", accountId, this.now() - 60_000)) {
+				const o = orders.find((x) => x.cOID === `desk-${r.id}`);
+				if (o) this.db.run("UPDATE proposal SET status = 'placed', broker_order_id = ? WHERE id = ? AND status = 'sending'", o.orderId, r.id);
+				else if (r.decided_at! < this.now() - 5 * 60_000 && this.db.run("UPDATE proposal SET status = 'rejected', reason = ? WHERE id = ? AND status = 'sending'", `Senden an ${a.broker} unterbrochen – Order dort nicht gefunden. Bei ${a.broker} prüfen; der Desk sendet nicht erneut.`, r.id).changes)
+					this.event("proposal.rejected", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}: Senden an ${a.broker} unterbrochen – bitte dort prüfen.`, { to: [this.cfg.user], ref: `#${r.id}` });
+			}
+			for (const e of execs) this.importExecution(a, e);
+			for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE account_id = ? AND status = 'placed' AND broker_order_id IS NOT NULL", accountId)) {
+				const o = orders.find((x) => x.orderId === r.broker_order_id || x.cOID === `desk-${r.id}`);
+				if (!o) continue;
+				const notify = r.author === this.cfg.user ? undefined : { to: [r.author], ref: `#${r.id}` };
+				const label = `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} #${r.id}`;
+				if (o.status === "filled") {
+					if (this.db.run("UPDATE proposal SET status = 'filled', fill_price = ? WHERE id = ? AND status = 'placed'", o.avgPrice, r.id).changes)
+						this.event("trade.fill", "Desk", `${label} bei ${a.broker} ausgeführt${o.avgPrice ? ` zu ${num(o.avgPrice)}` : ""}`, notify ?? { to: [], ref: `#${r.id}` });
+				} else if (o.status === "cancelled" || o.status === "rejected") {
+					const why = o.status === "cancelled" ? `bei ${a.broker} storniert` : `von ${a.broker} abgelehnt`;
+					if (this.db.run(`UPDATE proposal SET status = ?, reason = ? WHERE id = ? AND status = 'placed'`, o.status === "cancelled" ? "cancelled" : "rejected", why, r.id).changes) this.event("proposal.cancelled", "Desk", `${label} ${why}`, notify);
+				}
+			}
+		});
+	}
+
+	/** Ausführung des Brokers einmalig als Trade buchen (Schlüssel: Ausführungs-ID), auch wenn sie nicht vom Desk kam. */
+	private importExecution(a: Account, e: Awaited<ReturnType<Broker["executions"]>>[number]) {
+		const key = `exec:${e.id}`;
+		if (this.db.get("SELECT 1 FROM trade WHERE account_id = ? AND import_key = ?", a.id, key)) return;
+		const fromDesk = e.cOID && /^desk-\d+$/.test(e.cOID) ? Number(e.cOID.slice(5)) : null;
+		const proposal = fromDesk ? this.db.get<ProposalRow>("SELECT * FROM proposal WHERE id = ? AND account_id = ?", fromDesk, a.id) : undefined;
+		const symbol = proposal?.symbol ?? this.symbolOfConid(a.id, e.conid);
+		if (!symbol) {
+			const seen = `unmapped:${a.id}:${e.conid}`;
+			if (!this.db.get("SELECT 1 FROM setting WHERE key = ?", seen)) {
+				this.db.run("INSERT INTO setting (key, value) VALUES (?, '1')", seen);
+				this.event("broker.unknown", "Desk", `${a.broker}: Ausführung für Kontrakt ${e.conid} ohne Symbol – in config.json unter "conids" zuordnen, dann „Mit ${a.broker} abgleichen“.`);
+			}
+			return;
+		}
+		const currency = this.instrument(symbol)?.currency ?? "EUR";
+		const fx = this.fx(currency) ?? 1;
+		this.insertTrade(a, {
+			symbol, side: e.side, qty: e.qty, price: e.price, currency, fx, feeCents: Math.round(e.commission * fx * 100), time: e.time,
+			source: proposal ? (proposal.author === this.cfg.user ? "order" : "proposal") : "import", proposalId: proposal?.id ?? null, note: proposal ? "" : `${a.broker}`, importKey: key,
+		});
+	}
+
+	/** Bestand und Cash beim Broker gegen das Buch des Desks. */
+	async reconcile(accountId: string): Promise<Reconcile> {
+		const a = this.account(accountId);
+		if (a.kind !== "broker") throw new DeskError(`${a.name} ist kein Broker-Depot.`);
+		const broker = this.brokerOf(accountId);
+		await this.pollBroker(accountId);
+		const status = this.brokerStatus(accountId);
+		if (!status.brokerAccount) return { status, rows: [], brokerCashCents: null, deskCashCents: this.summary(a).cashCents, differences: 0 };
+		const [positions, cash] = await Promise.all([broker.positions(), broker.cash()]);
+		const book = this.book(a.id);
+		const rows: Reconcile["rows"] = [];
+		const seen = new Set<string>();
+		for (const p of positions) {
+			const symbol = this.symbolOfConid(a.id, p.conid) ?? Object.entries(this.cfg.brokers[a.id]?.conids ?? {}).find(([, c]) => c === p.conid)?.[0] ?? null;
+			if (symbol) seen.add(symbol);
+			rows.push({ symbol, conid: p.conid, description: p.description, brokerQty: p.qty, deskQty: symbol ? (book.holdings.get(symbol)?.qty ?? 0) : 0, avgCost: p.avgCost, currency: p.currency });
+		}
+		for (const h of book.holdings.values()) if (!seen.has(h.symbol)) rows.push({ symbol: h.symbol, conid: null, description: h.symbol, brokerQty: 0, deskQty: h.qty, avgCost: null, currency: this.instrument(h.symbol)?.currency ?? "EUR" });
+		const deskCash = this.summary(a).cashCents;
+		const brokerCash = cash ? Math.round(cash.amount * 100) : null;
+		return { status, rows, brokerCashCents: brokerCash, deskCashCents: deskCash, differences: rows.filter((r) => Math.abs(r.brokerQty - r.deskQty) > 1e-9).length + (brokerCash !== null && Math.abs(brokerCash - deskCash) >= 100 ? 1 : 0) };
+	}
+
+	/** Abgleich übernehmen: Unterschiede als Eröffnungs-/Korrekturbuchungen und Cash-Ausgleich. Nur du, nur nach Ansicht. */
+	async applyReconcile(accountId: string): Promise<Reconcile> {
+		const r = await this.reconcile(accountId);
+		if (!r.status.brokerAccount) throw new DeskError(`${this.account(accountId).broker}: nicht angemeldet – erst im Gateway anmelden.`, 409);
+		const a = this.account(accountId);
+		this.db.tx(() => {
+			for (const row of r.rows) {
+				const diff = roundQty(row.brokerQty - row.deskQty);
+				if (!row.symbol || Math.abs(diff) < 1e-9) continue;
+				if (row.conid !== null) this.rememberConid(a.id, row.conid, row.symbol);
+				const p = this.priced(row.symbol);
+				const price = row.avgCost ?? p?.price;
+				if (!price) continue;
+				const currency = this.instrument(row.symbol)?.currency ?? (row.currency || "EUR");
+				this.insertTrade(a, { symbol: row.symbol, side: diff > 0 ? "buy" : "sell", qty: Math.abs(diff), price, currency, fx: this.fx(currency) ?? 1, feeCents: 0, time: this.now(), source: "import", proposalId: null, note: `Abgleich ${a.broker}` });
+			}
+			const deskCash = this.summary(a).cashCents;
+			if (r.brokerCashCents !== null && r.brokerCashCents !== deskCash)
+				this.db.run("INSERT INTO cash_move (account_id, amount_cents, time, note) VALUES (?,?,?,?)", a.id, r.brokerCashCents - deskCash, this.now(), `Abgleich ${a.broker}`);
+			this.event("broker.reconcile", this.cfg.user, `${a.name} mit ${a.broker} abgeglichen (${r.differences} Unterschiede übernommen)`);
+		});
+		this.emit("tick", { at: this.now() });
+		return this.reconcile(accountId);
 	}
 
 	/* ------------------------------------------------------------------ Manuelle Depots */
@@ -1084,6 +1323,7 @@ export class Desk extends EventEmitter {
 			try {
 				await this.refresh(this.trackedSymbols());
 				await this.refreshDaily(this.scanSymbols().filter((s) => !this.dailyStat(s)).slice(0, 3)).catch(() => undefined);
+				for (const id of this.brokers.keys()) await this.pollBroker(id).catch((e) => console.error(`broker ${id}:`, (e as Error).message));
 				this.db.tx(() => {
 					this.fillLimits();
 					this.expire();
@@ -1123,7 +1363,8 @@ export class Desk extends EventEmitter {
 
 	private expire() {
 		const now = this.now();
-		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status IN ('pending','open','placed') AND expires_at <= ?", now)) {
+		// Broker-Orders laufen beim Broker ab (Tagesorder); deren Ende meldet der Abruf, nicht diese Uhr
+		for (const r of this.db.all<ProposalRow>("SELECT * FROM proposal WHERE status IN ('pending','open','placed') AND expires_at <= ? AND broker_order_id IS NULL", now)) {
 			if (this.db.run("UPDATE proposal SET status = 'expired', reason = ? WHERE id = ? AND status = ?", r.status === "pending" ? "nicht rechtzeitig entschieden" : "nicht ausgeführt", r.id, r.status).changes)
 				this.event("proposal.expired", "Desk", `${sideLabel[r.side]} ${num(r.approved_qty ?? r.qty)} ${r.symbol} von ${r.author} abgelaufen`);
 		}

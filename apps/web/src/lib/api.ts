@@ -3,7 +3,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { z } from "zod";
 import type { ChartRange, ChatMessage, DeskEvent } from "@desk/shared";
-import { AccountDetailSchema, AgentsDataSchema, AnalysisSchema, ChartSchema, ChatMessageSchema, CockpitSchema, EventSchema, NewsItemSchema, OverviewSchema, ProposalSchema, RiskDataSchema, SearchHitSchema, WatchItemSchema } from "@desk/shared";
+import { AccountDetailSchema, AgentsDataSchema, AnalysisSchema, BrokerStatusSchema, ChartSchema, ChatMessageSchema, CockpitSchema, EventSchema, NewsItemSchema, OverviewSchema, ProposalSchema, RiskDataSchema, SearchHitSchema, WatchItemSchema } from "@desk/shared";
 
 export const queryClient = new QueryClient({
 	defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false, retry: 1, placeholderData: (prev: unknown) => prev } },
@@ -43,6 +43,7 @@ export const keys = {
 	analysis: (symbol: string) => ["analysis", symbol] as const,
 	news: (symbol: string) => ["news", symbol] as const,
 	chat: ["chat"] as const,
+	brokers: ["brokers"] as const,
 };
 
 export const useOverview = () => useQuery({ queryKey: keys.overview, queryFn: () => getChecked("/api/overview", OverviewSchema), refetchInterval: 60_000 });
@@ -68,6 +69,7 @@ export const useAnalysis = (symbol: string | undefined) =>
 	useQuery({ queryKey: keys.analysis(symbol ?? ""), queryFn: () => getChecked(`/api/market/analysis/${encodeURIComponent(symbol!)}`, AnalysisSchema), enabled: !!symbol, refetchInterval: 30_000 });
 export const useNews = (symbol: string | undefined) =>
 	useQuery({ queryKey: keys.news(symbol ?? ""), queryFn: () => getChecked(`/api/market/news/${encodeURIComponent(symbol!)}`, NewsItemSchema.array()), enabled: !!symbol, staleTime: 300_000, placeholderData: undefined });
+export const useBrokers = () => useQuery({ queryKey: keys.brokers, queryFn: () => getChecked("/api/brokers", BrokerStatusSchema.array()), refetchInterval: 30_000 });
 export const useChat = () => useQuery({ queryKey: keys.chat, queryFn: () => getChecked("/api/chat?limit=300", ChatMessageSchema.array()), staleTime: Number.POSITIVE_INFINITY });
 
 /* ------------------------------------------------------------ Browser-Benachrichtigungen (nur nach deiner Zustimmung) */

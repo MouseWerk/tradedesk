@@ -7,7 +7,8 @@ import { dayKey, orderValueCents } from "@desk/shared";
 import { cleanConfig, type Config } from "./config.ts";
 import { openDatabase, type Database } from "./db.ts";
 import { Desk } from "./desk.ts";
-import { FakeMarket } from "./market.ts";
+import { FAKE_CATALOG, FakeMarket } from "./market.ts";
+import { FakeBroker } from "./broker.ts";
 
 export interface Fixture {
 	dir: string;
@@ -15,6 +16,7 @@ export interface Fixture {
 	db: Database;
 	desk: Desk;
 	market: FakeMarket;
+	broker: FakeBroker;
 	cleanup(): void;
 }
 
@@ -23,6 +25,7 @@ export const FIXTURE_CONFIG = {
 	accounts: [
 		{ id: "tr", name: "Trade Republic", kind: "manual", broker: "Trade Republic", feeEur: 1, startCashEur: 0 },
 		{ id: "papier", name: "Mein Papierdepot", kind: "paper", feeEur: 1, startCashEur: 20000 },
+		{ id: "ibkr", name: "IBKR Papier", kind: "broker", ibAccount: "DU0000001", feeEur: 2, startCashEur: 25000 },
 	],
 	agents: [{ name: "Atlas", startCashEur: 10000 }, { name: "Nova", startCashEur: 10000 }],
 };
@@ -33,9 +36,11 @@ export async function makeFixture({ seed = true, now }: { seed?: boolean; now?: 
 	const db = openDatabase(cfg.dbFile);
 	const clock = now ?? Date.now;
 	const market = new FakeMarket(clock);
-	const desk = new Desk(cfg, db, market, clock);
+	const bySymbol = new Map(FAKE_CATALOG.map((i) => [FakeBroker.conid(i.symbol), i.symbol]));
+	const broker = new FakeBroker((conid) => market.items.get(bySymbol.get(conid) ?? "")?.price ?? 0, clock);
+	const desk = new Desk(cfg, db, market, clock, new Map([["ibkr", broker]]));
 	const fx: Fixture = {
-		dir, cfg, db, desk, market,
+		dir, cfg, db, desk, market, broker,
 		cleanup() {
 			desk.stop();
 			db.close();
@@ -86,6 +91,8 @@ async function seedFixture({ desk, db, cfg }: Fixture) {
 	const atlas = await desk.submit({ author: "Atlas", accountId: "agent-atlas", symbol: "MSFT", side: "buy", qty: 4, confidence: 0.72, thesis: "Cloud-Umsatz wächst zweistellig, Kurs nach Rücksetzer an der 50-Tage-Linie. Stop unter dem letzten Tief.", stopLoss: 395, takeProfit: 470 }, "cli");
 	await desk.submit({ author: "Nova", accountId: "tr", symbol: "EUNL.DE", side: "buy", qty: 10, stopLoss: 101, confidence: 0.8, thesis: "Monatliche Aufstockung des Weltportfolios; Cash-Quote liegt über dem Ziel von 10 %." }, "cli");
 	await desk.submit({ author: "Atlas", accountId: "papier", symbol: "ALV.DE", side: "sell", qty: 2, orderType: "limit", limitPrice: 370, confidence: 0.6, thesis: "Teilgewinn am Widerstand 370 € mitnehmen." }, "cli");
+	const ib = await desk.submit({ author: "Nova", accountId: "ibkr", symbol: "SAP.DE", side: "buy", qty: 2, stopLoss: 195, confidence: 0.75, thesis: "Rückeroberung des VWAP nach Gap-Down, Stop unter dem Tagestief." }, "cli");
+	if (!ib.ok) throw new Error(`Fixture: IBKR-Vorschlag abgelehnt: ${ib.check.violations.join(" ")}`);
 	if (!atlas.ok) throw new Error(`Fixture: Vorschlag abgelehnt: ${atlas.check.violations.join(" ")}`);
 	const old = await desk.submit({ author: "Nova", accountId: "agent-nova", symbol: "ALV.DE", side: "buy", qty: 5, stopLoss: 340, confidence: 0.55, thesis: "Dividendenrendite über 5 %, defensiver Anker." }, "cli");
 	desk.reject(old.proposal!.id, "Versicherer sind schon über Mein Papierdepot drin.");

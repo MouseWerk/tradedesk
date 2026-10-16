@@ -6,6 +6,7 @@ import { openDatabase } from "./db.ts";
 import { Desk } from "./desk.ts";
 import { OffMarket, YahooMarket } from "./market.ts";
 import { createApp } from "./app.ts";
+import { IbkrBroker } from "./broker.ts";
 
 if (process.argv.includes("--selftest")) {
 	const { selftest } = await import("./selftest.ts");
@@ -21,7 +22,8 @@ if (process.argv.includes("--fixture")) {
 	desk = fx.desk;
 	cleanup = fx.cleanup;
 } else {
-	desk = new Desk(base, openDatabase(base.dbFile), base.market === "off" ? new OffMarket() : new YahooMarket());
+	const brokers = new Map(Object.entries(base.brokers).map(([id, b]) => [id, new IbkrBroker({ gateway: b.gateway, account: b.account, conids: b.conids })] as const));
+	desk = new Desk(base, openDatabase(base.dbFile), base.market === "off" ? new OffMarket() : new YahooMarket(), Date.now, brokers);
 	cleanup = () => {
 		desk.stop();
 		desk.db.close();
@@ -32,7 +34,9 @@ await desk.tick().catch((e) => console.error("erster Kursabruf:", (e as Error).m
 desk.start();
 const app = createApp(desk);
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "127.0.0.1" }, (info) => {
+	const live = cfg.accounts.filter((a) => a.live);
 	console.log(`Tradedesk on http://127.0.0.1:${info.port}  (${cfg.accounts.length} Depots, ${cfg.agents.length} Agenten, Markt ${desk.market.kind}, Daten ${cfg.home})`);
+	if (desk.brokers.size) console.log(`Broker: ${[...desk.brokers.keys()].join(", ")} – Live-Handel ${cfg.liveTrading ? "AN" : "aus"}${live.length ? ` (echte Konten: ${live.map((a) => a.id).join(", ")})` : ""}`);
 });
 server.on("error", (e: NodeJS.ErrnoException) => {
 	console.error(e.code === "EADDRINUSE" ? `Port ${cfg.port} ist belegt – läuft schon ein Tradedesk?` : e);

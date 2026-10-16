@@ -264,3 +264,124 @@ describe("chat", () => {
 		expect(fx.desk.proposal(r.proposal!.id).status).toBe("pending");
 	});
 });
+
+describe("broker (IBKR, fake gateway)", () => {
+	const proposeIb = (over: Record<string, unknown> = {}) =>
+		fx.desk.submit({ author: "Atlas", accountId: "ibkr", symbol: "SAP.DE", side: "buy", qty: 3, stopLoss: 195, confidence: 0.7, thesis: "IBKR-Test", ...over }, "cli");
+
+	it("sends an approved proposal to the broker with a unique client order id, then books the fill", async () => {
+		const r = await proposeIb();
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p).toMatchObject({ status: "placed", brokerOrderId: expect.any(String) });
+		expect(fx.broker.placed.at(-1)).toMatchObject({ side: "buy", qty: 3, type: "market", cOID: `desk-${r.proposal!.id}` });
+		await fx.desk.tick();
+		expect(fx.desk.proposal(r.proposal!.id)).toMatchObject({ status: "filled", fillPrice: 201.25 });
+		const t = fx.desk.detail("ibkr").trades.find((x) => x.proposalId === r.proposal!.id)!;
+		expect(t).toMatchObject({ qty: 3, price: 201.25, feeCents: 125, source: "proposal" });
+		await fx.desk.tick(); // zweiter Abruf bucht nichts doppelt
+		expect(fx.desk.detail("ibkr").trades.filter((x) => x.proposalId === r.proposal!.id)).toHaveLength(1);
+	});
+
+	it("shows the broker's question and sends only after you confirm", async () => {
+		fx.broker.replyAbove = 2;
+		const r = await proposeIb();
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p.status).toBe("confirm");
+		expect(p.brokerMessage).toContain("Size Limit");
+		expect([...fx.broker.book.values()].some((o) => o.t.cOID === `desk-${r.proposal!.id}`)).toBe(false);
+		expect((await cli(`/api/proposals/${r.proposal!.id}/confirm`, {})).status).toBe(403); // Agenten bestätigen nie
+		expect((await fx.desk.confirmBroker(r.proposal!.id)).status).toBe("placed");
+	});
+
+	it("refuses real money while liveTrading is off", async () => {
+		const live = fx.cfg.accounts.find((a) => a.id === "ibkr")!;
+		live.live = true;
+		const r = await proposeIb();
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p.status).toBe("rejected");
+		expect(p.reason).toContain("liveTrading");
+		expect(fx.broker.placed).toHaveLength(0);
+		fx.cfg.liveTrading = true;
+		const r2 = await proposeIb();
+		const mismatch = await fx.desk.approve(r2.proposal!.id, {});
+		expect(mismatch.reason).toContain("Papierkonto angemeldet"); // echtes Depot, aber Papier-Sitzung im Gateway
+		fx.broker.paper = false;
+		const r3 = await proposeIb();
+		expect((await fx.desk.approve(r3.proposal!.id, {})).status).toBe("placed");
+	});
+
+	it("rejects with the reason when you are not logged in at the gateway", async () => {
+		fx.broker.authenticated = false;
+		const r = await proposeIb();
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p).toMatchObject({ status: "rejected" });
+		expect(p.reason).toContain("nicht angemeldet");
+	});
+
+	it("cancels a working limit order at the broker and marks it when the broker confirms", async () => {
+		const r = await proposeIb({ orderType: "limit", limitPrice: 199 });
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p.status).toBe("placed");
+		const after = await fx.desk.cancel(r.proposal!.id);
+		expect(after.status).toBe("cancelled");
+	});
+
+	it("kill switch blocks broker orders too", async () => {
+		const r = await proposeIb();
+		fx.desk.setKill(true);
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p.status).toBe("rejected");
+		expect(fx.broker.placed).toHaveLength(0);
+	});
+
+	it("does not trade crypto through IBKR", async () => {
+		await fx.desk.addWatch("BTC-EUR", "Maurice");
+		const r = await proposeIb({ symbol: "BTC-EUR", qty: 0.01, stopLoss: 60000 });
+		const p = await fx.desk.approve(r.proposal!.id, {});
+		expect(p.reason).toContain("Krypto");
+	});
+
+	it("reconciles positions and cash you hold at the broker into the book", async () => {
+		fx.broker.extraPositions.push({ conid: 4242, ticker: "SAP", description: "SAP SE IBIS", qty: 7, avgCost: 180, currency: "EUR" });
+		fx.cfg.brokers.ibkr = { adapter: "ibkr", account: "DU0000001", gateway: "https://localhost:5000", conids: { "SAP.DE": 4242 } };
+		const before = await fx.desk.reconcile("ibkr");
+		expect(before.rows.find((x) => x.conid === 4242)).toMatchObject({ symbol: "SAP.DE", brokerQty: 7, deskQty: 0 });
+		expect(before.brokerCashCents).toBe(2_500_000);
+		const after = await fx.desk.applyReconcile("ibkr");
+		expect(after.rows.find((x) => x.conid === 4242)).toMatchObject({ brokerQty: 7, deskQty: 7 });
+		expect(after.deskCashCents).toBe(2_500_000);
+	});
+
+	it("only talks to gateways on localhost", async () => {
+		const { localJson } = await import("../src/http.ts");
+		await expect(localJson("GET", "https://example.com:5000/v1/api/tickle")).rejects.toThrow("nur lokale");
+		const c = cleanConfig({ accounts: [{ id: "ib", kind: "broker", ibAccount: "U123456", gateway: "https://evil.example:5000" }, { id: "ib2", kind: "broker", ibAccount: "U123456" }] }, { home: "", dbFile: "", webDist: "", dev: false }, {});
+		expect(c.accounts.map((a) => [a.id, a.live])).toEqual([["ib2", true]]);
+		expect(c.liveTrading).toBe(false);
+	});
+});
+
+describe("broker: interrupted send", () => {
+	it("finds an order that reached the broker by its client id and never sends twice", async () => {
+		const r = await fx.desk.submit({ author: "Atlas", accountId: "ibkr", symbol: "SAP.DE", side: "buy", qty: 2, stopLoss: 195, confidence: 0.7, thesis: "x" }, "cli");
+		const id = r.proposal!.id;
+		// Absturz simulieren: reserviert, beim Broker angekommen, Antwort verloren
+		fx.db.run("UPDATE proposal SET status = 'sending', decided_at = ?, approved_qty = 2 WHERE id = ?", clock, id);
+		await fx.broker.place({ conid: 1, side: "buy", qty: 2, type: "limit", limit: 190, cOID: `desk-${id}` });
+		clock += 2 * 60_000;
+		await fx.desk.pollBroker("ibkr");
+		expect(fx.desk.proposal(id)).toMatchObject({ status: "placed", brokerOrderId: expect.any(String) });
+		expect(fx.broker.placed).toHaveLength(1);
+	});
+
+	it("gives up after 5 minutes without the order and tells you to check, without resending", async () => {
+		const r = await fx.desk.submit({ author: "Atlas", accountId: "ibkr", symbol: "SAP.DE", side: "buy", qty: 2, stopLoss: 195, confidence: 0.7, thesis: "x" }, "cli");
+		const id = r.proposal!.id;
+		fx.db.run("UPDATE proposal SET status = 'sending', decided_at = ?, approved_qty = 2 WHERE id = ?", clock, id);
+		clock += 6 * 60_000;
+		await fx.desk.pollBroker("ibkr");
+		expect(fx.desk.proposal(id).status).toBe("rejected");
+		expect(fx.desk.proposal(id).reason).toContain("nicht erneut");
+		expect(fx.broker.placed).toHaveLength(0);
+	});
+});

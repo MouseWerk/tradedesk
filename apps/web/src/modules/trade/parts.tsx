@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { ExternalLink, Newspaper, OctagonX } from "lucide-react";
 import type { Cockpit } from "@desk/shared";
-import { useNews } from "@/lib/api";
+import { useNews, useOverview } from "@/lib/api";
 import { ago, eur, hhmm, num, pct, price, qty, signedEur, tone } from "@/lib/format";
 import { Badge, Button, Card, Empty, Segmented, Table, cn, td, th } from "@/ui/kit";
 import { useConfirm } from "@/ui/overlay";
@@ -74,12 +74,15 @@ export function SessionBar({ cockpit }: { cockpit: Cockpit }) {
 export function Positions({ cockpit, onSelect }: { cockpit: Cockpit; onSelect: (s: string) => void }) {
 	const [who, setWho] = useState<"mine" | "all">("mine");
 	const owner = (id: string) => cockpit.days.find((d) => d.accountId === id);
+	const { data: ov } = useOverview();
+	const liveIds = new Set((ov?.accounts ?? []).filter((a) => a.live).map((a) => a.id));
 	const list = cockpit.positions.filter((p) => who === "all" || owner(p.accountId)?.owner === "user");
 	const { run } = useAction();
 	const confirm = useConfirm();
 	const close = async (p: (typeof list)[number]) => {
 		const acc = owner(p.accountId)!;
-		if (!(await confirm({ title: `${p.symbol} schließen?`, body: `Verkauf ${qty(p.qty)} Stück zum Marktkurs im ${acc.name}.`, confirm: "Verkaufen" }))) return;
+		const live = liveIds.has(acc.accountId);
+		if (!(await confirm({ title: `${p.symbol} schließen?`, body: `Verkauf ${qty(p.qty)} Stück zum Marktkurs im ${acc.name}${acc.kind === "broker" ? (live ? " – echtes Geld, geht an den Broker" : " – geht an den Broker (Papierkonto)") : ""}.`, confirm: "Verkaufen", danger: live }))) return;
 		await run("/api/proposals", "POST", { accountId: p.accountId, symbol: p.symbol, side: "sell", qty: p.qty }, `${p.symbol} geschlossen.`);
 	};
 	return (
@@ -124,7 +127,7 @@ export function Positions({ cockpit, onSelect }: { cockpit: Cockpit; onSelect: (
 									<td className={cn(td, "text-right tnum", tone(p.r))}>{p.r === null ? "–" : `${p.r > 0 ? "+" : p.r < 0 ? "−" : ""}${num(Math.abs(p.r), 1)} R`}</td>
 									<td className={cn(td, "text-right tnum text-fg-3")}>{p.stopLoss ? price(p.stopLoss, p.currency) : "–"}</td>
 									<td className={cn(td, "w-24 text-right")}>
-										{acc?.owner === "user" && acc.kind === "paper" && (
+										{acc?.owner === "user" && acc.kind !== "manual" && (
 											<Button size="sm" variant="ghost" onClick={() => void close(p)}>
 												Schließen…
 											</Button>

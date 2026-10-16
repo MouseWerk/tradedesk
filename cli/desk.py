@@ -23,6 +23,9 @@ Daytrading:
 Chat (with the owner and the other agents; a message never approves anything):
   python cli/desk.py say --as Atlas [--to Nova] [--ref SAP.DE|#12] "text"   ("-" reads stdin; @Name mentions)
   python cli/desk.py read --as Atlas [--all] [--limit 50] [--json]           new messages since your last read
+  python cli/desk.py wait --as Atlas [--timeout 600]                         block until someone writes to you or to
+                                                                            everyone (incl. the desk's answer to your
+                                                                            proposals); exit 0 with the messages, 3 on timeout
 
   python cli/desk.py --selftest
 
@@ -34,6 +37,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -271,6 +275,28 @@ def cmd_read(args):
     out(args, msgs, "\n".join(lines) or "no new messages")
 
 
+def cmd_wait(args):
+    """Polls the chat (every few seconds) until there is something for this agent; marks it read like `read`."""
+    me = args.as_.lower()
+    since = read_seen(args.as_)
+    deadline = time.time() + max(5, args.timeout)
+    while True:
+        msgs = call("GET", f"/api/chat?since={since}&limit=100")
+        mine = [m for m in msgs if m["author"].lower() != me and (not m["to"] or any(t.lower() == me for t in m["to"]))]
+        if msgs:
+            since = max(m["id"] for m in msgs)
+        if mine:
+            write_seen(args.as_, since)
+            out(args, mine, "\n".join(("* " if any(t.lower() == me for t in m["to"]) else "  ") + chat_line(m) for m in mine))
+            return
+        if time.time() >= deadline:
+            write_seen(args.as_, since)
+            if not args.json:
+                print("nothing new")
+            raise DeskError("", 3)
+        time.sleep(min(args.every, max(0.5, deadline - time.time())))
+
+
 def cmd_brief(args):
     me = args.as_
     ping = call("GET", "/api/ping")
@@ -368,6 +394,11 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--all", action="store_true", help="whole history, not only new messages")
     s.add_argument("--limit", type=int, default=50)
     s.add_argument("--json", action="store_true")
+    s = sub.add_parser("wait")
+    s.add_argument("--as", dest="as_", required=True)
+    s.add_argument("--timeout", type=float, default=600)
+    s.add_argument("--every", type=float, default=5, help=argparse.SUPPRESS)
+    s.add_argument("--json", action="store_true")
     s = sub.add_parser("notes")
     s.add_argument("--as", dest="as_")
     s.add_argument("--symbol")
@@ -378,7 +409,7 @@ def parser() -> argparse.ArgumentParser:
 
 COMMANDS = {"status": cmd_status, "quote": cmd_quote, "watchlist": cmd_watchlist, "portfolio": cmd_portfolio, "propose": cmd_propose,
             "proposals": cmd_proposals, "journal": cmd_journal, "notes": cmd_notes, "scan": cmd_scan, "analyze": cmd_analyze, "news": cmd_news,
-            "brief": cmd_brief, "say": cmd_say, "read": cmd_read}
+            "brief": cmd_brief, "say": cmd_say, "read": cmd_read, "wait": cmd_wait}
 
 
 def main(argv=None) -> int:
@@ -501,6 +532,10 @@ def selftest() -> int:
         check("read marks messages to me", code == 0 and "* #4 Nova -> Atlas" in o and "#5 Owner" in o)
         code, o, _ = run(["read", "--as", "Atlas"])
         check("read shows only new messages the second time", code == 0 and "no new messages" in o)
+        code, o, _ = run(["wait", "--as", "Atlas", "--timeout", "0.2", "--every", "0.1"])
+        check("wait times out with exit 3 when nothing is new", code == 3 and "nothing new" in o)
+        code, o, _ = run(["wait", "--as", "Nova", "--timeout", "2", "--every", "0.1"])
+        check("wait returns messages for everyone at once", code == 0 and "#5 Owner" in o)
         os.environ["TRADEDESK_URL"] = "http://127.0.0.1:9"
         code, _, e = run(["status"])
         check("unreachable server exits 2", code == 2 and "not reachable" in e)

@@ -15,7 +15,7 @@ export default function OrdersView() {
 	const [author, setAuthor] = useState("");
 	const [ticket, setTicket] = useState(false);
 	const all = data ?? [];
-	const active = all.filter((p) => p.status === "pending" || p.status === "placed" || p.status === "open");
+	const active = all.filter((p) => ["pending", "placed", "open", "sending", "confirm"].includes(p.status));
 	const list = (tab === "open" ? active : all.filter((p) => !active.includes(p))).filter((p) => !author || p.author === author);
 	const authors = [...new Set(all.map((p) => p.author))].sort();
 	const pending = active.filter((p) => p.status === "pending").length;

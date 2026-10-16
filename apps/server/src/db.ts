@@ -81,6 +81,13 @@ const MIGRATIONS: string[] = [
 	CREATE TABLE chat (id INTEGER PRIMARY KEY, time INTEGER NOT NULL, author TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, recipients TEXT NOT NULL DEFAULT '[]', ref TEXT);
 	CREATE INDEX chat_time ON chat (time);
 	`,
+	/* 3: Broker-Anbindung (IBKR) */ `
+	ALTER TABLE proposal ADD COLUMN broker_order_id TEXT;
+	ALTER TABLE proposal ADD COLUMN broker_message TEXT;
+	ALTER TABLE proposal ADD COLUMN reply_id TEXT;
+	ALTER TABLE proposal ADD COLUMN broker_conid INTEGER;
+	CREATE TABLE broker_conid (account_id TEXT NOT NULL, conid INTEGER NOT NULL, symbol TEXT NOT NULL, PRIMARY KEY (account_id, conid));
+	`,
 ];
 
 function param(v: unknown): SQLInputValue {

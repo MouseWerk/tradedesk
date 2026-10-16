@@ -157,9 +157,26 @@ export function createApp(desk: Desk) {
 		userOnly(c);
 		return c.json({ ok: true, proposal: desk.reject(id(c), (await body(c)).reason) });
 	});
-	app.post("/api/proposals/:id/cancel", (c) => {
+	app.post("/api/proposals/:id/cancel", async (c) => {
 		userOnly(c);
-		return c.json({ ok: true, proposal: desk.cancel(id(c)) });
+		return c.json({ ok: true, proposal: await desk.cancel(id(c)) });
+	});
+	app.post("/api/proposals/:id/confirm", async (c) => {
+		userOnly(c);
+		const p = await desk.confirmBroker(id(c));
+		const ok = p.status === "placed" || p.status === "filled";
+		return c.json({ ok, proposal: p, msg: ok ? undefined : p.brokerMessage ?? p.reason }, ok ? 200 : 409);
+	});
+
+	/* Broker */
+	app.get("/api/brokers", (c) => c.json(desk.brokerStatuses()));
+	app.get("/api/accounts/:id/reconcile", async (c) => {
+		userOnly(c);
+		return c.json(await desk.reconcile(c.req.param("id")));
+	});
+	app.post("/api/accounts/:id/reconcile", async (c) => {
+		userOnly(c);
+		return c.json(await desk.applyReconcile(c.req.param("id")));
 	});
 	app.post("/api/proposals/:id/fill", async (c) => {
 		userOnly(c);

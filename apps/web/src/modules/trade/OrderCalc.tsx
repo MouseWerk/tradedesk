@@ -62,7 +62,7 @@ export function OrderCalc({ row, cockpit, accounts, side, onSide, focusSignal }:
 
 	// Probelauf beim Server: dieselbe Prüfung wie beim Absenden
 	useEffect(() => {
-		if (!acc || acc.kind !== "paper" || !(q > 0)) return setCheck(null);
+		if (!acc || acc.kind === "manual" || !(q > 0)) return setCheck(null);
 		const ctl = new AbortController();
 		const t = setTimeout(() => {
 			fetch("/api/proposals?dryRun=1", {
@@ -92,10 +92,26 @@ export function OrderCalc({ row, cockpit, accounts, side, onSide, focusSignal }:
 					{side === "buy" && s > 0 ? ` · Stop ${price(s, row.currency)}` : ""} · {eur(check?.estimateCents ?? 0)} + {eur(acc.feeCents)} Gebühr
 				</span>
 			),
-			confirm: side === "buy" ? "Kaufen" : "Verkaufen",
+			confirm: acc.kind === "broker" ? (acc.live ? "Mit echtem Geld senden" : `An ${acc.broker} senden`) : side === "buy" ? "Kaufen" : "Verkaufen",
+			danger: acc.live,
 		});
 		if (!ok) return;
-		if (await run("/api/proposals", "POST", { accountId: acc.id, symbol: row.symbol, side, qty: q, orderType, limitPrice: orderType === "limit" ? e : undefined, stopLoss: side === "buy" && s > 0 ? s : undefined, takeProfit: side === "buy" && targets[1] ? Number(targets[1].toFixed(4)) : undefined }, orderType === "limit" ? `${label}: Limit angelegt.` : `${label} ausgeführt.`)) setQtyText("");
+		const r = await run<{ proposal: { status: string; reason: string } }>(
+			"/api/proposals",
+			"POST",
+			{ accountId: acc.id, symbol: row.symbol, side, qty: q, orderType, limitPrice: orderType === "limit" ? e : undefined, stopLoss: side === "buy" && s > 0 ? s : undefined, takeProfit: side === "buy" && targets[1] ? Number(targets[1].toFixed(4)) : undefined },
+			(res) =>
+				res.proposal.status === "rejected"
+					? `${label}: ${res.proposal.reason}`
+					: acc.kind === "broker"
+						? res.proposal.status === "confirm"
+							? `${label}: ${acc.broker} fragt nach – unter Orders bestätigen.`
+							: `${label} an ${acc.broker} gesendet.`
+						: orderType === "limit"
+							? `${label}: Limit angelegt.`
+							: `${label} ausgeführt.`,
+		);
+		if (r) setQtyText("");
 	};
 
 	if (!acc) return null;
@@ -145,7 +161,7 @@ export function OrderCalc({ row, cockpit, accounts, side, onSide, focusSignal }:
 						{fmtQty(sizing.qty)} Stk. ≈ {eur(sizing.valueCents)}, Verlust bis Stop {eur(sizing.riskCents)} inkl. Gebühren
 					</p>
 				)}
-				{acc.kind === "paper" ? (
+				{acc.kind === "paper" || acc.kind === "broker" ? (
 					<>
 						<div className="flex flex-wrap items-center gap-2">
 							<Segmented label="Orderart" items={[{ id: "market", label: "Market" }, { id: "limit", label: "Limit = Einstieg" }]} value={orderType} onChange={setOrderType} />
@@ -160,8 +176,8 @@ export function OrderCalc({ row, cockpit, accounts, side, onSide, focusSignal }:
 								))}
 							</ul>
 						)}
-						<Button variant={side === "buy" ? "primary" : "outline"} onClick={() => void submit()} disabled={busy || !(q > 0) || (check !== null && !check.ok)} className="w-full">
-							{side === "buy" ? "Kaufen…" : "Verkaufen…"}
+						<Button variant={acc.live ? "danger" : side === "buy" ? "primary" : "outline"} onClick={() => void submit()} disabled={busy || !(q > 0) || (check !== null && !check.ok)} className="w-full">
+							{acc.kind === "broker" ? `${side === "buy" ? "Kauf" : "Verkauf"} an ${acc.broker}${acc.live ? " (echtes Geld)" : ""}…` : side === "buy" ? "Kaufen…" : "Verkaufen…"}
 						</Button>
 					</>
 				) : (

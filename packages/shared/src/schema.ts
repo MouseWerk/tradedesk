@@ -5,13 +5,15 @@ import { z } from "zod";
 export const SideSchema = z.enum(["buy", "sell"]);
 export type Side = z.infer<typeof SideSchema>;
 
-export const AccountKindSchema = z.enum(["paper", "manual"]);
+export const AccountKindSchema = z.enum(["paper", "manual", "broker"]); // broker: Orders gehen über die API des Brokers (IBKR)
 export type AccountKind = z.infer<typeof AccountKindSchema>;
 
 export const ProposalStatusSchema = z.enum([
 	"pending", // wartet auf deine Freigabe
 	"open", // freigegeben, Limit noch nicht erreicht (nur Papierdepot)
-	"placed", // freigegeben, du führst sie selbst beim Broker aus (manuelles Depot)
+	"placed", // freigegeben: manuelles Depot – du führst sie aus; Broker-Depot – beim Broker in Arbeit
+	"sending", // wird gerade an den Broker gesendet
+	"confirm", // der Broker fragt nach (z. B. Preisabweichung) – du bestätigst oder stornierst
 	"filled",
 	"rejected",
 	"stale", // Kurs hat sich seit dem Vorschlag zu stark bewegt – nichts ausgeführt
@@ -28,6 +30,7 @@ export const AccountSchema = z.object({
 	broker: z.string(), // z. B. "Trade Republic"; Papierdepot: "Papier"
 	feeCents: z.number().int(),
 	startCashCents: z.number().int(),
+	live: z.boolean(), // echtes Geld über eine Broker-API
 });
 export type Account = z.infer<typeof AccountSchema>;
 
@@ -190,6 +193,8 @@ export const ProposalSchema = z.object({
 	approvedQty: z.number().nullable(),
 	expiresAt: z.number(),
 	fillPrice: z.number().nullable(),
+	brokerOrderId: z.string().nullable(),
+	brokerMessage: z.string().nullable(), // Rückfrage des Brokers im Originaltext
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
 
@@ -398,3 +403,38 @@ export const ChatMessageSchema = z.object({
 	ref: z.string().nullable(), // z. B. "#12" für Vorschlag 12 oder ein Symbol
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+
+/* ------------------------------------------------------------------ Broker */
+
+export const BrokerStatusSchema = z.object({
+	accountId: z.string(),
+	adapter: z.string(),
+	connected: z.boolean(), // Gateway erreichbar
+	authenticated: z.boolean(), // du bist im Gateway angemeldet
+	brokerAccount: z.string().nullable(),
+	paper: z.boolean().nullable(),
+	live: z.boolean(),
+	liveTrading: z.boolean(), // Hauptschalter in config.json
+	message: z.string(),
+	checkedAt: z.number().nullable(),
+	loginUrl: z.string().nullable(),
+});
+export type BrokerStatus = z.infer<typeof BrokerStatusSchema>;
+
+export const ReconcileRowSchema = z.object({
+	symbol: z.string().nullable(), // null: Kontrakt ohne Zuordnung zu einem Symbol
+	conid: z.number().nullable(),
+	description: z.string(),
+	brokerQty: z.number(),
+	deskQty: z.number(),
+	avgCost: z.number().nullable(),
+	currency: z.string(),
+});
+export const ReconcileSchema = z.object({
+	status: BrokerStatusSchema,
+	rows: z.array(ReconcileRowSchema),
+	brokerCashCents: z.number().int().nullable(), // Cash beim Broker in EUR (Basiswährung)
+	deskCashCents: z.number().int(),
+	differences: z.number().int(),
+});
+export type Reconcile = z.infer<typeof ReconcileSchema>;

@@ -33,7 +33,7 @@ export default function OverviewView() {
 	const hasDay = mine.some((a) => a.dayChangeCents !== null);
 	const day = mine.reduce((s, a) => s + (a.dayChangeCents ?? 0), 0);
 	const curve = span === "all" ? data.curve : data.curve.slice(-Number(span) - 1);
-	const pending = (proposals ?? []).filter((p) => p.status === "pending" || p.status === "placed");
+	const pending = (proposals ?? []).filter((p) => p.status === "pending" || p.status === "placed" || p.status === "confirm");
 	const missing = [...new Set(mine.flatMap((a) => a.missingQuotes))];
 
 	return (
@@ -99,7 +99,7 @@ export default function OverviewView() {
 										</Link>
 									</td>
 									<td className={td}>
-										<Badge>{a.kind === "manual" ? a.broker : a.owner === "user" ? "Papier" : `Agent ${a.owner}`}</Badge>
+										<Badge variant={a.live ? "err" : "soft"}>{a.kind === "paper" ? (a.owner === "user" ? "Papier" : `Agent ${a.owner}`) : a.live ? `${a.broker} · echtes Geld` : a.kind === "broker" ? `${a.broker} · Papier` : a.broker}</Badge>
 									</td>
 									<td className={cn(td, "text-right tnum")}>{eur(a.equityCents)}</td>
 									<td className={cn(td, "text-right tnum text-fg-2")}>{eur(a.cashCents)}</td>

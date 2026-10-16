@@ -12,6 +12,7 @@ import { Badge, Button, Card, Empty, Field, Input, Select, Skeleton, Stat, Table
 import { FormDialog } from "@/ui/overlay";
 import { Page, PageHead, useAction } from "../common";
 import { OrderTicket } from "../orders/OrderTicket";
+import { BrokerPanel } from "./BrokerPanel";
 
 const SOURCE: Record<Trade["source"], string> = { manual: "erfasst", import: "Import", proposal: "Vorschlag", order: "Order" };
 
@@ -29,7 +30,17 @@ export default function PortfolioView() {
 		<Page>
 			<PageHead
 				title={a?.name ?? "Depots"}
-				sub={a ? (a.kind === "manual" ? `${a.broker} · manuell geführt: du handelst in der App des Brokers und trägst hier ein` : a.owner === "user" ? "Papierdepot · Orders werden mit echten Kursen simuliert" : `Papierdepot von Agent ${a.owner}`) : undefined}
+				sub={
+					a
+						? a.kind === "manual"
+							? `${a.broker} · manuell geführt: du handelst in der App des Brokers und trägst hier ein`
+							: a.kind === "broker"
+								? `${a.broker} · Orders gehen nach deiner Freigabe über die API an den Broker${a.live ? " – echtes Geld" : " (Papierkonto)"}`
+								: a.owner === "user"
+									? "Papierdepot · Orders werden mit echten Kursen simuliert"
+									: `Papierdepot von Agent ${a.owner}`
+						: undefined
+				}
 				aside={
 					<>
 						<Select aria-label="Depot wählen" value={accountId ?? ""} onChange={(e) => void navigate({ to: "/portfolio", search: { account: e.target.value } })} className="w-56">
@@ -60,7 +71,7 @@ export default function PortfolioView() {
 								</Button>
 							</>
 						)}
-						{a?.kind === "paper" && a.owner === "user" && (
+						{(a?.kind === "paper" || a?.kind === "broker") && a.owner === "user" && (
 							<Button variant="primary" onClick={() => setDialog("order")}>
 								<ShoppingCart className="size-4" aria-hidden />
 								Order…
@@ -75,6 +86,7 @@ export default function PortfolioView() {
 					</>
 				}
 			/>
+			{a?.kind === "broker" && <BrokerPanel account={a} />}
 			{isLoading || !data || !a ? (
 				<>
 					<div className="grid grid-cols-5 gap-3 max-lg:grid-cols-2">

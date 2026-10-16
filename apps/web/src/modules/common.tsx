@@ -7,7 +7,7 @@ import { movePct, sideLabel, statusLabel } from "@desk/shared";
 import { send } from "@/lib/api";
 import { ago, dateTime, eur, parseDe, pct, price, qty as fmtQty } from "@/lib/format";
 import { Badge, Button, Field, Input, Textarea, cn } from "@/ui/kit";
-import { FormDialog, useToast } from "@/ui/overlay";
+import { FormDialog, useConfirm, useToast } from "@/ui/overlay";
 
 export function Page({ children, className }: { children: ReactNode; className?: string }) {
 	return <div className={cn("mx-auto flex w-full max-w-[1600px] flex-col gap-4 p-5 max-md:p-3", className)}>{children}</div>;
@@ -52,6 +52,8 @@ const STATUS_VARIANT: Record<ProposalStatus, "warn" | "ok" | "err" | "soft"> = {
 	pending: "warn",
 	open: "soft",
 	placed: "warn",
+	sending: "soft",
+	confirm: "warn",
 	filled: "ok",
 	rejected: "err",
 	stale: "soft",
@@ -80,6 +82,8 @@ export function ProposalCard({ p, accounts, user, compact }: { p: Proposal; acco
 	const moved = p.price !== null ? movePct(p.quotePrice, p.price) : 0;
 	const isAgent = p.author !== user;
 	const manual = acc?.kind === "manual";
+	const broker = acc?.kind === "broker";
+	const confirm = useConfirm();
 	const qtyNum = parseDe(qtyText);
 	const label = `${sideLabel[p.side]} ${fmtQty(p.approvedQty ?? p.qty)} ${p.symbol}`;
 
@@ -101,7 +105,21 @@ export function ProposalCard({ p, accounts, user, compact }: { p: Proposal; acco
 		if (!(qtyNum > 0)) return setErr("Stückzahl fehlt.");
 		if (await run(`/api/proposals/${p.id}/fill`, "POST", { qty: qtyNum, price: pr, feeEur: Number.isFinite(fee) ? fee : undefined }, `${label} als ausgeführt eingetragen.`)) setDialog(null);
 	};
-	const cancel = () => run(`/api/proposals/${p.id}/cancel`, "POST", {}, `${label} storniert.`);
+	const cancel = () => run(`/api/proposals/${p.id}/cancel`, "POST", {}, broker && p.status === "placed" ? `${label}: Storno an ${acc?.broker} gesendet.` : `${label} storniert.`);
+	const confirmBroker = async () => {
+		const ok = await confirm({
+			title: `${label} bei ${acc?.broker} bestätigen?`,
+			body: (
+				<span className="flex flex-col gap-2">
+					<span>„{p.brokerMessage}“</span>
+					{acc?.live && <span className="font-medium text-err">Echtes Geld: Die Order geht danach an die Börse.</span>}
+				</span>
+			),
+			confirm: "Bestätigen und senden",
+			danger: !!acc?.live,
+		});
+		if (ok) await run(`/api/proposals/${p.id}/confirm`, "POST", {}, `${label} an ${acc?.broker} gesendet.`);
+	};
 	const open = (d: "approve" | "reject" | "fill") => {
 		setErr(null);
 		setQtyText(String(p.approvedQty ?? p.qty).replace(".", ","));
@@ -177,13 +195,24 @@ export function ProposalCard({ p, accounts, user, compact }: { p: Proposal; acco
 				</ul>
 			)}
 			{p.reason && p.status !== "pending" && <p className="rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-fg-2">{p.reason}</p>}
-			{p.status === "placed" && (
+			{p.status === "placed" && !broker && (
 				<p className="flex gap-2 rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-fg-2">
 					<OctagonX className="mt-0.5 size-3.5 shrink-0 text-fg-3" aria-hidden />
 					Öffne {acc?.broker ?? "deinen Broker"}, führe „{label}“ dort aus und trage danach Kurs und Gebühr aus der Abrechnung ein.
 				</p>
 			)}
-			{(p.status === "pending" || p.status === "placed" || p.status === "open") && (
+			{p.status === "placed" && broker && (
+				<p className="rounded-lg bg-surface-2 px-3 py-2 text-[12px] text-fg-2">
+					Bei {acc?.broker} in Arbeit{p.brokerOrderId ? ` (Order ${p.brokerOrderId})` : ""}. Die Ausführung kommt automatisch.
+				</p>
+			)}
+			{p.status === "confirm" && (
+				<div className="flex flex-col gap-1 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-fg" data-testid="broker-question">
+					<span className="font-medium text-warn">{acc?.broker} fragt nach:</span>
+					<span className="break-words">„{p.brokerMessage}“</span>
+				</div>
+			)}
+			{(p.status === "pending" || p.status === "placed" || p.status === "open" || p.status === "confirm") && (
 				<footer className="flex flex-wrap gap-2">
 					{p.status === "pending" && (
 						<>
@@ -196,12 +225,17 @@ export function ProposalCard({ p, accounts, user, compact }: { p: Proposal; acco
 							</Button>
 						</>
 					)}
-					{p.status === "placed" && (
+					{p.status === "placed" && !broker && (
 						<Button variant="primary" onClick={() => open("fill")} disabled={busy}>
 							Ausführung eintragen…
 						</Button>
 					)}
-					{(p.status === "placed" || p.status === "open") && (
+					{p.status === "confirm" && (
+						<Button variant={acc?.live ? "danger" : "primary"} onClick={() => void confirmBroker()} disabled={busy}>
+							Bei {acc?.broker ?? "Broker"} bestätigen…
+						</Button>
+					)}
+					{(p.status === "placed" || p.status === "open" || p.status === "confirm") && (
 						<Button variant="ghost" onClick={() => void cancel()} disabled={busy}>
 							Stornieren
 						</Button>
@@ -214,8 +248,14 @@ export function ProposalCard({ p, accounts, user, compact }: { p: Proposal; acco
 				open={dialog === "approve"}
 				onOpenChange={(o) => !o && setDialog(null)}
 				title={`${sideLabel[p.side]} ${p.symbol} freigeben`}
-				description={manual ? `Der Desk führt nichts aus: Danach gibst du die Order selbst in ${acc?.broker} auf.` : `Wird sofort im ${acc?.name ?? "Papierdepot"} ausgeführt${p.orderType === "limit" ? ", sobald das Limit erreicht ist" : " zum aktuellen Kurs"}.`}
-				submit={manual ? "Freigeben" : p.orderType === "limit" ? "Limit freigeben" : "Freigeben und ausführen"}
+				description={
+					manual
+						? `Der Desk führt nichts aus: Danach gibst du die Order selbst in ${acc?.broker} auf.`
+						: broker
+							? `Geht sofort als ${p.orderType === "limit" ? "Limit" : "Market"}-Tagesorder an ${acc?.broker}${acc?.live ? " – echtes Geld" : " (Papierkonto)"}.`
+							: `Wird sofort im ${acc?.name ?? "Papierdepot"} ausgeführt${p.orderType === "limit" ? ", sobald das Limit erreicht ist" : " zum aktuellen Kurs"}.`
+				}
+				submit={manual ? "Freigeben" : broker ? `An ${acc?.broker} senden` : p.orderType === "limit" ? "Limit freigeben" : "Freigeben und ausführen"}
 				onSubmit={() => void approve()}
 				busy={busy}
 				error={err}

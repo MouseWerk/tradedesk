@@ -14,7 +14,7 @@ const out = path.join(repo, "build", "preview");
 mkdirSync(out, { recursive: true });
 const PORT = 8000 + Math.floor(Math.random() * 900) + 100;
 const BASE = `http://127.0.0.1:${PORT}`;
-const ROUTES = ["/", "/trade?symbol=NVDA", "/portfolio?account=tr", "/market?symbol=SAP.DE", "/orders", "/agents", "/risk"];
+const ROUTES = ["/", "/trade?symbol=NVDA", "/portfolio?account=tr", "/portfolio?account=ibkr", "/market?symbol=SAP.DE", "/orders", "/agents", "/risk"];
 const WIDTHS = [390, 800, 1280, 1920];
 
 function startServer() {
@@ -114,16 +114,29 @@ try {
 	await pg.waitForFunction((b) => Number(document.querySelector('[data-testid="pending-badge"]')?.textContent ?? 0) === b - 1, before, { timeout: 10_000 });
 	check("pending badge counts down", true);
 
-	/* Trade Republic: Freigabe heißt „beim Broker ausführen“, dann Ausführung eintragen */
+	/* Trade Republic: nach der Freigabe liegt die Order „beim Broker“, du trägst die Ausführung ein */
 	const tr = pg.locator('[data-testid="proposal"]', { hasText: "für Trade Republic" });
 	await tr.getByRole("button", { name: "Freigeben…" }).click();
 	await pg.getByRole("dialog").getByRole("button", { name: "Freigeben", exact: true }).click();
-	await tr.getByText("beim Broker ausführen").first().waitFor({ timeout: 10_000 });
+	await tr.getByRole("button", { name: "Ausführung eintragen…" }).waitFor({ timeout: 10_000 });
 	await tr.getByRole("button", { name: "Ausführung eintragen…" }).click();
 	await pg.getByRole("dialog").getByLabel("Kurs (EUR)").fill("104,40");
 	await pg.getByRole("dialog").getByRole("button", { name: "Eintragen" }).click();
 	await pg.getByText("als ausgeführt eingetragen").waitFor({ timeout: 10_000 });
 	check("broker order approved, then execution recorded", true);
+
+	/* IBKR (Fake-Gateway, Papierkonto): Freigabe sendet an den Broker, Depot zeigt die Verbindung */
+	await pg.goto(`${BASE}/orders`);
+	await settle(pg);
+	const ibCard = pg.locator('[data-testid="proposal"]', { hasText: "für IBKR Papier" });
+	await ibCard.getByRole("button", { name: "Freigeben…" }).click();
+	await pg.getByRole("dialog").getByRole("button", { name: "An Interactive Brokers senden" }).click();
+	await pg.getByText("an Interactive Brokers gesendet", { exact: false }).first().waitFor({ timeout: 10_000 });
+	check("approval sends the order to IBKR", true);
+	await pg.goto(`${BASE}/portfolio?account=ibkr`);
+	await settle(pg);
+	await pg.getByText("Interactive Brokers verbunden").waitFor({ timeout: 10_000 });
+	check("broker account shows the gateway connection and paper badge", (await pg.getByText("Papierkonto", { exact: true }).count()) > 0);
 
 	/* Cockpit: Rechner, Hotkey B, Kauf über den Rechner im Papierdepot */
 	await pg.goto(`${BASE}/trade?symbol=SAP.DE`);

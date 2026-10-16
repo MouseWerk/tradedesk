@@ -21,12 +21,23 @@ export interface Config {
 	proposalTtlHours: number;
 	quoteIntervalSec: number;
 	liveIntervalSec: number; // solange ein Browser offen ist
+	liveTrading: boolean; // Hauptschalter: Orders mit echtem Geld nur, wenn true (IBKR-Papierkonten gehen immer)
+	brokers: Record<string, BrokerConfig>; // je Broker-Depot (kind "broker")
 	dbFile: string;
 	webDist: string;
 	dev: boolean;
 }
 
+export interface BrokerConfig {
+	adapter: "ibkr";
+	account: string; // IBKR-Kontonummer, z. B. DU1234567 (Papier) oder U1234567 (echt)
+	gateway: string; // Client Portal Gateway, nur localhost
+	conids: Record<string, number>; // feste Zuordnung Symbol → IBKR-Kontrakt
+}
+
 const ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const IB_ACCOUNT = /^[A-Z]{1,3}\d{4,10}$/;
+const LOCAL_GATEWAY = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/;
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u;
 
 export function homeDir(env = process.env, argv: string[] = []): string {
@@ -46,27 +57,42 @@ const clampNum = (v: unknown, d: number, lo: number, hi: number) => (typeof v ==
 export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "home" | "dbFile" | "webDist" | "dev">, env = process.env): Config {
 	const user = typeof raw.user === "string" && NAME.test(raw.user) ? raw.user : (env.USERNAME ?? env.USER ?? "Ich");
 	const accounts: Account[] = [];
+	const brokers: Record<string, BrokerConfig> = {};
 	for (const r of Array.isArray(raw.accounts) ? (raw.accounts as Record<string, unknown>[]) : []) {
 		if (!r || typeof r.id !== "string" || !ID.test(r.id) || r.id.startsWith("agent-") || accounts.some((a) => a.id === r.id)) continue;
-		const kind = r.kind === "manual" ? "manual" : "paper";
+		const kind = r.kind === "manual" ? "manual" : r.kind === "broker" ? "broker" : "paper";
+		let live = false;
+		if (kind === "broker") {
+			// nur IBKR, nur mit gültiger Kontonummer und lokalem Gateway – sonst fällt das Depot weg
+			const account = typeof r.ibAccount === "string" ? r.ibAccount.trim().toUpperCase() : "";
+			const gateway = typeof r.gateway === "string" && r.gateway.trim() ? r.gateway.trim() : "https://localhost:5000";
+			if (r.adapter !== undefined && r.adapter !== "ibkr") continue;
+			if (!IB_ACCOUNT.test(account) || !LOCAL_GATEWAY.test(gateway)) continue;
+			const conids: Record<string, number> = {};
+			if (r.conids && typeof r.conids === "object")
+				for (const [sym, id] of Object.entries(r.conids as Record<string, unknown>)) if (/^[A-Z0-9.=^-]{1,24}$/.test(sym) && Number.isInteger(id) && (id as number) > 0) conids[sym] = id as number;
+			brokers[r.id] = { adapter: "ibkr", account, gateway, conids };
+			live = !account.startsWith("D"); // IBKR-Papierkonten beginnen mit D (DU…, DF…)
+		}
 		accounts.push({
 			id: r.id,
 			name: typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 40) : r.id,
 			kind,
 			owner: "user",
-			broker: typeof r.broker === "string" && r.broker.trim() ? r.broker.trim().slice(0, 40) : kind === "paper" ? "Papier" : "Broker",
+			broker: typeof r.broker === "string" && r.broker.trim() ? r.broker.trim().slice(0, 40) : kind === "paper" ? "Papier" : kind === "broker" ? "Interactive Brokers" : "Broker",
 			feeCents: eurToCents(r.feeEur, 100),
 			startCashCents: eurToCents(r.startCashEur, kind === "paper" ? 1_000_000 : 0),
+			live,
 		});
 	}
-	if (!accounts.length) accounts.push({ id: "papier", name: "Papierdepot", kind: "paper", owner: "user", broker: "Papier", feeCents: 100, startCashCents: 1_000_000 });
+	if (!accounts.length) accounts.push({ id: "papier", name: "Papierdepot", kind: "paper", owner: "user", broker: "Papier", feeCents: 100, startCashCents: 1_000_000, live: false });
 	const agents: string[] = [];
 	for (const r of Array.isArray(raw.agents) ? (raw.agents as unknown[]) : []) {
 		const a = (typeof r === "string" ? { name: r } : r) as Record<string, unknown>;
 		const name = typeof a?.name === "string" ? a.name.trim() : "";
 		if (!NAME.test(name) || name.toLowerCase() === user.toLowerCase() || agents.some((x) => x.toLowerCase() === name.toLowerCase())) continue;
 		agents.push(name);
-		accounts.push({ id: agentAccountId(name), name: `Papierdepot ${name}`, kind: "paper", owner: name, broker: "Papier", feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000) });
+		accounts.push({ id: agentAccountId(name), name: `Papierdepot ${name}`, kind: "paper", owner: name, broker: "Papier", feeCents: eurToCents(a.feeEur, 100), startCashCents: eurToCents(a.startCashEur, 1_000_000), live: false });
 	}
 	return {
 		...base,
@@ -81,6 +107,8 @@ export function cleanConfig(raw: Record<string, unknown>, base: Pick<Config, "ho
 		proposalTtlHours: clampNum(raw.proposalTtlHours, 24, 1, 24 * 14),
 		quoteIntervalSec: Math.trunc(clampNum(raw.quoteIntervalSec, 60, 15, 3600)),
 		liveIntervalSec: Math.trunc(clampNum(raw.liveIntervalSec, 15, 5, 300)),
+		liveTrading: raw.liveTrading === true,
+		brokers,
 	};
 }
 

@@ -4,7 +4,8 @@
   "market": "yahoo",
   "accounts": [
     { "id": "tr", "name": "Trade Republic", "kind": "manual", "broker": "Trade Republic", "feeEur": 1, "startCashEur": 0 },
-    { "id": "papier", "name": "Mein Papierdepot", "kind": "paper", "feeEur": 1, "startCashEur": 10000 }
+    { "id": "papier", "name": "Mein Papierdepot", "kind": "paper", "feeEur": 1, "startCashEur": 10000 },
+    { "id": "ibkr", "name": "IBKR", "kind": "broker", "ibAccount": "DU1234567", "feeEur": 2, "startCashEur": 0 }
   ],
   "agents": [
     { "name": "Atlas", "startCashEur": 10000 },
@@ -14,5 +15,6 @@
   "staleMovePct": 2,
   "proposalTtlHours": 24,
   "quoteIntervalSec": 60,
-  "liveIntervalSec": 15
+  "liveIntervalSec": 15,
+  "liveTrading": false
 }

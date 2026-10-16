@@ -16,7 +16,7 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 	symbol?: string;
 	side?: Side;
 }) {
-	const paper = accounts.filter((a) => a.owner === "user" && a.kind === "paper");
+	const paper = accounts.filter((a) => a.owner === "user" && (a.kind === "paper" || a.kind === "broker"));
 	const { data: watch } = useWatchlist();
 	const [acc, setAcc] = useState(accountId && paper.some((a) => a.id === accountId) ? accountId : (paper[0]?.id ?? ""));
 	const [symbol, setSymbol] = useState(initialSymbol ?? "");
@@ -27,6 +27,7 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 	const [check, setCheck] = useState<Check | null>(null);
 	const [err, setErr] = useState<string | null>(null);
 	const { run, busy } = useAction();
+	const selected = paper.find((a) => a.id === acc);
 	const sym = symbol || watch?.[0]?.symbol || "";
 	const item = watch?.find((w) => w.symbol === sym);
 	const body = { accountId: acc, symbol: sym, side, qty: parseDe(qtyText), orderType: type, limitPrice: type === "limit" ? parseDe(limitText) : undefined };
@@ -58,7 +59,10 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 	const submit = async () => {
 		if (!(body.qty > 0)) return setErr("Stückzahl größer als 0 eintragen.");
 		if (type === "limit" && !(body.limitPrice! > 0)) return setErr("Limitkurs eintragen.");
-		const r = await run("/api/proposals", "POST", body, type === "limit" ? `Limit-Order ${sym} angelegt.` : `${side === "buy" ? "Kauf" : "Verkauf"} ${sym} ausgeführt.`);
+		const r = await run<{ proposal: { status: string; reason: string } }>("/api/proposals", "POST", body, (res) =>
+			res.proposal.status === "rejected" ? null : selected?.kind === "broker" ? `${sym}: an ${selected.broker} gesendet.` : type === "limit" ? `Limit-Order ${sym} angelegt.` : `${side === "buy" ? "Kauf" : "Verkauf"} ${sym} ausgeführt.`,
+		);
+		if (r?.proposal.status === "rejected") return setErr(r.proposal.reason);
 		if (r) onOpenChange(false);
 	};
 
@@ -70,7 +74,16 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 		);
 
 	return (
-		<FormDialog open={open} onOpenChange={onOpenChange} title="Neue Order (Papier)" description="Wird sofort zum aktuellen Kurs ausgeführt, eine Limit-Order sobald das Limit erreicht ist." submit={side === "buy" ? "Kaufen" : "Verkaufen"} onSubmit={() => void submit()} busy={busy || (check !== null && !check.ok)} error={err}>
+		<FormDialog
+			open={open}
+			onOpenChange={onOpenChange}
+			title={selected?.kind === "broker" ? `Neue Order an ${selected.broker}` : "Neue Order (Papier)"}
+			description={
+				selected?.kind === "broker"
+					? `Geht nach dem Klick als Tagesorder an ${selected.broker}${selected.live ? " – echtes Geld" : " (Papierkonto)"}.`
+					: "Wird sofort zum aktuellen Kurs ausgeführt, eine Limit-Order sobald das Limit erreicht ist."
+			}
+			submit={selected?.kind === "broker" ? (selected.live ? "Mit echtem Geld senden" : `An ${selected.broker} senden`) : side === "buy" ? "Kaufen" : "Verkaufen"} onSubmit={() => void submit()} busy={busy || (check !== null && !check.ok)} error={err}>
 			<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
 				<Field label="Depot">
 					{(id) => (
@@ -78,6 +91,7 @@ export function OrderTicket({ open, onOpenChange, accounts, accountId, symbol: i
 							{paper.map((a) => (
 								<option key={a.id} value={a.id}>
 									{a.name}
+									{a.live ? " – echtes Geld" : ""}
 								</option>
 							))}
 						</Select>
