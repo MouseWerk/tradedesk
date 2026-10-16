@@ -1,7 +1,7 @@
 // Vorschläge und Orders: anlegen und prüfen, freigeben, ablehnen, stornieren, Ausführungen eintragen, Limits im Takt
 // ausführen, Abläufe, Stop- und Ziel-Hinweise. Agenten schlagen vor, du gibst frei. Orders für ein manuelles Depot
-// (z. B. Trade Republic) führst du selbst in der App des Brokers aus und trägst die Ausführung hier ein.
-import type { Account, Check, Proposal, ProposalStatus, Side } from "@desk/shared";
+// führst du selbst in der App des Brokers aus und trägst die Ausführung hier ein.
+import type { Account, AgentBudget, Check, Proposal, ProposalStatus, Side } from "@desk/shared";
 import { ProposalInputSchema, checkOrder, movePct, orderValueCents, roundQty, sideLabel } from "@desk/shared";
 import type { Broker } from "../broker.ts";
 import { DeskError, CONFIRM_TTL_MS, dateText, parseQty, parsePrice, parseFeeCents, num, type Origin, type ProposalRow } from "./core.ts";
@@ -13,6 +13,8 @@ const MARKET_WAIT_DAYS = 4; // eine Papier-Market-Order nach Börsenschluss wart
 const PLACED_DAYS = 7;
 const RESERVING = "'open','placed','sending','confirm'"; // freigegeben, aber noch nicht (ganz) ausgeführt
 const eurText = (c: number) => `${(c / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+/** Depots, für die das Agenten-Budget gilt: deine mit echtem Geld (manuell oder IBKR live), nie Papier */
+export const realMoney = (a: Account) => a.owner === "user" && (a.kind === "manual" || a.live);
 const pct = (n: number) => `${n.toFixed(1).replace(".", ",")} %`;
 
 export abstract class DeskProposals extends DeskMarket {
@@ -103,6 +105,40 @@ export abstract class DeskProposals extends DeskMarket {
 	}
 
 	/**
+	 * Was Agenten-Käufe in deinen Depots mit echtem Geld zusammen binden (config "agentBudgetEur"): gehaltene Lose aus
+	 * Agenten-Vorschlägen zum Einstand mit Kaufgebühr, dazu wartende und freigegebene, noch nicht ausgeführte Käufe mit
+	 * Gebühr. Ein Verkauf gibt das Budget wieder frei (zum Einstand, Gewinn und Verlust zählen nicht). exclude: die Order selbst.
+	 */
+	agentBudget(exclude?: number): AgentBudget | null {
+		const budget = this.cfg.agentBudgetCents;
+		if (budget === null) return null;
+		const accounts = this.cfg.accounts.filter(realMoney);
+		let used = 0;
+		let unpriced = false;
+		for (const a of accounts) {
+			const agentBuys = new Set(this.db.all<{ id: number }>("SELECT id FROM proposal WHERE account_id = ? AND side = 'buy' AND author != ?", a.id, this.cfg.user).map((r) => r.id));
+			if (!agentBuys.size) continue;
+			const { rows, book } = this.ledger(a.id);
+			const byId = new Map(rows.map((t) => [t.id, t]));
+			for (const lots of book.openLots.values())
+				for (const l of lots) {
+					const t = byId.get(l.tradeId);
+					if (t?.proposal_id && agentBuys.has(t.proposal_id) && t.qty > 0) used += Math.round(((t.value_cents + t.fee_cents) * l.qty) / t.qty);
+				}
+			for (const r of this.db.all<ProposalRow>(`SELECT * FROM proposal WHERE account_id = ? AND side = 'buy' AND author != ? AND status IN ('pending',${RESERVING}) AND id != ?`, a.id, this.cfg.user, exclude ?? 0)) {
+				const qty = roundQty((r.approved_qty ?? r.qty) - (r.filled_qty ?? 0));
+				if (qty <= 0) continue;
+				const p = this.priced(r.symbol);
+				const fx = p?.fx ?? this.fx(this.instrument(r.symbol)?.currency ?? "");
+				const unit = r.limit_price ?? p?.price ?? r.quote_price;
+				if (fx === null || !(unit > 0)) unpriced = true;
+				else used += orderValueCents(qty, unit, fx) + a.feeCents;
+			}
+		}
+		return { budgetCents: budget, usedCents: used, freeCents: unpriced ? 0 : Math.max(0, budget - used), unpriced, accounts: accounts.map((a) => a.id) };
+	}
+
+	/**
 	 * Risikoprüfung gegen Bestand, Cash und alle schon freigegebenen offenen Orders des Depots (exclude: die Order selbst).
 	 * Während der Handelszeit nur mit frischem Kurs.
 	 */
@@ -133,6 +169,12 @@ export abstract class DeskProposals extends DeskMarket {
 		if (stale) violations.unshift(stale);
 		if (o.side === "buy" && res.unpriced.length) violations.push(de.proposals.unpriced(res.unpriced.length, res.unpriced.map((id) => `#${id}`).join(", ")));
 		if (o.side === "buy" && res.cashCents > 0) warnings.push(de.proposals.reservedCash(eurText(res.cashCents)));
+		if (opts.byAgent && o.side === "buy" && realMoney(a)) {
+			const b = this.agentBudget(opts.exclude);
+			const cost = c.estimateCents + c.feeCents;
+			if (b && b.unpriced) violations.push(de.proposals.budgetUnpriced);
+			else if (b && cost > b.freeCents) violations.push(de.proposals.overBudget(eurText(cost), eurText(b.freeCents), eurText(b.budgetCents)));
+		}
 		if (o.side === "sell" && res.sellQty.get(o.symbol)) warnings.push(de.proposals.reservedSell(num(res.sellQty.get(o.symbol)!), o.symbol));
 		return { ...c, ok: violations.length === 0, violations, warnings };
 	}

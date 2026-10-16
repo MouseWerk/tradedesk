@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { OctagonX, ShieldCheck } from "lucide-react";
 import type { RiskLimits } from "@desk/shared";
 import { useRisk } from "@/lib/api";
-import { inputNumber, numberError, parseDe, pct } from "@/lib/format";
+import { eur, inputNumber, numberError, parseDe, pct } from "@/lib/format";
 import { Badge, Button, Card, Field, Input, Skeleton, cn } from "@/ui/kit";
 import { LoadError } from "@/ui/boundary";
 import { Page, PageHead, useAction, useKillSwitch } from "../common";
@@ -54,6 +54,19 @@ export default function RiskView() {
 						<dd className="font-medium tnum">{de.risk.hours(data.proposalTtlHours)}</dd>
 					</div>
 				</dl>
+				<div className="border-t border-line px-4 py-3 text-[12.5px]" data-testid="agent-budget">
+					<div className="text-fg-3">{de.risk.agentBudget}</div>
+					{data.agentBudget ? (
+						<>
+							<div className="font-medium tnum">{de.risk.agentBudgetValue(eur(data.agentBudget.usedCents), eur(data.agentBudget.freeCents), eur(data.agentBudget.budgetCents))}</div>
+							<p className="text-[11.5px] text-fg-3">
+								{data.agentBudget.unpriced ? de.risk.agentBudgetUnpriced : de.risk.agentBudgetHint(data.accounts.filter((x) => data.agentBudget!.accounts.includes(x.account.id)).map((x) => x.account.name).join(", ") || "–")}
+							</p>
+						</>
+					) : (
+						<p className="text-[11.5px] text-fg-3">{de.risk.agentBudgetNone}</p>
+					)}
+				</div>
 				<p className="border-t border-line px-4 py-2 text-[11.5px] text-fg-3">{de.risk.configNote}</p>
 			</Card>
 			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(340px,100%),1fr))] gap-4">

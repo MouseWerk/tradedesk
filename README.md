@@ -112,6 +112,7 @@ computer.
 | `accounts` | Your accounts: `kind` `manual` (you trade at the broker and record it here), `paper`, or `broker` (Interactive Brokers: `ibAccount`, optional `gateway`, `conids`); `feeEur` per order; `startCashEur` |
 | `listen` | Extra addresses besides 127.0.0.1, Tailscale only (100.64.0.0/10), e.g. `["100.101.102.103"]` for the phone |
 | `liveTrading` | `false` by default; must be `true` before orders go to a real-money broker account |
+| `agentBudgetEur` | optional; the most all agents together may tie up in your real-money accounts (manual and live broker): waiting, approved and held agent buys at cost with fees. Without it only the per-account limits apply |
 | `agents` | Agent names; each gets a paper account `agent-<name>` with `startCashEur` |
 | `minConfidence` | 0–1; agent proposals below it are not created |
 | `staleMovePct` | Max price move between proposal and approval |

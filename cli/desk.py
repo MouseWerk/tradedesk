@@ -333,7 +333,8 @@ def cmd_brief(args):
     own = next((d for d in cp["days"] if d["owner"] == me), None)
     data = {"me": me, "killSwitch": cp["killSwitch"], "market": cp["market"], "sessions": cp["sessions"], "myAccount": own,
             "positions": [p for p in cp["positions"] if own and p["accountId"] == own["accountId"]],
-            "ownerAccounts": [d for d in cp["days"] if d["owner"] == "user"], "scan": cp["scan"], "proposals": props, "chat": msgs}
+            "ownerAccounts": [d for d in cp["days"] if d["owner"] == "user"], "agentBudget": cp.get("agentBudget"),
+            "scan": cp["scan"], "proposals": props, "chat": msgs}
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
@@ -342,6 +343,12 @@ def cmd_brief(args):
         if own:
             st = own["stats"]
             lines.append(f"my account {own['accountId']}: equity {money(own['equityCents'])}, cash {money(own['cashCents'])}, today {money(own['dayChangeCents'])}, realized {money(st['realizedCents'])}, trades {st['trades']}, closed {st['closed']} ({st['wins']}W/{st['losses']}L)")
+        b = data["agentBudget"]
+        if b:
+            lines.append(f"agent budget (real money, all agents together, {', '.join(b['accounts']) or '-'}): {money(b['budgetCents'])}, used {money(b['usedCents'])}, free {money(b['freeCents'])}"
+                         + (" - an open buy has no quote, no new buys" if b["unpriced"] else ""))
+        else:
+            lines.append("agent budget: none set")
         for p in data["positions"]:
             r = "-" if p["r"] is None else f"{p['r']:+.1f}R"
             lines.append(f"  pos {p['symbol']:<10} {num(p['qty'])} avg {num(round(p['avgPrice'], 4))} EUR  P/L {money(p['unrealizedCents'])} {r}  stop {num(p['stopLoss'])}")

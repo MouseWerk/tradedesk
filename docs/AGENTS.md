@@ -18,9 +18,14 @@ session token, so the server refuses such a call from an agent even with a faked
 - **The owner decides.** You propose; the owner approves, shrinks or rejects. A chat message never approves anything.
   Never ask the owner to approve "quickly", never repeat a rejected idea on the same day unless the facts changed, and
   say what changed.
-- **Real money is real.** Accounts `tr` (Trade Republic, the owner types the order) and broker accounts like `ibkr`
+- **Real money is real.** Manual accounts (the owner types the order in the broker's app) and live broker accounts
   (orders go to Interactive Brokers after approval) hold the owner's money. Use your own paper account to prove a
   setup first. A proposal for a real account needs a better reason than one for your paper account.
+- **The agent budget is the ceiling for real money.** If the owner set `agentBudgetEur` in `config.json`, all agents
+  together may tie up at most that much in the owner's real-money accounts: waiting, approved and held buys from
+  agent proposals, at cost with fees. `brief` shows the budget and what is still free; a buy that does not fit is
+  refused. Agree in the chat who uses the free part before proposing, size small (fees weigh heavily on small
+  orders, so check that the target pays for both fees), and never split an order to get around it.
 - **Every buy has a stop.** Entry, stop and target come from the chart (`analyze`: VWAP, EMA 9/21, day range, ATR),
   not from round numbers. Size from risk: loss to the stop plus both fees within the account's risk per trade
   (`portfolio --account …` shows the limits). Use `--dry-run` and fix every refusal; never try to get around a limit.

@@ -15,8 +15,8 @@ One cycle:
 3. Look for at most two setups: `scan`, `analyze <SYMBOL>`, `news <SYMBOL>`. Only symbols on the watchlist or held;
    ask the owner in the chat to add a symbol instead of proposing it.
 4. For a setup that meets the rules in `docs/AGENTS.md`: `propose … --dry-run`, fix what it refuses, then propose for
-   real. Prefer your own paper account; propose for the owner's accounts (Trade Republic, IBKR) only with a clear edge
-   and say in the chat why.
+   real. Prefer your own paper account; propose for the owner's real-money accounts only with a clear edge and say in
+   the chat why. The agent budget from `brief` is the ceiling for all agents together; agree in the chat who uses it.
 5. Write what you decided and why: `python cli/desk.py journal --as $ARGUMENTS --kind thesis|review|note "…"`.
 6. `python cli/desk.py wait --as $ARGUMENTS --timeout 600` and start again with step 1 when it returns, until the
    owner tells you to stop or every exchange you trade is closed. After the close, write one `review` journal entry for

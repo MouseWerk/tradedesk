@@ -331,11 +331,26 @@ export const AgentsDataSchema = z.object({
 });
 export type AgentsData = z.infer<typeof AgentsDataSchema>;
 
+/**
+ * Agenten-Budget für echtes Geld (config "agentBudgetEur"): so viel dürfen Käufe aus Agenten-Vorschlägen in deinen
+ * Depots mit echtem Geld (manuell, IBKR live) zusammen binden – Einstand gehaltener Käufe plus wartende und
+ * freigegebene, noch nicht ausgeführte Käufe, je mit Gebühr.
+ */
+export const AgentBudgetSchema = z.object({
+	budgetCents: z.number().int(),
+	usedCents: z.number().int(),
+	freeCents: z.number().int(), // mindestens 0; 0 auch, wenn ein offener Kauf ohne Kurs nicht bewertbar ist
+	unpriced: z.boolean(),
+	accounts: z.array(z.string()), // Depots, für die das Budget gilt
+});
+export type AgentBudget = z.infer<typeof AgentBudgetSchema>;
+
 export const RiskDataSchema = z.object({
 	killSwitch: z.boolean(),
 	minConfidence: z.number(),
 	staleMovePct: z.number(),
 	proposalTtlHours: z.number(),
+	agentBudget: AgentBudgetSchema.nullable(), // null: kein Budget in config.json
 	accounts: z.array(z.object({ account: AccountSchema, limits: RiskLimitsSchema, dayLossPct: z.number().nullable() })),
 });
 export type RiskData = z.infer<typeof RiskDataSchema>;
@@ -469,6 +484,7 @@ export const CockpitSchema = z.object({
 		}),
 	),
 	positions: z.array(CockpitPositionSchema),
+	agentBudget: AgentBudgetSchema.nullable(),
 });
 export type Cockpit = z.infer<typeof CockpitSchema>;
 

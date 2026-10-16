@@ -161,7 +161,7 @@ export const de = {
 
 	orders: {
 		title: "Orders",
-		sub: "Agenten schlagen vor, du entscheidest. Für Trade Republic führst du freigegebene Orders selbst in der App aus.",
+		sub: "Agenten schlagen vor, du entscheidest. Bei manuellen Depots führst du freigegebene Orders selbst in der App deines Brokers aus.",
 		newOrder: "Neue Order…",
 		view: "Ansicht",
 		open: (count: string) => `Offen (${count})`,
@@ -176,7 +176,7 @@ export const de = {
 			titleBroker: (broker: string) => `Neue Order an ${broker}`,
 			titlePaper: "Neue Order (Papier)",
 			ok: "OK",
-			noDepot: "Du hast kein eigenes Papier- oder Broker-Depot. Lege eines in config.json an („kind“: „paper“). Für Trade Republic erfasst du ausgeführte Trades unter Depots.",
+			noDepot: "Du hast kein eigenes Papier- oder Broker-Depot. Lege eines in config.json an („kind“: „paper“). Bei manuellen Depots erfasst du ausgeführte Trades unter Depots.",
 			descBroker: (broker: string, live: boolean) => `Geht als Tagesorder an ${broker}${live ? " – echtes Geld" : " (Papierkonto)"}. Vor dem Senden fragt der Desk noch einmal nach.`,
 			descPaper: "Wird sofort zum aktuellen Kurs ausgeführt, eine Limit-Order, sobald das Limit erreicht ist.",
 			buy: "Kaufen",
@@ -489,7 +489,12 @@ export const de = {
 		staleMove: "Kursbewegung bis zur Freigabe höchstens",
 		proposalTtl: "Vorschläge verfallen nach",
 		hours: (hours: number) => `${thousands(hours)} Std.`,
-		configNote: "Diese drei Werte stehen in config.json (minConfidence, staleMovePct, proposalTtlHours).",
+		configNote: "Diese Werte stehen in config.json (minConfidence, staleMovePct, proposalTtlHours, agentBudgetEur).",
+		agentBudget: "Agenten-Budget, echtes Geld",
+		agentBudgetValue: (used: string, free: string, budget: string) => `${used} gebunden · ${free} frei von ${budget}`,
+		agentBudgetHint: (accounts: string) => `Alle Agenten zusammen, für ${accounts}: wartende, freigegebene und gehaltene Käufe zum Einstand mit Gebühr. Ein Verkauf gibt das Budget wieder frei.`,
+		agentBudgetUnpriced: "Ein offener Agenten-Kauf hat gerade keinen Kurs – bis dahin keine neuen Agenten-Käufe.",
+		agentBudgetNone: "Kein Agenten-Budget gesetzt – Agenten-Käufe mit echtem Geld begrenzen nur die Grenzen je Depot.",
 		field: {
 			maxOrderCents: { label: "Max. Orderwert", hint: "je Order, 0 = keine Grenze" },
 			maxPositionPct: { label: "Max. Position", hint: "Anteil am Depot nach dem Kauf" },

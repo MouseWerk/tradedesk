@@ -54,6 +54,7 @@ export class Desk extends DeskAnalytics {
 			scan: this.scan(),
 			days,
 			positions,
+			agentBudget: this.agentBudget(),
 		};
 	}
 

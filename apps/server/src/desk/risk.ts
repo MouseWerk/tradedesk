@@ -1,11 +1,14 @@
 // Risiko: Grenzen je Depot, Tagesverlust, Not-Aus.
-import type { Account, RiskData, RiskLimits } from "@desk/shared";
+import type { Account, AgentBudget, RiskData, RiskLimits } from "@desk/shared";
 import { RiskLimitsSchema } from "@desk/shared";
 import { DEFAULT_LIMITS, DeskError } from "./core.ts";
 import { DeskBook } from "./book.ts";
 import { de } from "../i18n/de.ts";
 
 export abstract class DeskRisk extends DeskBook {
+	/** Agenten-Budget für echtes Geld (proposals.ts, braucht Kurse) */
+	abstract agentBudget(exclude?: number): AgentBudget | null;
+
 	dayLossPct(a: Account, s = this.summary(a)): number | null {
 		const prev = this.prevSnapshot(a.id);
 		if (!prev || prev.equity_cents <= 0 || s.dayChangeCents === null) return null;
@@ -25,6 +28,7 @@ export abstract class DeskRisk extends DeskBook {
 			minConfidence: this.cfg.minConfidence,
 			staleMovePct: this.cfg.staleMovePct,
 			proposalTtlHours: this.cfg.proposalTtlHours,
+			agentBudget: this.agentBudget(),
 			accounts: this.cfg.accounts.map((a) => ({ account: a, limits: this.limits(a.id), dayLossPct: this.dayLossPct(a) })),
 		};
 	}

@@ -161,6 +161,8 @@ export const de = {
 	/* desk/proposals.ts: Vorschläge, Freigabe, Storno, Ausführung, Abläufe, Stop und Ziel */
 	proposals: {
 		unknown: (id: number) => `Unbekannter Vorschlag ${id}.`,
+		overBudget: (cost: string, free: string, budget: string) => `Über dem Agenten-Budget: der Kauf bindet ${cost}, frei sind noch ${free} von ${budget} (echtes Geld, alle Agenten zusammen).`,
+		budgetUnpriced: "Ein offener Agenten-Kauf hat keinen Kurs oder Wechselkurs – das Agenten-Budget ist gerade nicht prüfbar.",
 		unpriced: (n: number, ids: string) => `${plural(n, "Freigegebene Order", "Freigegebene Orders")} ${ids} ohne Kurs oder Wechselkurs – das gebundene Cash ist nicht prüfbar.`,
 		reservedCash: (eur: string) => `Freigegebene, noch offene Orders binden ${eur} – im verfügbaren Cash schon abgezogen.`,
 		reservedSell: (qty: string, symbol: string) => `${qty} Stück ${symbol} sind schon in offenen Verkaufsorders gebunden.`,
